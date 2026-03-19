@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(npx tsc:*)",
+      "Bash(grep -E \"\\\\.\\(json|ts|html\\)$\")"
+    ]
+  }
+}
