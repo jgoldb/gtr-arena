@@ -5,6 +5,14 @@ export class InputManager {
   private scrollDelta = 0;
   private canvas: HTMLCanvasElement;
 
+  // Left-click vs drag detection
+  private leftClickPending = false;
+  private leftClickStartX = 0;
+  private leftClickStartY = 0;
+  private leftDragDist = 0;
+  private leftClickEvent: { x: number; y: number } | null = null;
+  private static readonly CLICK_THRESHOLD = 4;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
 
@@ -29,18 +37,37 @@ export class InputManager {
   };
 
   private onMouseDown = (e: MouseEvent): void => {
-    if (e.button === 0) this.mouseButtons.left = true;
+    if (e.button === 0) {
+      this.mouseButtons.left = true;
+      // Only set up click detection if right button isn't already held
+      // (right held = pointer lock active, this left press is just for auto-forward)
+      if (!this.mouseButtons.right) {
+        this.leftClickPending = true;
+        this.leftClickStartX = e.clientX;
+        this.leftClickStartY = e.clientY;
+        this.leftDragDist = 0;
+        // Don't request pointer lock yet — wait to see if this is a click or drag
+        return;
+      }
+    }
     if (e.button === 1) this.mouseButtons.middle = true;
-    if (e.button === 2) this.mouseButtons.right = true;
-
-    // Pointer lock on any mouse button drag
-    if (e.button === 0 || e.button === 2) {
+    if (e.button === 2) {
+      this.mouseButtons.right = true;
+      // Right-click always gets immediate pointer lock; cancel any pending left click
+      this.leftClickPending = false;
       this.canvas.requestPointerLock();
     }
   };
 
   private onMouseUp = (e: MouseEvent): void => {
-    if (e.button === 0) this.mouseButtons.left = false;
+    if (e.button === 0) {
+      this.mouseButtons.left = false;
+      if (this.leftClickPending) {
+        // Mouse didn't move enough to be a drag → fire as a click
+        this.leftClickEvent = { x: this.leftClickStartX, y: this.leftClickStartY };
+        this.leftClickPending = false;
+      }
+    }
     if (e.button === 1) this.mouseButtons.middle = false;
     if (e.button === 2) this.mouseButtons.right = false;
 
@@ -53,6 +80,15 @@ export class InputManager {
   private onMouseMove = (e: MouseEvent): void => {
     this.mouseDelta.x += e.movementX;
     this.mouseDelta.y += e.movementY;
+
+    if (this.leftClickPending) {
+      this.leftDragDist += Math.abs(e.movementX) + Math.abs(e.movementY);
+      if (this.leftDragDist > InputManager.CLICK_THRESHOLD) {
+        // Exceeded threshold → this is a drag, not a click
+        this.leftClickPending = false;
+        this.canvas.requestPointerLock();
+      }
+    }
   };
 
   private onWheel = (e: WheelEvent): void => {
@@ -76,10 +112,15 @@ export class InputManager {
     return this.scrollDelta;
   }
 
+  getLeftClick(): { x: number; y: number } | null {
+    return this.leftClickEvent;
+  }
+
   resetDeltas(): void {
     this.mouseDelta.x = 0;
     this.mouseDelta.y = 0;
     this.scrollDelta = 0;
+    this.leftClickEvent = null;
   }
 
   dispose(): void {

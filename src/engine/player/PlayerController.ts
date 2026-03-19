@@ -3,9 +3,16 @@ import { InputManager } from '../input/InputManager';
 import { MapManager } from '../map/MapManager';
 import { CharacterModel } from './characters/CharacterModel';
 import { createCharacter, CharacterId } from './characters';
+import type { Targetable } from '../types';
 
-export class PlayerController {
+export class PlayerController implements Targetable {
   readonly mesh: THREE.Group;
+  readonly name = 'Player';
+  readonly hostile = false;
+  hp = 100;
+  maxHp = 100;
+  mana = 100;
+  maxMana = 100;
   speed = 8;
   jumpForce = 7;
   gravity = 20;
@@ -36,6 +43,7 @@ export class PlayerController {
     this.cameraAzimuthGetter = getCameraAzimuth;
 
     this.mesh = new THREE.Group();
+    this.mesh.userData.targetRef = this;
     this.characterModel = createCharacter('janitor');
     this.mesh.add(this.characterModel.group);
     scene.add(this.mesh);
@@ -48,6 +56,10 @@ export class PlayerController {
     this.characterModel.dispose();
     this.characterModel = createCharacter(id);
     this.mesh.add(this.characterModel.group);
+  }
+
+  get modelName(): string {
+    return this.characterModel.displayName;
   }
 
   respawn(): void {

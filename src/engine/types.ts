@@ -12,3 +12,14 @@ export interface GameSystem {
   update(deltaTime: number): void;
   dispose?(): void;
 }
+
+export interface Targetable {
+  readonly name: string;
+  readonly modelName: string;
+  readonly hostile: boolean;
+  hp: number;
+  maxHp: number;
+  mana: number;
+  maxMana: number;
+  readonly mesh: THREE.Group;
+}
