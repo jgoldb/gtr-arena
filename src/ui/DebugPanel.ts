@@ -30,13 +30,6 @@ export class DebugPanel {
     const folder = this.gui.addFolder('Player');
 
     folder.add(player, 'speed', 1, 25).name('Move Speed');
-
-    const body = player.mesh.children[0] as THREE.Mesh;
-    if (body?.material && 'color' in body.material) {
-      folder.addColor({ color: '#4488cc' }, 'color').name('Color').onChange((val: string) => {
-        (body.material as THREE.MeshStandardMaterial).color.set(val);
-      });
-    }
   }
 
   private setupRenderingControls(engine: Engine): void {

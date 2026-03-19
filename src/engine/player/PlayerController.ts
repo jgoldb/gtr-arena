@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { InputManager } from '../input/InputManager';
 import { MapManager } from '../map/MapManager';
+import { CharacterModel } from './characters/CharacterModel';
+import { createCharacter, CharacterId } from './characters';
 
 export class PlayerController {
   readonly mesh: THREE.Group;
@@ -8,6 +10,7 @@ export class PlayerController {
   jumpForce = 7;
   gravity = 20;
   waterSpeedMultiplier = 0.5;
+  backpedalMultiplier = 0.5;
   airDriftFraction = 0.25;
   readonly collisionRadius = 0.4;
   private input: InputManager;
@@ -20,6 +23,7 @@ export class PlayerController {
   private inWater = false;
   private spaceWasDown = false;
   private airVelocity = new THREE.Vector3();
+  private characterModel: CharacterModel;
 
   constructor(
     scene: THREE.Scene,
@@ -31,46 +35,27 @@ export class PlayerController {
     this.mapManager = mapManager;
     this.cameraAzimuthGetter = getCameraAzimuth;
 
-    this.mesh = this.createPlayerMesh();
+    this.mesh = new THREE.Group();
+    this.characterModel = createCharacter('janitor');
+    this.mesh.add(this.characterModel.group);
     scene.add(this.mesh);
 
     this.respawn();
   }
 
-  private createPlayerMesh(): THREE.Group {
-    const group = new THREE.Group();
-
-    // Body capsule
-    const bodyGeometry = new THREE.CapsuleGeometry(0.4, 1.0, 8, 16);
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-      color: 0x4488cc,
-      roughness: 0.5,
-      metalness: 0.2,
-    });
-    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-    body.position.y = 0.9;
-    body.castShadow = true;
-    group.add(body);
-
-    // Direction indicator (small cone on the front)
-    const indicatorGeometry = new THREE.ConeGeometry(0.15, 0.3, 8);
-    const indicatorMaterial = new THREE.MeshStandardMaterial({
-      color: 0x88ccff,
-      roughness: 0.3,
-      metalness: 0.4,
-    });
-    const indicator = new THREE.Mesh(indicatorGeometry, indicatorMaterial);
-    indicator.rotation.x = Math.PI / 2;
-    indicator.position.set(0, 1.0, -0.55);
-    indicator.castShadow = true;
-    group.add(indicator);
-
-    return group;
+  setCharacter(id: CharacterId): void {
+    this.mesh.remove(this.characterModel.group);
+    this.characterModel.dispose();
+    this.characterModel = createCharacter(id);
+    this.mesh.add(this.characterModel.group);
   }
 
   respawn(): void {
     const spawn = this.mapManager.getSpawnPoint();
     this.mesh.position.set(spawn.x, spawn.y, spawn.z);
+    // Face toward map center
+    this.targetRotation = Math.atan2(-spawn.x, -spawn.z);
+    this.mesh.rotation.y = this.targetRotation;
   }
 
   update(deltaTime: number): void {
@@ -94,25 +79,35 @@ export class PlayerController {
       moveDir.add(forward);
     }
 
-    if (this.input.isKeyDown('KeyW')) moveDir.add(forward);
-    if (this.input.isKeyDown('KeyS')) moveDir.sub(forward);
+    const wDown = this.input.isKeyDown('KeyW');
+    const sDown = this.input.isKeyDown('KeyS');
+    if (wDown) moveDir.add(forward);
+    if (sDown) moveDir.sub(forward);
     if (this.input.isKeyDown('KeyD')) moveDir.add(right);
     if (this.input.isKeyDown('KeyA')) moveDir.sub(right);
 
-    const effectiveSpeed = this.inWater ? this.speed * this.waterSpeedMultiplier : this.speed;
+    const isMoving = moveDir.lengthSq() > 0;
+    const isBackpedaling = sDown && !wDown;
+    const speedMultiplier = isBackpedaling ? this.backpedalMultiplier : 1;
+    const effectiveSpeed = (this.inWater ? this.speed * this.waterSpeedMultiplier : this.speed) * speedMultiplier;
 
     if (this.grounded) {
       // On ground: full movement control
-      if (moveDir.lengthSq() > 0) {
+      if (isMoving) {
         moveDir.normalize();
         this.mesh.position.addScaledVector(moveDir, effectiveSpeed * deltaTime);
-        this.targetRotation = Math.atan2(moveDir.x, moveDir.z);
+        if (isBackpedaling) {
+          // Face opposite of movement direction (toward "forward")
+          this.targetRotation = Math.atan2(-moveDir.x, -moveDir.z);
+        } else {
+          this.targetRotation = Math.atan2(moveDir.x, moveDir.z);
+        }
       } else if (rightHeld) {
         this.targetRotation = Math.atan2(-Math.sin(cameraAzimuth), -Math.cos(cameraAzimuth));
       }
     } else {
       // In air: use snapshotted velocity, but allow small drift if jumped stationary
-      if (this.airVelocity.lengthSq() < 0.01 && moveDir.lengthSq() > 0) {
+      if (this.airVelocity.lengthSq() < 0.01 && isMoving) {
         moveDir.normalize();
         this.airVelocity.copy(moveDir).multiplyScalar(effectiveSpeed * this.airDriftFraction);
       }
@@ -124,13 +119,15 @@ export class PlayerController {
     let diff = this.targetRotation - currentRot;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
-    this.mesh.rotation.y += diff * Math.min(1, 12 * deltaTime);
+    const rotApplied = diff * Math.min(1, 12 * deltaTime);
+    this.mesh.rotation.y += rotApplied;
+    const turnSpeed = deltaTime > 0 ? rotApplied / deltaTime : 0;
 
     // Jump — requires fresh press (not held from previous frame)
     const spaceDown = this.input.isKeyDown('Space');
     if (spaceDown && !this.spaceWasDown && this.grounded) {
       // Snapshot current horizontal velocity for air movement
-      if (moveDir.lengthSq() > 0) {
+      if (isMoving) {
         moveDir.normalize();
         this.airVelocity.copy(moveDir).multiplyScalar(effectiveSpeed);
       } else {
@@ -179,6 +176,15 @@ export class PlayerController {
     const margin = this.collisionRadius;
     this.mesh.position.x = Math.max(bounds.minX + margin, Math.min(bounds.maxX - margin, this.mesh.position.x));
     this.mesh.position.z = Math.max(bounds.minZ + margin, Math.min(bounds.maxZ - margin, this.mesh.position.z));
+
+    // Drive character animation
+    this.characterModel.update(deltaTime, {
+      isMoving,
+      isGrounded: this.grounded,
+      velocityY: this.velocityY,
+      turnSpeed,
+      speedMultiplier,
+    });
   }
 
   getPosition(): THREE.Vector3 {
@@ -186,15 +192,6 @@ export class PlayerController {
   }
 
   dispose(): void {
-    this.mesh.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        obj.geometry.dispose();
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach((m) => m.dispose());
-        } else {
-          obj.material.dispose();
-        }
-      }
-    });
+    this.characterModel.dispose();
   }
 }

@@ -1,0 +1,158 @@
+import * as THREE from 'three';
+
+export interface AnimationInput {
+  isMoving: boolean;
+  isGrounded: boolean;
+  velocityY: number;
+  turnSpeed: number;
+  speedMultiplier: number;
+}
+
+export abstract class CharacterModel {
+  readonly group: THREE.Group;
+  abstract readonly id: string;
+  abstract readonly displayName: string;
+
+  // Skeleton bone groups (pivots for animation)
+  protected bodyGroup = new THREE.Group();
+  protected headGroup = new THREE.Group();
+  protected leftArmGroup = new THREE.Group();
+  protected rightArmGroup = new THREE.Group();
+  protected leftLegGroup = new THREE.Group();
+  protected rightLegGroup = new THREE.Group();
+
+  // Animation blend state
+  protected runWeight = 0;
+  protected jumpWeight = 0;
+  protected runPhase = 0;
+  protected idleTime = 0;
+  protected smoothedTurnSpeed = 0;
+
+  constructor() {
+    this.group = new THREE.Group();
+    this.initSkeleton();
+    this.buildModel();
+    // Model faces -Z locally; rotate 180° so it aligns with the
+    // atan2(x,z) rotation convention used by PlayerController
+    this.group.rotation.y = Math.PI;
+    this.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) child.castShadow = true;
+    });
+  }
+
+  private initSkeleton(): void {
+    // Leg pivots at hip height
+    this.leftLegGroup.position.set(-0.1, 0.78, 0);
+    this.rightLegGroup.position.set(0.1, 0.78, 0);
+
+    // Arm pivots at shoulder height
+    this.leftArmGroup.position.set(-0.26, 1.28, 0);
+    this.rightArmGroup.position.set(0.26, 1.28, 0);
+
+    // Head pivot at neck
+    this.headGroup.position.set(0, 1.42, 0);
+
+    // Upper body hierarchy: head and arms move with body
+    this.bodyGroup.add(this.headGroup);
+    this.bodyGroup.add(this.leftArmGroup);
+    this.bodyGroup.add(this.rightArmGroup);
+
+    // Legs are independent of upper body
+    this.group.add(this.leftLegGroup);
+    this.group.add(this.rightLegGroup);
+    this.group.add(this.bodyGroup);
+  }
+
+  protected abstract buildModel(): void;
+
+  update(dt: number, input: AnimationInput): void {
+    // Blend weights toward targets
+    const wantRun = input.isMoving && input.isGrounded ? 1 : 0;
+    this.runWeight += (wantRun - this.runWeight) * Math.min(1, 10 * dt);
+
+    const wantJump = input.isGrounded ? 0 : 1;
+    this.jumpWeight += (wantJump - this.jumpWeight) * Math.min(1, 8 * dt);
+
+    // Phase accumulators
+    this.idleTime += dt;
+    if (input.isMoving && input.isGrounded) {
+      this.runPhase += dt * 10 * input.speedMultiplier;
+    }
+
+    this.smoothedTurnSpeed +=
+      (input.turnSpeed - this.smoothedTurnSpeed) * Math.min(1, 5 * dt);
+
+    // Reset all bone transforms each frame
+    this.leftArmGroup.rotation.set(0, 0, 0);
+    this.rightArmGroup.rotation.set(0, 0, 0);
+    this.leftLegGroup.rotation.set(0, 0, 0);
+    this.rightLegGroup.rotation.set(0, 0, 0);
+    this.bodyGroup.rotation.set(0, 0, 0);
+    this.bodyGroup.position.y = 0;
+    this.headGroup.rotation.set(0, 0, 0);
+
+    // --- Idle layer (fades out during run) ---
+    const idleW = 1 - this.runWeight;
+    this.bodyGroup.position.y += Math.sin(this.idleTime * 2) * 0.015 * idleW;
+    this.leftArmGroup.rotation.z -=
+      Math.sin(this.idleTime * 1.5) * 0.04 * idleW;
+    this.rightArmGroup.rotation.z +=
+      Math.sin(this.idleTime * 1.5 + 0.5) * 0.04 * idleW;
+    this.headGroup.rotation.y +=
+      Math.sin(this.idleTime * 0.7) * 0.03 * idleW;
+
+    // --- Run layer (contralateral arm-leg swing) ---
+    const runSin = Math.sin(this.runPhase);
+    const runCos = Math.cos(this.runPhase);
+    this.leftArmGroup.rotation.x -= runSin * 0.7 * this.runWeight;
+    this.rightArmGroup.rotation.x += runSin * 0.7 * this.runWeight;
+    this.leftLegGroup.rotation.x += runSin * 0.6 * this.runWeight;
+    this.rightLegGroup.rotation.x -= runSin * 0.6 * this.runWeight;
+    // Body bob and forward lean
+    this.bodyGroup.position.y += Math.abs(runCos) * 0.04 * this.runWeight;
+    this.bodyGroup.rotation.x += 0.1 * this.runWeight;
+    this.headGroup.rotation.x -= 0.1 * this.runWeight; // keep head level
+
+    // --- Turn lean (only while running) ---
+    this.bodyGroup.rotation.z -=
+      this.smoothedTurnSpeed * 0.04 * this.runWeight;
+
+    // --- Jump layer (additive) ---
+    this.leftArmGroup.rotation.z -= this.jumpWeight * 0.5;
+    this.rightArmGroup.rotation.z += this.jumpWeight * 0.5;
+    this.leftArmGroup.rotation.x -= this.jumpWeight * 0.2;
+    this.rightArmGroup.rotation.x -= this.jumpWeight * 0.2;
+    this.leftLegGroup.rotation.x += this.jumpWeight * 0.3;
+    this.rightLegGroup.rotation.x += this.jumpWeight * 0.3;
+
+    // Character-specific animation
+    this.onAnimate(dt, input);
+  }
+
+  protected onAnimate(_dt: number, _input: AnimationInput): void {}
+
+  dispose(): void {
+    this.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        const mat = child.material;
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else mat.dispose();
+      }
+    });
+  }
+
+  protected createMesh(
+    geometry: THREE.BufferGeometry,
+    color: number,
+    opts?: Partial<THREE.MeshStandardMaterialParameters>
+  ): THREE.Mesh {
+    const material = new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.7,
+      metalness: 0.1,
+      ...opts,
+    });
+    return new THREE.Mesh(geometry, material);
+  }
+}

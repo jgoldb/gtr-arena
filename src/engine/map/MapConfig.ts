@@ -111,7 +111,7 @@ export const SHADOW_SEWERS: MapConfig = {
   ambientIntensity: 0.35,
   obstacles: [
     // Central water pool
-    { type: 'water', position: { x: 0, y: -0.5, z: 0 }, scale: { x: 8, y: 1.0, z: 8 }, color: '#2A5A8A' },
+    { type: 'water', position: { x: 0, y: -0.5, z: 0 }, scale: { x: 12, y: 1.0, z: 12 }, color: '#2A5A8A' },
 
     // Pipe obstacles (horizontal cylinders)
     { type: 'cylinder', position: { x: -8, y: 0.8, z: -5 }, rotation: { x: 0, y: 0, z: Math.PI / 2 }, scale: { x: 0.8, y: 4, z: 0.8 }, color: '#5A5A6A' },

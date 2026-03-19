@@ -3,6 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
+import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 
 export class Engine {
@@ -73,6 +74,10 @@ export class Engine {
   loadMap(id: string): void {
     this.mapManager.loadMap(id);
     this.playerController.respawn();
+  }
+
+  setCharacter(id: CharacterId): void {
+    this.playerController.setCharacter(id);
   }
 
   private loop = (): void => {
