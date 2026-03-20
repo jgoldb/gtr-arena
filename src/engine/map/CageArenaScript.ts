@@ -1,124 +1,131 @@
 import * as THREE from 'three';
-import type { MapScript } from './MapScript';
-import type { CollisionSystem, Collider } from '../physics/CollisionSystem';
-import type { BoxCollider } from '../physics/CollisionSystem';
+import { ArenaScript } from './ArenaScript';
+import type { Collider, BoxCollider, CircleCollider } from '../physics/CollisionSystem';
 
-export class CageArenaScript implements MapScript {
-  private group!: THREE.Group;
-  private collision!: CollisionSystem;
-
+export class CageArenaScript extends ArenaScript {
   // Doors
   private doorPivots: THREE.Group[] = [];
   private doorColliders: Collider[] = [];
-  private doorsOpen = false;
-  private doorAnimProgress = 0;
-  private readonly DOOR_OPEN_TIME = 60;
-  private readonly DOOR_ANIM_DURATION = 2.5;
 
-  // Timer
-  private elapsed = 0;
+  // Pillars (east/west)
+  private pillarMeshes: THREE.Mesh[] = [];
+  private pillarColliders: CircleCollider[] = [];
+  // Pillars (north/south) — opposite phase
+  private nsPillarMeshes: THREE.Mesh[] = [];
+  private nsPillarColliders: CircleCollider[] = [];
 
-  // Effects
-  private flashLight: THREE.PointLight | null = null;
+  private pillarState: 'up' | 'dropping' | 'down' | 'rising' = 'up';
+  private pillarStateTimer = 0;
+  private currentPillarUpDuration = 30; // first cycle uses initial delay
+  private readonly PILLAR_DROP_ANIM = 2;
+  private readonly PILLAR_DOWN_TIME = 30;
+  private readonly PILLAR_RISE_ANIM = 2;
+  private readonly PILLAR_Y_UP = 3;
+  private readonly PILLAR_Y_DOWN = -3;
 
-  // UI
-  private overlayEl: HTMLElement | null = null;
-  private countdownEl: HTMLElement | null = null;
-  private fightEl: HTMLElement | null = null;
+  constructor() {
+    super({
+      title: 'THE CAGE',
+      titleColor: '#cc2222',
+      subtitle: 'Gates open in',
+      urgentColor: '#ff4444',
+      fightColor: '#ff0000',
+      flashColor: 0xffffff,
+      flashIntensity: 6,
+    });
+  }
 
-  init(scene: THREE.Scene, mapGroup: THREE.Group, collision: CollisionSystem): void {
-    this.group = mapGroup;
-    this.collision = collision;
-    this.elapsed = 0;
-    this.doorsOpen = false;
-    this.doorAnimProgress = 0;
-
+  // ---------------------------------------------------------------------------
+  // ArenaScript hooks
+  // ---------------------------------------------------------------------------
+  protected initArena(): void {
     this.createRingFloor();
     this.createPenFloors();
     this.createCageBars();
+    this.createCameraCollisionWalls();
     this.createCageFrame();
     this.createCornerPosts();
+    this.createPillars();
     this.createDoors();
     this.createStadiumStructure();
     this.createSpectators();
     this.createStadiumLighting();
     this.createBarricades();
     this.createRingDetails();
-    this.createCountdownUI();
   }
 
-  update(dt: number): void {
-    this.elapsed += dt;
+  protected updateArena(dt: number): void {
+    if (!this.opened) return;
 
-    // Countdown
-    if (!this.doorsOpen) {
-      const remaining = Math.max(0, Math.ceil(this.DOOR_OPEN_TIME - this.elapsed));
+    this.pillarStateTimer += dt;
 
-      if (this.countdownEl) {
-        this.countdownEl.textContent = String(remaining);
-
-        if (remaining <= 10) {
-          this.countdownEl.style.color = '#ff4444';
-          this.countdownEl.style.textShadow =
-            '0 0 30px rgba(255,0,0,0.8), 2px 2px 6px rgba(0,0,0,0.8)';
+    switch (this.pillarState) {
+      case 'up':
+        if (this.pillarStateTimer >= this.currentPillarUpDuration) {
+          this.pillarState = 'dropping';
+          this.pillarStateTimer = 0;
         }
-        if (remaining <= 3 && remaining > 0) {
-          const pulse = 1 + Math.sin(this.elapsed * 10) * 0.08;
-          this.countdownEl.style.transform = `scale(${pulse})`;
+        break;
+      case 'dropping': {
+        const t = Math.min(this.pillarStateTimer / this.PILLAR_DROP_ANIM, 1);
+        this.setPillarProgress(t);        // E/W: up → down
+        this.setNSPillarProgress(1 - t);  // N/S: down → up
+        if (t >= 1) {
+          this.pillarState = 'down';
+          this.pillarStateTimer = 0;
         }
+        break;
       }
-
-      if (this.elapsed >= this.DOOR_OPEN_TIME) {
-        this.openDoors();
-      }
-    }
-
-    // Door swing animation
-    if (this.doorsOpen && this.doorAnimProgress < 1) {
-      this.doorAnimProgress += dt / this.DOOR_ANIM_DURATION;
-      if (this.doorAnimProgress > 1) this.doorAnimProgress = 1;
-      this.animateDoors(this.doorAnimProgress);
-    }
-
-    // Flash effect
-    if (this.flashLight) {
-      const flashAge = this.elapsed - this.DOOR_OPEN_TIME;
-      if (flashAge < 1.2) {
-        this.flashLight.intensity = 6 * (1 - flashAge / 1.2);
-      } else {
-        this.group.remove(this.flashLight);
-        this.flashLight = null;
-      }
-    }
-
-    // Fade out FIGHT text
-    if (this.fightEl) {
-      const fightAge = this.elapsed - this.DOOR_OPEN_TIME;
-      if (fightAge > 2.5) {
-        this.fightEl.style.opacity = String(Math.max(0, 1 - (fightAge - 2.5) / 1));
-        if (fightAge > 3.5) {
-          this.fightEl.remove();
-          this.fightEl = null;
+      case 'down':
+        if (this.pillarStateTimer >= this.PILLAR_DOWN_TIME) {
+          this.pillarState = 'rising';
+          this.pillarStateTimer = 0;
         }
+        break;
+      case 'rising': {
+        const t = Math.min(this.pillarStateTimer / this.PILLAR_RISE_ANIM, 1);
+        this.setPillarProgress(1 - t);  // E/W: down → up
+        this.setNSPillarProgress(t);    // N/S: up → down
+        if (t >= 1) {
+          this.pillarState = 'up';
+          this.pillarStateTimer = 0;
+          this.currentPillarUpDuration = 30;
+        }
+        break;
       }
     }
   }
 
-  forceOpenDoors(): void {
-    if (this.doorsOpen) return;
-    this.elapsed = this.DOOR_OPEN_TIME;
-    this.openDoors();
-  }
-
-  dispose(): void {
-    this.overlayEl?.remove();
-    this.fightEl?.remove();
-    this.overlayEl = null;
-    this.fightEl = null;
-    this.countdownEl = null;
+  protected disposeArena(): void {
     this.doorPivots = [];
     this.doorColliders = [];
-    this.flashLight = null;
+    this.pillarMeshes = [];
+    this.pillarColliders = [];
+    this.nsPillarMeshes = [];
+    this.nsPillarColliders = [];
+  }
+
+  protected onOpen(): void {
+    for (const collider of this.doorColliders) {
+      this.collision.removeCollider(collider);
+    }
+  }
+
+  protected animateOpen(t: number): void {
+    const angle = (3 * Math.PI / 2) * t;
+
+    // NW half: swings outward into ring, flush with west pen wall
+    this.doorPivots[0].rotation.y = -angle;
+    // NE half: swings outward into ring, flush with east pen wall
+    this.doorPivots[1].rotation.y = angle;
+    // SW half: swings outward into ring, flush with west pen wall
+    this.doorPivots[2].rotation.y = angle;
+    // SE half: swings outward into ring, flush with east pen wall
+    this.doorPivots[3].rotation.y = -angle;
+  }
+
+  protected getFlashPositions(): { x: number; y: number; z: number }[] {
+    return [{ x: 0, y: 6, z: 0 }];
   }
 
   // ---------------------------------------------------------------------------
@@ -126,7 +133,7 @@ export class CageArenaScript implements MapScript {
   // ---------------------------------------------------------------------------
   private createRingFloor(): void {
     // Main ring combat surface
-    const ringGeo = new THREE.PlaneGeometry(34, 30);
+    const ringGeo = new THREE.PlaneGeometry(39, 39);
     const ringMat = new THREE.MeshStandardMaterial({
       color: 0xd8d0c0,
       roughness: 0.85,
@@ -147,10 +154,10 @@ export class CageArenaScript implements MapScript {
       emissiveIntensity: 0.15,
     });
     const borders: { pos: number[]; size: [number, number] }[] = [
-      { pos: [0, 0.03, -14.7], size: [34, 0.6] },
-      { pos: [0, 0.03, 14.7], size: [34, 0.6] },
-      { pos: [-16.7, 0.03, 0], size: [0.6, 30] },
-      { pos: [16.7, 0.03, 0], size: [0.6, 30] },
+      { pos: [0, 0.03, -19.2], size: [39, 0.6] },
+      { pos: [0, 0.03, 19.2], size: [39, 0.6] },
+      { pos: [-19.2, 0.03, 0], size: [0.6, 39] },
+      { pos: [19.2, 0.03, 0], size: [0.6, 39] },
     ];
     for (const b of borders) {
       const geo = new THREE.PlaneGeometry(b.size[0], b.size[1]);
@@ -176,7 +183,7 @@ export class CageArenaScript implements MapScript {
     });
     const southFloor = new THREE.Mesh(southGeo, southMat);
     southFloor.rotation.x = -Math.PI / 2;
-    southFloor.position.set(0, 0.015, 21);
+    southFloor.position.set(0, 0.015, 25.5);
     southFloor.receiveShadow = true;
     this.group.add(southFloor);
 
@@ -190,7 +197,7 @@ export class CageArenaScript implements MapScript {
     });
     const northFloor = new THREE.Mesh(northGeo, northMat);
     northFloor.rotation.x = -Math.PI / 2;
-    northFloor.position.set(0, 0.015, -21);
+    northFloor.position.set(0, 0.015, -25.5);
     northFloor.receiveShadow = true;
     this.group.add(northFloor);
   }
@@ -207,36 +214,36 @@ export class CageArenaScript implements MapScript {
     });
 
     const bars: { x: number; y: number; z: number; h: number }[] = [];
-    const cageH = 8;
-    const cageY = 4;
+    const cageH = 20;
+    const cageY = 10;
     const penH = 5;
     const penY = 2.5;
     const spacing = 1.2;
 
     // East cage wall bars
-    for (let z = -25.5; z <= 25.5; z += spacing) {
-      bars.push({ x: 17.85, y: cageY, z, h: cageH });
+    for (let z = -30; z <= 30; z += spacing) {
+      bars.push({ x: 20.35, y: cageY, z, h: cageH });
     }
     // West cage wall bars
-    for (let z = -25.5; z <= 25.5; z += spacing) {
-      bars.push({ x: -17.85, y: cageY, z, h: cageH });
+    for (let z = -30; z <= 30; z += spacing) {
+      bars.push({ x: -20.35, y: cageY, z, h: cageH });
     }
     // North cage wall bars
-    for (let x = -17.5; x <= 17.5; x += spacing) {
-      bars.push({ x, y: cageY, z: -25.85, h: cageH });
+    for (let x = -20; x <= 20; x += spacing) {
+      bars.push({ x, y: cageY, z: -30.35, h: cageH });
     }
     // South cage wall bars
-    for (let x = -17.5; x <= 17.5; x += spacing) {
-      bars.push({ x, y: cageY, z: 25.85, h: cageH });
+    for (let x = -20; x <= 20; x += spacing) {
+      bars.push({ x, y: cageY, z: 30.35, h: cageH });
     }
 
     // North pen wall bars
-    for (let z = -16.5; z >= -25; z -= spacing) {
+    for (let z = -21; z >= -29.5; z -= spacing) {
       bars.push({ x: -5.85, y: penY, z, h: penH });
       bars.push({ x: 5.85, y: penY, z, h: penH });
     }
     // South pen wall bars
-    for (let z = 16.5; z <= 25; z += spacing) {
+    for (let z = 21; z <= 29.5; z += spacing) {
       bars.push({ x: -5.85, y: penY, z, h: penH });
       bars.push({ x: 5.85, y: penY, z, h: penH });
     }
@@ -259,6 +266,36 @@ export class CageArenaScript implements MapScript {
   }
 
   // ---------------------------------------------------------------------------
+  // Invisible camera-collision walls (fill gaps between cage bars)
+  // ---------------------------------------------------------------------------
+  private createCameraCollisionWalls(): void {
+    const invisMat = new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: false,
+    });
+
+    const walls: { pos: [number, number, number]; size: [number, number, number] }[] = [
+      // Cage outer walls
+      { pos: [20.5, 10, 0], size: [0.1, 20, 61] },     // East
+      { pos: [-20.5, 10, 0], size: [0.1, 20, 61] },    // West
+      { pos: [0, 10, -30.5], size: [41, 20, 0.1] },    // North
+      { pos: [0, 10, 30.5], size: [41, 20, 0.1] },     // South
+      // Pen interior walls
+      { pos: [-6, 2.5, -25.5], size: [0.1, 5, 10] },   // North pen west
+      { pos: [6, 2.5, -25.5], size: [0.1, 5, 10] },    // North pen east
+      { pos: [-6, 2.5, 25.5], size: [0.1, 5, 10] },    // South pen west
+      { pos: [6, 2.5, 25.5], size: [0.1, 5, 10] },     // South pen east
+    ];
+
+    for (const w of walls) {
+      const geo = new THREE.BoxGeometry(w.size[0], w.size[1], w.size[2]);
+      const mesh = new THREE.Mesh(geo, invisMat);
+      mesh.position.set(w.pos[0], w.pos[1], w.pos[2]);
+      this.group.add(mesh);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Cage horizontal frame beams and ceiling mesh
   // ---------------------------------------------------------------------------
   private createCageFrame(): void {
@@ -269,26 +306,26 @@ export class CageArenaScript implements MapScript {
     });
 
     const beams: { pos: number[]; scale: number[] }[] = [
-      // Top frame (y=8)
-      { pos: [0, 8, -26], scale: [36.5, 0.25, 0.25] },
-      { pos: [0, 8, 26], scale: [36.5, 0.25, 0.25] },
-      { pos: [-18, 8, 0], scale: [0.25, 0.25, 52.5] },
-      { pos: [18, 8, 0], scale: [0.25, 0.25, 52.5] },
+      // Top frame (y=20)
+      { pos: [0, 20, -30.5], scale: [41, 0.25, 0.25] },
+      { pos: [0, 20, 30.5], scale: [41, 0.25, 0.25] },
+      { pos: [-20.5, 20, 0], scale: [0.25, 0.25, 61.5] },
+      { pos: [20.5, 20, 0], scale: [0.25, 0.25, 61.5] },
       // Bottom frame (ground level)
-      { pos: [0, 0.125, -26], scale: [36.5, 0.25, 0.25] },
-      { pos: [0, 0.125, 26], scale: [36.5, 0.25, 0.25] },
-      { pos: [-18, 0.125, 0], scale: [0.25, 0.25, 52.5] },
-      { pos: [18, 0.125, 0], scale: [0.25, 0.25, 52.5] },
+      { pos: [0, 0.125, -30.5], scale: [41, 0.25, 0.25] },
+      { pos: [0, 0.125, 30.5], scale: [41, 0.25, 0.25] },
+      { pos: [-20.5, 0.125, 0], scale: [0.25, 0.25, 61.5] },
+      { pos: [20.5, 0.125, 0], scale: [0.25, 0.25, 61.5] },
       // Mid-height horizontal (y=4)
-      { pos: [0, 4, -26], scale: [36.5, 0.18, 0.18] },
-      { pos: [0, 4, 26], scale: [36.5, 0.18, 0.18] },
-      { pos: [-18, 4, 0], scale: [0.18, 0.18, 52.5] },
-      { pos: [18, 4, 0], scale: [0.18, 0.18, 52.5] },
+      { pos: [0, 4, -30.5], scale: [41, 0.18, 0.18] },
+      { pos: [0, 4, 30.5], scale: [41, 0.18, 0.18] },
+      { pos: [-20.5, 4, 0], scale: [0.18, 0.18, 61.5] },
+      { pos: [20.5, 4, 0], scale: [0.18, 0.18, 61.5] },
       // Pen wall top beams
-      { pos: [-6, 5, -21], scale: [0.18, 0.18, 10] },
-      { pos: [6, 5, -21], scale: [0.18, 0.18, 10] },
-      { pos: [-6, 5, 21], scale: [0.18, 0.18, 10] },
-      { pos: [6, 5, 21], scale: [0.18, 0.18, 10] },
+      { pos: [-6, 5, -25.5], scale: [0.18, 0.18, 10] },
+      { pos: [6, 5, -25.5], scale: [0.18, 0.18, 10] },
+      { pos: [-6, 5, 25.5], scale: [0.18, 0.18, 10] },
+      { pos: [6, 5, 25.5], scale: [0.18, 0.18, 10] },
     ];
 
     for (const b of beams) {
@@ -299,7 +336,7 @@ export class CageArenaScript implements MapScript {
       this.group.add(mesh);
     }
 
-    // Cage ceiling grid (thin bars at y=8)
+    // Cage ceiling grid (thin bars at y=20)
     const meshBarMat = new THREE.MeshStandardMaterial({
       color: 0x555560,
       metalness: 0.7,
@@ -307,17 +344,17 @@ export class CageArenaScript implements MapScript {
     });
 
     // East-west bars across the top
-    for (let z = -24; z <= 24; z += 6) {
-      const geo = new THREE.BoxGeometry(36, 0.06, 0.06);
+    for (let z = -28; z <= 28; z += 6) {
+      const geo = new THREE.BoxGeometry(41, 0.06, 0.06);
       const mesh = new THREE.Mesh(geo, meshBarMat);
-      mesh.position.set(0, 8.05, z);
+      mesh.position.set(0, 20.05, z);
       this.group.add(mesh);
     }
     // North-south bars across the top
-    for (let x = -17; x <= 17; x += 6) {
-      const geo = new THREE.BoxGeometry(0.06, 0.06, 52);
+    for (let x = -20; x <= 20; x += 6) {
+      const geo = new THREE.BoxGeometry(0.06, 0.06, 61);
       const mesh = new THREE.Mesh(geo, meshBarMat);
-      mesh.position.set(x, 8.05, 0);
+      mesh.position.set(x, 20.05, 0);
       this.group.add(mesh);
     }
   }
@@ -333,12 +370,12 @@ export class CageArenaScript implements MapScript {
     });
 
     // Cage corner posts
-    const cagePostGeo = new THREE.CylinderGeometry(0.25, 0.25, 8, 8);
+    const cagePostGeo = new THREE.CylinderGeometry(0.25, 0.25, 20, 8);
     const cageCorners: number[][] = [
-      [-18, 4, -26],
-      [18, 4, -26],
-      [-18, 4, 26],
-      [18, 4, 26],
+      [-20.5, 10, -30.5],
+      [20.5, 10, -30.5],
+      [-20.5, 10, 30.5],
+      [20.5, 10, 30.5],
     ];
     for (const [x, y, z] of cageCorners) {
       const post = new THREE.Mesh(cagePostGeo, postMat);
@@ -355,16 +392,87 @@ export class CageArenaScript implements MapScript {
     });
     const gatePostGeo = new THREE.CylinderGeometry(0.3, 0.3, 5.5, 8);
     const gatePosts: number[][] = [
-      [-6, 2.75, -16],
-      [6, 2.75, -16],
-      [-6, 2.75, 16],
-      [6, 2.75, 16],
+      [-6, 2.75, -20.5],
+      [6, 2.75, -20.5],
+      [-6, 2.75, 20.5],
+      [6, 2.75, 20.5],
     ];
     for (const [x, y, z] of gatePosts) {
       const post = new THREE.Mesh(gatePostGeo, gatePostMat);
       post.position.set(x, y, z);
       post.castShadow = true;
       this.group.add(post);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ring pillars (animated drop/rise)
+  // ---------------------------------------------------------------------------
+  private createPillars(): void {
+    const pillarMat = new THREE.MeshStandardMaterial({
+      color: 0x444450,
+      metalness: 0.6,
+      roughness: 0.3,
+    });
+    const pillarGeo = new THREE.CylinderGeometry(1.8, 1.8, 6, 16);
+
+    // East/West pillars — start UP
+    for (const px of [-11, 11]) {
+      const mesh = new THREE.Mesh(pillarGeo, pillarMat);
+      mesh.position.set(px, this.PILLAR_Y_UP, 0);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.group.add(mesh);
+      this.pillarMeshes.push(mesh);
+
+      const collider: CircleCollider = {
+        type: 'circle',
+        cx: px,
+        cz: 0,
+        radius: 1.8,
+        centerY: this.PILLAR_Y_UP,
+        halfH: 3,
+      };
+      this.collision.addCollider(collider);
+      this.pillarColliders.push(collider);
+    }
+
+    // North/South pillars — start DOWN (opposite phase)
+    for (const pz of [-11, 11]) {
+      const mesh = new THREE.Mesh(pillarGeo, pillarMat);
+      mesh.position.set(0, this.PILLAR_Y_DOWN, pz);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.group.add(mesh);
+      this.nsPillarMeshes.push(mesh);
+
+      const collider: CircleCollider = {
+        type: 'circle',
+        cx: 0,
+        cz: pz,
+        radius: 1.8,
+        centerY: this.PILLAR_Y_DOWN,
+        halfH: 3,
+      };
+      this.collision.addCollider(collider);
+      this.nsPillarColliders.push(collider);
+    }
+  }
+
+  private setPillarProgress(t: number): void {
+    const y = this.PILLAR_Y_UP + (this.PILLAR_Y_DOWN - this.PILLAR_Y_UP) * t;
+    for (let i = 0; i < this.pillarMeshes.length; i++) {
+      this.pillarMeshes[i].position.y = y;
+      this.pillarColliders[i].centerY = y;
+    }
+  }
+
+  /** Same as setPillarProgress but for the north/south pair. */
+  private setNSPillarProgress(t: number): void {
+    const y = this.PILLAR_Y_UP + (this.PILLAR_Y_DOWN - this.PILLAR_Y_UP) * t;
+    for (let i = 0; i < this.nsPillarMeshes.length; i++) {
+      this.nsPillarMeshes[i].position.y = y;
+      this.nsPillarColliders[i].centerY = y;
     }
   }
 
@@ -392,10 +500,10 @@ export class CageArenaScript implements MapScript {
     const hBarMat = barMat;
 
     const doorDefs = [
-      { px: -6, pz: -16, mx: 3 }, // NW half
-      { px: 6, pz: -16, mx: -3 }, // NE half
-      { px: -6, pz: 16, mx: 3 }, // SW half
-      { px: 6, pz: 16, mx: -3 }, // SE half
+      { px: -6, pz: -20.5, mx: 3 }, // NW half
+      { px: 6, pz: -20.5, mx: -3 }, // NE half
+      { px: -6, pz: 20.5, mx: 3 }, // SW half
+      { px: 6, pz: 20.5, mx: -3 }, // SE half
     ];
 
     for (const def of doorDefs) {
@@ -430,7 +538,7 @@ export class CageArenaScript implements MapScript {
     const northDoor: BoxCollider = {
       type: 'box',
       cx: 0,
-      cz: -16,
+      cz: -20.5,
       halfW: 6,
       halfD: 0.1,
       cosY: 1,
@@ -442,7 +550,7 @@ export class CageArenaScript implements MapScript {
     const southDoor: BoxCollider = {
       type: 'box',
       cx: 0,
-      cz: 16,
+      cz: 20.5,
       halfW: 6,
       halfD: 0.1,
       cosY: 1,
@@ -469,20 +577,20 @@ export class CageArenaScript implements MapScript {
 
     // East side tiers (4 tiers rising outward)
     const eastTiers = [
-      { cx: 21, cy: 0.75, sy: 1.5 },
-      { cx: 24.5, cy: 1.75, sy: 3.5 },
-      { cx: 28, cy: 2.75, sy: 5.5 },
-      { cx: 31.5, cy: 3.75, sy: 7.5 },
+      { cx: 23.5, cy: 0.75, sy: 1.5 },
+      { cx: 27, cy: 1.75, sy: 3.5 },
+      { cx: 30.5, cy: 2.75, sy: 5.5 },
+      { cx: 34, cy: 3.75, sy: 7.5 },
     ];
     for (const t of eastTiers) {
       // East
-      const geoE = new THREE.BoxGeometry(3, t.sy, 50);
+      const geoE = new THREE.BoxGeometry(3, t.sy, 61);
       const meshE = new THREE.Mesh(geoE, concreteMat);
       meshE.position.set(t.cx, t.cy, 0);
       meshE.receiveShadow = true;
       this.group.add(meshE);
       // West (mirror)
-      const geoW = new THREE.BoxGeometry(3, t.sy, 50);
+      const geoW = new THREE.BoxGeometry(3, t.sy, 61);
       const meshW = new THREE.Mesh(geoW, concreteMat);
       meshW.position.set(-t.cx, t.cy, 0);
       meshW.receiveShadow = true;
@@ -491,19 +599,19 @@ export class CageArenaScript implements MapScript {
 
     // North side tiers (3 tiers)
     const northTiers = [
-      { cz: -28.5, cy: 0.75, sy: 1.5 },
-      { cz: -32, cy: 1.75, sy: 3.5 },
-      { cz: -35.5, cy: 2.75, sy: 5.5 },
+      { cz: -33, cy: 0.75, sy: 1.5 },
+      { cz: -36.5, cy: 1.75, sy: 3.5 },
+      { cz: -40, cy: 2.75, sy: 5.5 },
     ];
     for (const t of northTiers) {
       // North
-      const geoN = new THREE.BoxGeometry(50, t.sy, 3);
+      const geoN = new THREE.BoxGeometry(56, t.sy, 3);
       const meshN = new THREE.Mesh(geoN, concreteMat);
       meshN.position.set(0, t.cy, t.cz);
       meshN.receiveShadow = true;
       this.group.add(meshN);
       // South (mirror)
-      const geoS = new THREE.BoxGeometry(50, t.sy, 3);
+      const geoS = new THREE.BoxGeometry(56, t.sy, 3);
       const meshS = new THREE.Mesh(geoS, concreteMat);
       meshS.position.set(0, t.cy, -t.cz);
       meshS.receiveShadow = true;
@@ -516,10 +624,10 @@ export class CageArenaScript implements MapScript {
       roughness: 0.95,
     });
     const backWalls: { pos: number[]; scale: number[] }[] = [
-      { pos: [34, 5, 0], scale: [1, 10, 52] },
-      { pos: [-34, 5, 0], scale: [1, 10, 52] },
-      { pos: [0, 4.5, -38], scale: [52, 9, 1] },
-      { pos: [0, 4.5, 38], scale: [52, 9, 1] },
+      { pos: [36.5, 5, 0], scale: [1, 10, 63] },
+      { pos: [-36.5, 5, 0], scale: [1, 10, 63] },
+      { pos: [0, 4.5, -42.5], scale: [58, 9, 1] },
+      { pos: [0, 4.5, 42.5], scale: [58, 9, 1] },
     ];
     for (const w of backWalls) {
       const geo = new THREE.BoxGeometry(w.scale[0], w.scale[1], w.scale[2]);
@@ -536,10 +644,10 @@ export class CageArenaScript implements MapScript {
     });
     // East aisle step faces
     const stepFaces = [
-      { pos: [19.4, 0.75, 0], scale: [0.15, 1.5, 50] },
-      { pos: [22.9, 1.75, 0], scale: [0.15, 2, 50] },
-      { pos: [26.4, 2.75, 0], scale: [0.15, 2, 50] },
-      { pos: [29.9, 3.75, 0], scale: [0.15, 2, 50] },
+      { pos: [21.9, 0.75, 0], scale: [0.15, 1.5, 61] },
+      { pos: [25.4, 1.75, 0], scale: [0.15, 2, 61] },
+      { pos: [28.9, 2.75, 0], scale: [0.15, 2, 61] },
+      { pos: [32.4, 3.75, 0], scale: [0.15, 2, 61] },
     ];
     for (const sf of stepFaces) {
       // East
@@ -638,26 +746,26 @@ export class CageArenaScript implements MapScript {
     };
 
     // East side tiers (face west toward ring) — 4 tiers, 2 rows each
-    addSection('z', -24, 24, [20, 22], 1.5, -Math.PI / 2);
-    addSection('z', -24, 24, [23.5, 25.5], 3.5, -Math.PI / 2);
-    addSection('z', -24, 24, [27, 29], 5.5, -Math.PI / 2);
-    addSection('z', -24, 24, [30.5, 32.5], 7.5, -Math.PI / 2);
+    addSection('z', -29, 29, [22.5, 24.5], 1.5, -Math.PI / 2);
+    addSection('z', -29, 29, [26, 28], 3.5, -Math.PI / 2);
+    addSection('z', -29, 29, [29.5, 31.5], 5.5, -Math.PI / 2);
+    addSection('z', -29, 29, [33, 35], 7.5, -Math.PI / 2);
 
     // West side tiers (face east toward ring)
-    addSection('z', -24, 24, [-20, -22], 1.5, Math.PI / 2);
-    addSection('z', -24, 24, [-23.5, -25.5], 3.5, Math.PI / 2);
-    addSection('z', -24, 24, [-27, -29], 5.5, Math.PI / 2);
-    addSection('z', -24, 24, [-30.5, -32.5], 7.5, Math.PI / 2);
+    addSection('z', -29, 29, [-22.5, -24.5], 1.5, Math.PI / 2);
+    addSection('z', -29, 29, [-26, -28], 3.5, Math.PI / 2);
+    addSection('z', -29, 29, [-29.5, -31.5], 5.5, Math.PI / 2);
+    addSection('z', -29, 29, [-33, -35], 7.5, Math.PI / 2);
 
     // North side tiers (face south toward ring) — 3 tiers
-    addSection('x', -24, 24, [-27.5, -29.5], 1.5, 0);
-    addSection('x', -24, 24, [-31, -33], 3.5, 0);
-    addSection('x', -24, 24, [-34.5, -36.5], 5.5, 0);
+    addSection('x', -26, 26, [-32, -34], 1.5, 0);
+    addSection('x', -26, 26, [-35.5, -37.5], 3.5, 0);
+    addSection('x', -26, 26, [-39, -41], 5.5, 0);
 
     // South side tiers (face north toward ring)
-    addSection('x', -24, 24, [27.5, 29.5], 1.5, Math.PI);
-    addSection('x', -24, 24, [31, 33], 3.5, Math.PI);
-    addSection('x', -24, 24, [34.5, 36.5], 5.5, Math.PI);
+    addSection('x', -26, 26, [32, 34], 1.5, Math.PI);
+    addSection('x', -26, 26, [35.5, 37.5], 3.5, Math.PI);
+    addSection('x', -26, 26, [39, 41], 5.5, Math.PI);
 
     bodyMesh.count = idx;
     headMesh.count = idx;
@@ -696,13 +804,13 @@ export class CageArenaScript implements MapScript {
     // Scatter signs at random spectator-like positions in the tiers
     const tierConfigs = [
       // East side
-      { mainAxis: 'z' as const, mStart: -24, mEnd: 24, crossPos: [20, 25.5, 29, 32.5], topYs: [1.5, 3.5, 5.5, 7.5] },
+      { mainAxis: 'z' as const, mStart: -29, mEnd: 29, crossPos: [22.5, 28, 31.5, 35], topYs: [1.5, 3.5, 5.5, 7.5] },
       // West side
-      { mainAxis: 'z' as const, mStart: -24, mEnd: 24, crossPos: [-20, -25.5, -29, -32.5], topYs: [1.5, 3.5, 5.5, 7.5] },
+      { mainAxis: 'z' as const, mStart: -29, mEnd: 29, crossPos: [-22.5, -28, -31.5, -35], topYs: [1.5, 3.5, 5.5, 7.5] },
       // North side
-      { mainAxis: 'x' as const, mStart: -24, mEnd: 24, crossPos: [-27.5, -33], topYs: [1.5, 3.5] },
+      { mainAxis: 'x' as const, mStart: -26, mEnd: 26, crossPos: [-32, -37.5], topYs: [1.5, 3.5] },
       // South side
-      { mainAxis: 'x' as const, mStart: -24, mEnd: 24, crossPos: [27.5, 33], topYs: [1.5, 3.5] },
+      { mainAxis: 'x' as const, mStart: -26, mEnd: 26, crossPos: [32, 37.5], topYs: [1.5, 3.5] },
     ];
 
     let si = 0;
@@ -755,10 +863,10 @@ export class CageArenaScript implements MapScript {
     const fixtureGeo = new THREE.BoxGeometry(1.5, 0.4, 1.5);
 
     const corners: number[][] = [
-      [28, 7, 28],
-      [-28, 7, 28],
-      [28, 7, -28],
-      [-28, 7, -28],
+      [30.5, 7, 32.5],
+      [-30.5, 7, 32.5],
+      [30.5, 7, -32.5],
+      [-30.5, 7, -32.5],
     ];
 
     for (const [x, y, z] of corners) {
@@ -778,20 +886,20 @@ export class CageArenaScript implements MapScript {
 
     // Colored accent lights at the gates
     const redLight = new THREE.PointLight(0xff2200, 0.8, 25);
-    redLight.position.set(0, 5.5, -16);
+    redLight.position.set(0, 5.5, -20.5);
     this.group.add(redLight);
 
     const blueLight = new THREE.PointLight(0x0044ff, 0.8, 25);
-    blueLight.position.set(0, 5.5, 16);
+    blueLight.position.set(0, 5.5, 20.5);
     this.group.add(blueLight);
 
     // Subtle purple uplights on the cage corners
     const uplightColor = 0x6622aa;
     const uplightPositions: number[][] = [
-      [-18, 0.5, -26],
-      [18, 0.5, -26],
-      [-18, 0.5, 26],
-      [18, 0.5, 26],
+      [-20.5, 0.5, -30.5],
+      [20.5, 0.5, -30.5],
+      [-20.5, 0.5, 30.5],
+      [20.5, 0.5, 30.5],
     ];
     for (const [x, y, z] of uplightPositions) {
       const uplight = new THREE.PointLight(uplightColor, 0.4, 15);
@@ -810,10 +918,10 @@ export class CageArenaScript implements MapScript {
     });
 
     const barricades: { pos: number[]; scale: number[] }[] = [
-      { pos: [19.2, 0.45, 0], scale: [0.2, 0.9, 50] },
-      { pos: [-19.2, 0.45, 0], scale: [0.2, 0.9, 50] },
-      { pos: [0, 0.45, -27.2], scale: [50, 0.9, 0.2] },
-      { pos: [0, 0.45, 27.2], scale: [50, 0.9, 0.2] },
+      { pos: [21.7, 0.45, 0], scale: [0.2, 0.9, 61] },
+      { pos: [-21.7, 0.45, 0], scale: [0.2, 0.9, 61] },
+      { pos: [0, 0.45, -31.7], scale: [56, 0.9, 0.2] },
+      { pos: [0, 0.45, 31.7], scale: [56, 0.9, 0.2] },
     ];
 
     for (const b of barricades) {
@@ -850,8 +958,8 @@ export class CageArenaScript implements MapScript {
     const tableGeo = new THREE.BoxGeometry(2.5, 0.65, 0.9);
     const tableLegGeo = new THREE.BoxGeometry(0.12, 0.35, 0.12);
     const tables: number[][] = [
-      [18.5, 0.325, -5],
-      [18.5, 0.325, 5],
+      [21, 0.325, -5],
+      [21, 0.325, 5],
     ];
     for (const [x, y, z] of tables) {
       const table = new THREE.Mesh(tableGeo, tableMat);
@@ -909,9 +1017,15 @@ export class CageArenaScript implements MapScript {
       roughness: 0.2,
     });
     const baseGeo = new THREE.CylinderGeometry(2.2, 2.2, 0.12, 16);
-    for (const px of [-8, 8]) {
+    for (const px of [-11, 11]) {
       const base = new THREE.Mesh(baseGeo, baseMat);
       base.position.set(px, 0.06, 0);
+      base.receiveShadow = true;
+      this.group.add(base);
+    }
+    for (const pz of [-11, 11]) {
+      const base = new THREE.Mesh(baseGeo, baseMat);
+      base.position.set(0, 0.06, pz);
       base.receiveShadow = true;
       this.group.add(base);
     }
@@ -923,136 +1037,10 @@ export class CageArenaScript implements MapScript {
       roughness: 0.2,
     });
     // Simplified as a thin drooping cylinder arc (just a small bar for visual)
-    const chainGeo = new THREE.CylinderGeometry(0.04, 0.04, 14, 6);
+    const chainGeo = new THREE.CylinderGeometry(0.04, 0.04, 20, 6);
     const chain = new THREE.Mesh(chainGeo, chainMat);
     chain.position.set(0, 0.08, 0);
     chain.rotation.z = Math.PI / 2;
     this.group.add(chain);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Countdown UI overlay
-  // ---------------------------------------------------------------------------
-  private createCountdownUI(): void {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0; left: 0; right: 0;
-      pointer-events: none;
-      z-index: 50;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding-top: 55px;
-    `;
-
-    const title = document.createElement('div');
-    title.style.cssText = `
-      font-family: 'Impact', 'Arial Black', sans-serif;
-      font-size: 52px;
-      color: #cc2222;
-      text-shadow: 0 0 20px rgba(200,0,0,0.5), 2px 2px 4px rgba(0,0,0,0.8);
-      letter-spacing: 10px;
-      text-transform: uppercase;
-    `;
-    title.textContent = 'THE CAGE';
-    overlay.appendChild(title);
-
-    const subtitle = document.createElement('div');
-    subtitle.style.cssText = `
-      font-size: 18px;
-      color: #888;
-      margin-top: 4px;
-      font-family: Arial, sans-serif;
-      text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
-      letter-spacing: 4px;
-      text-transform: uppercase;
-    `;
-    subtitle.textContent = 'Gates open in';
-    overlay.appendChild(subtitle);
-
-    const countdown = document.createElement('div');
-    countdown.style.cssText = `
-      font-family: 'Impact', 'Arial Black', sans-serif;
-      font-size: 64px;
-      color: #ffffff;
-      text-shadow: 0 0 20px rgba(255,255,255,0.3), 2px 2px 6px rgba(0,0,0,0.8);
-      margin-top: 0;
-      transition: color 0.3s, text-shadow 0.3s;
-    `;
-    countdown.textContent = '60';
-    overlay.appendChild(countdown);
-
-    document.body.appendChild(overlay);
-    this.overlayEl = overlay;
-    this.countdownEl = countdown;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Door open sequence
-  // ---------------------------------------------------------------------------
-  private openDoors(): void {
-    this.doorsOpen = true;
-    this.doorAnimProgress = 0;
-
-    // Remove door colliders
-    for (const collider of this.doorColliders) {
-      this.collision.removeCollider(collider);
-    }
-
-    // Flash effect
-    const flash = new THREE.PointLight(0xffffff, 6, 40);
-    flash.position.set(0, 6, 0);
-    this.group.add(flash);
-    this.flashLight = flash;
-
-    // Remove countdown overlay
-    if (this.overlayEl) {
-      this.overlayEl.remove();
-      this.overlayEl = null;
-      this.countdownEl = null;
-    }
-
-    this.showFightText();
-  }
-
-  private animateDoors(progress: number): void {
-    // Ease-out cubic
-    const t = 1 - Math.pow(1 - progress, 3);
-    const angle = (Math.PI / 2) * t;
-
-    // NW half: swings CCW (toward +z into ring)
-    this.doorPivots[0].rotation.y = angle;
-    // NE half: swings CW
-    this.doorPivots[1].rotation.y = -angle;
-    // SW half: swings CW (toward -z into ring)
-    this.doorPivots[2].rotation.y = -angle;
-    // SE half: swings CCW
-    this.doorPivots[3].rotation.y = angle;
-  }
-
-  private showFightText(): void {
-    const fight = document.createElement('div');
-    fight.style.cssText = `
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      pointer-events: none;
-      z-index: 50;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: 'Impact', 'Arial Black', sans-serif;
-      font-size: 120px;
-      color: #ff0000;
-      text-shadow:
-        0 0 40px rgba(255,0,0,0.8),
-        0 0 80px rgba(255,0,0,0.4),
-        4px 4px 8px rgba(0,0,0,0.9);
-      letter-spacing: 15px;
-      transition: opacity 1s ease-out;
-    `;
-    fight.textContent = 'FIGHT!';
-    document.body.appendChild(fight);
-    this.fightEl = fight;
   }
 }

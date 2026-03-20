@@ -286,6 +286,87 @@ export class CollisionSystem {
     return { x: px + wx, z: pz + wz };
   }
 
+  /**
+   * Returns true if the 2D line segment (ax,az)→(bx,bz) is clear of all
+   * colliders tall enough to block sight (top > minBlockHeight).
+   */
+  hasLineOfSight(ax: number, az: number, bx: number, bz: number, minBlockHeight = 0.5): boolean {
+    const dx = bx - ax;
+    const dz = bz - az;
+
+    for (const col of this.colliders) {
+      // Only block if the collider pokes above the ground
+      const topY = col.centerY + col.halfH;
+      if (topY <= minBlockHeight) continue;
+
+      const blocked = col.type === 'circle'
+        ? this.segmentIntersectsCircle(ax, az, dx, dz, col)
+        : this.segmentIntersectsBox(ax, az, dx, dz, col);
+
+      if (blocked) return false;
+    }
+    return true;
+  }
+
+  /** Does the segment origin+(t*dir) for t∈[0,1] hit the circle? */
+  private segmentIntersectsCircle(
+    ox: number, oz: number, dx: number, dz: number, col: CircleCollider
+  ): boolean {
+    const fx = ox - col.cx;
+    const fz = oz - col.cz;
+    const a = dx * dx + dz * dz;
+    const b = 2 * (fx * dx + fz * dz);
+    const c = fx * fx + fz * fz - col.radius * col.radius;
+    const disc = b * b - 4 * a * c;
+    if (disc < 0) return false;
+    const sqrtDisc = Math.sqrt(disc);
+    const t1 = (-b - sqrtDisc) / (2 * a);
+    const t2 = (-b + sqrtDisc) / (2 * a);
+    return t2 >= 0 && t1 <= 1;
+  }
+
+  /** Does the segment hit the oriented box (2D slab test in local space)? */
+  private segmentIntersectsBox(
+    ox: number, oz: number, dx: number, dz: number, col: BoxCollider
+  ): boolean {
+    // Transform into box-local space
+    const relOx = ox - col.cx;
+    const relOz = oz - col.cz;
+    const lox = relOx * col.cosY + relOz * col.sinY;
+    const loz = -relOx * col.sinY + relOz * col.cosY;
+    const ldx = dx * col.cosY + dz * col.sinY;
+    const ldz = -dx * col.sinY + dz * col.cosY;
+
+    let tMin = 0;
+    let tMax = 1;
+
+    // X slab
+    if (Math.abs(ldx) < 1e-8) {
+      if (lox < -col.halfW || lox > col.halfW) return false;
+    } else {
+      let t1 = (-col.halfW - lox) / ldx;
+      let t2 = (col.halfW - lox) / ldx;
+      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+      tMin = Math.max(tMin, t1);
+      tMax = Math.min(tMax, t2);
+      if (tMin > tMax) return false;
+    }
+
+    // Z slab
+    if (Math.abs(ldz) < 1e-8) {
+      if (loz < -col.halfD || loz > col.halfD) return false;
+    } else {
+      let t1 = (-col.halfD - loz) / ldz;
+      let t2 = (col.halfD - loz) / ldz;
+      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+      tMin = Math.max(tMin, t1);
+      tMax = Math.min(tMax, t2);
+      if (tMin > tMax) return false;
+    }
+
+    return true;
+  }
+
   addCollider(collider: Collider): void {
     this.colliders.push(collider);
   }

@@ -7,6 +7,7 @@ export interface AnimationInput {
   velocityY: number;
   turnSpeed: number;
   speedMultiplier: number;
+  strafeDirection: number; // -1 = left, 0 = none, 1 = right
 }
 
 export abstract class CharacterModel {
@@ -29,6 +30,7 @@ export abstract class CharacterModel {
   protected runPhase = 0;
   protected idleTime = 0;
   protected smoothedTurnSpeed = 0;
+  protected smoothedStrafeDir = 0;
 
   // Base stats (defined by each character)
   abstract readonly baseMaxHp: number;
@@ -168,6 +170,8 @@ export abstract class CharacterModel {
 
     this.smoothedTurnSpeed +=
       (input.turnSpeed - this.smoothedTurnSpeed) * Math.min(1, 5 * dt);
+    this.smoothedStrafeDir +=
+      (input.strafeDirection - this.smoothedStrafeDir) * Math.min(1, 10 * dt);
 
     // Reset all bone transforms each frame
     this.leftArmGroup.rotation.set(0, 0, 0);
@@ -188,17 +192,39 @@ export abstract class CharacterModel {
     this.headGroup.rotation.y +=
       Math.sin(this.idleTime * 0.7) * 0.03 * idleW;
 
-    // --- Run layer (contralateral arm-leg swing) ---
+    // --- Run / strafe layer ---
     const runSin = Math.sin(this.runPhase);
     const runCos = Math.cos(this.runPhase);
-    this.leftArmGroup.rotation.x -= runSin * 0.7 * this.runWeight;
-    this.rightArmGroup.rotation.x += runSin * 0.7 * this.runWeight;
-    this.leftLegGroup.rotation.x += runSin * 0.6 * this.runWeight;
-    this.rightLegGroup.rotation.x -= runSin * 0.6 * this.runWeight;
-    // Body bob and forward lean
+    const strafeBlend = Math.abs(this.smoothedStrafeDir);
+    const forwardBlend = 1 - strafeBlend;
+    const strafeSign = this.smoothedStrafeDir > 0 ? 1 : this.smoothedStrafeDir < 0 ? -1 : 0;
+
+    // Forward/back run (fades out during strafe)
+    this.leftArmGroup.rotation.x -= runSin * 0.7 * this.runWeight * forwardBlend;
+    this.rightArmGroup.rotation.x += runSin * 0.7 * this.runWeight * forwardBlend;
+    this.leftLegGroup.rotation.x += runSin * 0.6 * this.runWeight * forwardBlend;
+    this.rightLegGroup.rotation.x -= runSin * 0.6 * this.runWeight * forwardBlend;
+
+    // Strafe shuffle (fades in during strafe)
+    if (strafeBlend > 0.01) {
+      // Legs step sideways
+      this.leftLegGroup.rotation.z += runSin * 0.35 * this.runWeight * strafeBlend * strafeSign;
+      this.rightLegGroup.rotation.z -= runSin * 0.35 * this.runWeight * strafeBlend * strafeSign;
+      // Alternating leg lift during steps
+      this.leftLegGroup.rotation.x -= Math.max(0, runSin) * 0.15 * this.runWeight * strafeBlend;
+      this.rightLegGroup.rotation.x -= Math.max(0, -runSin) * 0.15 * this.runWeight * strafeBlend;
+      // Reduced arm swing for balance
+      this.leftArmGroup.rotation.x -= runSin * 0.3 * this.runWeight * strafeBlend;
+      this.rightArmGroup.rotation.x += runSin * 0.3 * this.runWeight * strafeBlend;
+      // Body lean into strafe direction
+      this.bodyGroup.rotation.z -= 0.08 * this.runWeight * strafeBlend * strafeSign;
+    }
+
+    // Body bob (shared by run and strafe)
     this.bodyGroup.position.y += Math.abs(runCos) * 0.04 * this.runWeight;
-    this.bodyGroup.rotation.x += 0.1 * this.runWeight;
-    this.headGroup.rotation.x -= 0.1 * this.runWeight; // keep head level
+    // Forward lean (only during forward run)
+    this.bodyGroup.rotation.x += 0.1 * this.runWeight * forwardBlend;
+    this.headGroup.rotation.x -= 0.1 * this.runWeight * forwardBlend;
 
     // --- Turn lean (only while running) ---
     this.bodyGroup.rotation.z -=

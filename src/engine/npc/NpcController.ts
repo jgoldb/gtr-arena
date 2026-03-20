@@ -9,6 +9,7 @@ const IDLE_INPUT: AnimationInput = {
   velocityY: 0,
   turnSpeed: 0,
   speedMultiplier: 1,
+  strafeDirection: 0,
 };
 
 export class NpcController implements Targetable {
@@ -29,6 +30,7 @@ export class NpcController implements Targetable {
   // NPC auto-attack
   autoAttackTarget: Targetable | null = null;
   onAutoAttackHit?: (attacker: Targetable, target: Targetable, damage: number) => void;
+  checkLineOfSight?: (a: THREE.Vector3, b: THREE.Vector3) => boolean;
   private autoAttackTimer = 0;
   private wasInCombat = false;
 
@@ -113,7 +115,8 @@ export class NpcController implements Targetable {
       // Swing timer
       this.autoAttackTimer += dt;
       if (this.autoAttackTimer >= this.characterModel.autoAttackSpeed) {
-        if (facing && dist <= this.characterModel.autoAttackRange) {
+        const hasLos = !this.checkLineOfSight || this.checkLineOfSight(this.mesh.position, target.mesh.position);
+        if (facing && dist <= this.characterModel.autoAttackRange && hasLos) {
           this.autoAttackTimer = 0;
           this.characterModel.triggerSwing();
           this.onAutoAttackHit?.(this, target, this.characterModel.rollAutoAttackDamage());

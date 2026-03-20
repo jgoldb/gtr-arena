@@ -3,8 +3,9 @@ import type { Ability } from './Ability';
 import type { Targetable } from '../types';
 import type { RegenSystem } from './RegenSystem';
 import type { BuffSystem } from './BuffSystem';
+import type { CollisionSystem } from '../physics/CollisionSystem';
 
-export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead';
+export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los';
 
 export interface CombatResult {
   success: boolean;
@@ -21,11 +22,13 @@ export class CombatSystem {
   private combatTimers = new Map<Targetable, number>(); // entity → seconds remaining
   private regenSystem: RegenSystem;
   private buffSystem: BuffSystem;
+  private collisionSystem: CollisionSystem;
   onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
 
-  constructor(regenSystem: RegenSystem, buffSystem: BuffSystem) {
+  constructor(regenSystem: RegenSystem, buffSystem: BuffSystem, collisionSystem: CollisionSystem) {
     this.regenSystem = regenSystem;
     this.buffSystem = buffSystem;
+    this.collisionSystem = collisionSystem;
   }
 
   enterCombat(entity: Targetable): void {
@@ -153,6 +156,13 @@ export class CombatSystem {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
       }
 
+      if (!this.collisionSystem.hasLineOfSight(
+        attacker.mesh.position.x, attacker.mesh.position.z,
+        target.mesh.position.x, target.mesh.position.z
+      )) {
+        return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
+      }
+
       if (!this.isFacing(attacker.mesh.position, attackerRotY, target.mesh.position)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
       }
@@ -223,6 +233,10 @@ export class CombatSystem {
     this.cooldowns.set(ability.id, ability.cooldown);
 
     return { success: true };
+  }
+
+  hasLineOfSight(a: THREE.Vector3, b: THREE.Vector3): boolean {
+    return this.collisionSystem.hasLineOfSight(a.x, a.z, b.x, b.z);
   }
 
   applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {

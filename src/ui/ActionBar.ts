@@ -152,7 +152,7 @@ export class ActionBar {
         const degrees = (cdRemaining / slot.ability.cooldown) * 360;
         overlay.style.background =
           `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`;
-        cdText.textContent = cdRemaining.toFixed(1);
+        cdText.textContent = String(Math.ceil(cdRemaining));
       } else {
         overlay.style.background = 'transparent';
         cdText.textContent = '';

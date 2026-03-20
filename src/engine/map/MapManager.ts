@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { MapConfig, ALL_MAPS } from './MapConfig';
+import { MapConfig } from './MapConfig';
 import { MapBuilder, BuiltMap } from './MapBuilder';
 import { CollisionSystem } from '../physics/CollisionSystem';
 import { THE_CAGE } from './TheCageMap';
+import { CELESTIAL_BALLROOM } from './CelestialBallroomMap';
 import type { MapScript } from './MapScript';
 
 export class MapManager {
@@ -16,7 +17,7 @@ export class MapManager {
   constructor(scene: THREE.Scene) {
     this.scene = scene;
 
-    for (const map of [...ALL_MAPS, THE_CAGE]) {
+    for (const map of [THE_CAGE, CELESTIAL_BALLROOM]) {
       this.maps.set(map.id, map);
     }
   }

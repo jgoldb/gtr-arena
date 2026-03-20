@@ -141,6 +141,7 @@ export class PlayerController implements Targetable {
     // Face toward map center
     this.targetRotation = Math.atan2(-spawn.x, -spawn.z);
     this.mesh.rotation.y = this.targetRotation;
+    this.movementAzimuth = Math.atan2(spawn.x, spawn.z);
   }
 
   update(deltaTime: number): void {
@@ -152,6 +153,7 @@ export class PlayerController implements Targetable {
         velocityY: 0,
         turnSpeed: 0,
         speedMultiplier: 1,
+        strafeDirection: 0,
       });
       return;
     }
@@ -178,10 +180,18 @@ export class PlayerController implements Targetable {
 
     const wDown = this.input.isKeyDown('KeyW');
     const sDown = this.input.isKeyDown('KeyS');
+    const dDown = this.input.isKeyDown('KeyD');
+    const aDown = this.input.isKeyDown('KeyA');
     if (wDown) moveDir.add(forward);
     if (sDown) moveDir.sub(forward);
-    if (this.input.isKeyDown('KeyD')) moveDir.add(right);
-    if (this.input.isKeyDown('KeyA')) moveDir.sub(right);
+    if (dDown) moveDir.add(right);
+    if (aDown) moveDir.sub(right);
+
+    // Pure strafe (A/D without W/S) for animation
+    let strafeDirection = 0;
+    if ((aDown || dDown) && !wDown && !sDown) {
+      strafeDirection = dDown ? 1 : -1;
+    }
 
     const isMoving = moveDir.lengthSq() > 0;
     const isBackpedaling = sDown && !wDown;
@@ -193,13 +203,9 @@ export class PlayerController implements Targetable {
       if (isMoving) {
         moveDir.normalize();
         this.mesh.position.addScaledVector(moveDir, effectiveSpeed * deltaTime);
-        if (isBackpedaling) {
-          // Face opposite of movement direction (toward "forward")
-          this.targetRotation = Math.atan2(-moveDir.x, -moveDir.z);
-        } else {
-          this.targetRotation = Math.atan2(moveDir.x, moveDir.z);
-        }
-      } else if (rightHeld) {
+      }
+      // Facing only changes from right-click (camera direction)
+      if (rightHeld) {
         this.targetRotation = Math.atan2(-Math.sin(cameraAzimuth), -Math.cos(cameraAzimuth));
       }
     } else {
@@ -266,6 +272,10 @@ export class PlayerController implements Targetable {
       this.mesh.position.y = resolved.groundY;
       this.velocityY = 0;
       this.grounded = true;
+    } else if (this.grounded && this.mesh.position.y - resolved.groundY < 1) {
+      // Follow descending platforms smoothly instead of free-falling in tiny steps
+      this.mesh.position.y = resolved.groundY;
+      this.velocityY = 0;
     }
 
     // Clamp to map bounds
@@ -281,6 +291,7 @@ export class PlayerController implements Targetable {
       velocityY: this.velocityY,
       turnSpeed,
       speedMultiplier,
+      strafeDirection,
     });
   }
 

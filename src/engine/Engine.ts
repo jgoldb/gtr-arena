@@ -51,7 +51,7 @@ export class Engine {
     this.mapManager = new MapManager(this.scene);
 
     // Load default map
-    this.mapManager.loadMap('bladestorm');
+    this.mapManager.loadMap('cage');
 
     // Camera needs player target, player needs camera azimuth.
     // Create camera first with a temporary getter, then wire up.
@@ -74,7 +74,7 @@ export class Engine {
     );
     this.regenSystem = new RegenSystem(() => [this.playerController, ...this.npcs]);
     this.buffSystem = new BuffSystem();
-    this.combatSystem = new CombatSystem(this.regenSystem, this.buffSystem);
+    this.combatSystem = new CombatSystem(this.regenSystem, this.buffSystem, this.mapManager.collision);
   }
 
   start(): void {
@@ -117,6 +117,7 @@ export class Engine {
     npc.onAutoAttackHit = (attacker, target, damage) => {
       this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
     };
+    npc.checkLineOfSight = (a, b) => this.combatSystem.hasLineOfSight(a, b);
     this.npcs.push(npc);
     this.scene.add(npc.mesh);
     return npc;
@@ -199,6 +200,13 @@ export class Engine {
       const dist = Math.sqrt(dx * dx + dz * dz);
       if (dist > player.autoAttackRange) {
         this.autoAttackTimer = player.autoAttackSpeed;
+        return;
+      }
+
+      // Check line of sight
+      if (!this.combatSystem.hasLineOfSight(player.mesh.position, target.mesh.position)) {
+        this.autoAttackTimer = player.autoAttackSpeed;
+        this.onAutoAttackError?.('Not in line of sight');
         return;
       }
 
