@@ -16,6 +16,9 @@ const BELT = 0x5c4033;
 export class TheJanitor extends CharacterModel {
   readonly id = 'janitor';
   readonly displayName = 'The Janitor';
+  readonly autoAttackDamage = 15;
+  readonly autoAttackSpeed = 2.5;
+  readonly autoAttackRange = 3;
 
   private declare mopHead: THREE.Mesh;
   private declare bucketWater: THREE.Mesh;
@@ -298,6 +301,68 @@ export class TheJanitor extends CharacterModel {
       this.bucketWater.rotation.z =
         Math.cos(this.idleTime * 2.0) * 0.06 * intensity;
     }
+  }
+
+  protected override getSwingDuration(): number {
+    return 0.5;
+  }
+
+  protected override animateCombatStance(weight: number): void {
+    // Legs into fighting stance — spread apart, slight bend
+    this.leftLegGroup.rotation.z -= 0.15 * weight;
+    this.rightLegGroup.rotation.z += 0.15 * weight;
+    this.leftLegGroup.rotation.x += 0.12 * weight;
+    this.rightLegGroup.rotation.x += 0.12 * weight;
+
+    // Right arm raises mop ready to strike
+    this.rightArmGroup.rotation.x -= 1.0 * weight;
+    this.rightArmGroup.rotation.z += 0.15 * weight;
+
+    // Left arm holds bucket forward slightly
+    this.leftArmGroup.rotation.x += 0.3 * weight;
+    this.leftArmGroup.rotation.z -= 0.1 * weight;
+
+    // Body slight crouch
+    this.bodyGroup.position.y -= 0.04 * weight;
+
+    // Sway back and forth
+    const sway = Math.sin(this.idleTime * 1.5);
+    this.bodyGroup.rotation.y += sway * 0.06 * weight;
+    this.rightArmGroup.rotation.x += Math.sin(this.idleTime * 2) * 0.08 * weight;
+  }
+
+  protected override animateAttackSwing(t: number, _alternateArm: boolean): void {
+    // Thrust mop down and forward
+    let armX: number;
+    let bodyX: number;
+    let bodyY: number;
+
+    if (t < 0.25) {
+      // Wind up: pull mop back
+      const p = t / 0.25;
+      const ease = p * p;
+      armX = -0.4 * ease;
+      bodyX = -0.06 * ease;
+      bodyY = 0;
+    } else if (t < 0.55) {
+      // Strike: thrust forward and down
+      const p = (t - 0.25) / 0.3;
+      const ease = 1 - Math.pow(1 - p, 3);
+      armX = -0.4 + 2.2 * ease;
+      bodyX = -0.06 + 0.22 * ease;
+      bodyY = -0.03 * ease;
+    } else {
+      // Recovery: return to combat stance
+      const p = (t - 0.55) / 0.45;
+      const ease = p * p * (3 - 2 * p);
+      armX = 1.8 * (1 - ease);
+      bodyX = 0.16 * (1 - ease);
+      bodyY = -0.03 * (1 - ease);
+    }
+
+    this.rightArmGroup.rotation.x += armX;
+    this.bodyGroup.rotation.x += bodyX;
+    this.bodyGroup.position.y += bodyY;
   }
 
   protected override animateDeath(t: number): void {

@@ -9,6 +9,7 @@ import { NpcController } from './npc/NpcController';
 import { TargetingSystem } from './targeting/TargetingSystem';
 import { CombatSystem } from './combat/CombatSystem';
 import { RegenSystem } from './combat/RegenSystem';
+import type { Targetable } from './types';
 
 export class Engine {
   readonly scene: THREE.Scene;
@@ -23,6 +24,9 @@ export class Engine {
   readonly regenSystem: RegenSystem;
   readonly combatSystem: CombatSystem;
   private readonly npcs: NpcController[] = [];
+  private autoAttacking = false;
+  private autoAttackTimer = 0;
+  private autoAttackTarget: Targetable | null = null;
 
   private animationFrameId: number | null = null;
 
@@ -106,6 +110,9 @@ export class Engine {
       if (this.targetingSystem.currentTarget === npc) {
         this.targetingSystem.currentTarget = null;
       }
+      if (this.autoAttackTarget === npc) {
+        this.stopAutoAttack();
+      }
       this.npcs.splice(idx, 1);
       this.scene.remove(npc.mesh);
       npc.dispose();
@@ -113,6 +120,7 @@ export class Engine {
   }
 
   clearNpcs(): void {
+    this.stopAutoAttack();
     for (const npc of this.npcs) {
       if (this.targetingSystem.currentTarget === npc) {
         this.targetingSystem.currentTarget = null;
@@ -127,6 +135,72 @@ export class Engine {
     return this.npcs;
   }
 
+  startAutoAttack(target: Targetable): void {
+    if (target === this.autoAttackTarget && this.autoAttacking) return;
+    this.autoAttacking = true;
+    this.autoAttackTarget = target;
+    this.autoAttackTimer = this.playerController.autoAttackSpeed; // immediate first swing
+    this.playerController.setAutoAttacking(true);
+  }
+
+  stopAutoAttack(): void {
+    this.autoAttacking = false;
+    this.autoAttackTimer = 0;
+    this.autoAttackTarget = null;
+    this.playerController.setAutoAttacking(false);
+  }
+
+  resetAutoAttackTimer(): void {
+    this.autoAttackTimer = 0;
+  }
+
+  private updateAutoAttack(dt: number): void {
+    if (!this.autoAttacking) return;
+
+    // Keep model in sync (handles character swap mid-combat)
+    this.playerController.setAutoAttacking(true);
+
+    const player = this.playerController;
+    const target = this.targetingSystem.currentTarget;
+
+    // Stop conditions
+    if (player.dead || !target || target.dead || !target.hostile || target !== this.autoAttackTarget) {
+      this.stopAutoAttack();
+      return;
+    }
+
+    this.autoAttackTimer += dt;
+
+    if (this.autoAttackTimer >= player.autoAttackSpeed) {
+      // Check range
+      const dx = player.mesh.position.x - target.mesh.position.x;
+      const dz = player.mesh.position.z - target.mesh.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist > player.autoAttackRange) {
+        this.autoAttackTimer = player.autoAttackSpeed;
+        return;
+      }
+
+      // Check facing (120° cone)
+      const toTarget = new THREE.Vector3(
+        target.mesh.position.x - player.mesh.position.x,
+        0,
+        target.mesh.position.z - player.mesh.position.z
+      ).normalize();
+      const rotY = player.mesh.rotation.y;
+      const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+      if (forward.dot(toTarget) <= 0.5) {
+        this.autoAttackTimer = player.autoAttackSpeed;
+        return;
+      }
+
+      // Swing!
+      this.autoAttackTimer = 0;
+      player.triggerSwing();
+      this.combatSystem.applyAutoAttackDamage(player, target, player.autoAttackDamage);
+    }
+  }
+
   private loop = (): void => {
     this.animationFrameId = requestAnimationFrame(this.loop);
 
@@ -138,6 +212,16 @@ export class Engine {
       this.targetingSystem.processClick(click.x, click.y);
     }
 
+    // Process right-click for auto-attack
+    const rightClick = this.input.getRightClick();
+    if (rightClick) {
+      const target = this.targetingSystem.processRightClick(rightClick.x, rightClick.y);
+      if (target && target.hostile && !target.dead) {
+        this.startAutoAttack(target);
+      }
+    }
+
+    this.updateAutoAttack(deltaTime);
     this.playerController.update(deltaTime);
     for (const npc of this.npcs) npc.update(deltaTime);
     // Despawn dead NPCs after their timer expires

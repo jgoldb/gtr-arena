@@ -86,6 +86,30 @@ export class TargetingSystem {
     this.currentTarget = null;
   }
 
+  /** Right-click: set target if found (does NOT clear on miss). Returns the target or null. */
+  processRightClick(screenX: number, screenY: number): Targetable | null {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndcX = ((screenX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((screenY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+
+    const intersects = this.raycaster.intersectObjects(
+      this.scene.children,
+      true
+    );
+
+    for (const hit of intersects) {
+      const targetable = this.findTargetable(hit.object);
+      if (targetable) {
+        this.currentTarget = targetable;
+        return targetable;
+      }
+    }
+
+    return null;
+  }
+
   private findTargetable(obj: THREE.Object3D): Targetable | null {
     let current: THREE.Object3D | null = obj;
     while (current) {

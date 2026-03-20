@@ -28,6 +28,17 @@ export abstract class CharacterModel {
   protected idleTime = 0;
   protected smoothedTurnSpeed = 0;
 
+  // Auto-attack stats (defined by each character)
+  abstract readonly autoAttackDamage: number;
+  abstract readonly autoAttackSpeed: number; // seconds between swings
+  abstract readonly autoAttackRange: number;
+
+  // Auto-attack animation state
+  private _autoAttacking = false;
+  protected combatStanceWeight = 0;
+  protected attackAnimTime = -1; // -1 = not swinging
+  protected attackArmToggle = false; // for alternating arms
+
   // Death animation
   private static readonly DEATH_DURATION = 1.5;
   protected deathTime = -1; // -1 = alive, >= 0 = seconds since death
@@ -71,16 +82,38 @@ export abstract class CharacterModel {
 
   startDeath(): void {
     this.deathTime = 0;
+    this._autoAttacking = false;
+    this.combatStanceWeight = 0;
+    this.attackAnimTime = -1;
   }
 
   resetDeath(): void {
     this.deathTime = -1;
+    this._autoAttacking = false;
+    this.combatStanceWeight = 0;
+    this.attackAnimTime = -1;
     this.group.rotation.x = 0;
     this.group.position.y = 0;
   }
 
   get isDying(): boolean {
     return this.deathTime >= 0;
+  }
+
+  get isAutoAttacking(): boolean {
+    return this._autoAttacking;
+  }
+
+  setAutoAttacking(active: boolean): void {
+    this._autoAttacking = active;
+  }
+
+  triggerSwing(): void {
+    this.attackAnimTime = 0;
+  }
+
+  get isSwinging(): boolean {
+    return this.attackAnimTime >= 0;
   }
 
   update(dt: number, input: AnimationInput): void {
@@ -151,11 +184,37 @@ export abstract class CharacterModel {
     this.leftLegGroup.rotation.x += this.jumpWeight * 0.3;
     this.rightLegGroup.rotation.x += this.jumpWeight * 0.3;
 
+    // --- Combat stance layer ---
+    const wantCombat = this._autoAttacking ? 1 : 0;
+    this.combatStanceWeight += (wantCombat - this.combatStanceWeight) * Math.min(1, 8 * dt);
+    if (this.combatStanceWeight > 0.001) {
+      this.animateCombatStance(this.combatStanceWeight);
+    }
+
+    // --- Attack swing layer ---
+    if (this.attackAnimTime >= 0) {
+      this.attackAnimTime += dt;
+      const swingDuration = this.getSwingDuration();
+      const t = Math.min(1, this.attackAnimTime / swingDuration);
+      this.animateAttackSwing(t, this.attackArmToggle);
+      if (t >= 1) {
+        this.attackAnimTime = -1;
+        this.attackArmToggle = !this.attackArmToggle;
+      }
+    }
+
     // Character-specific animation
     this.onAnimate(dt, input);
   }
 
   protected onAnimate(_dt: number, _input: AnimationInput): void {}
+
+  protected getSwingDuration(): number {
+    return 0.4;
+  }
+
+  protected animateCombatStance(_weight: number): void {}
+  protected animateAttackSwing(_t: number, _alternateArm: boolean): void {}
 
   protected animateDeath(t: number): void {
     // Reset all bones

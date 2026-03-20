@@ -11,6 +11,7 @@ export class InputManager {
   private leftClickStartY = 0;
   private leftDragDist = 0;
   private leftClickEvent: { x: number; y: number } | null = null;
+  private rightClickEvent: { x: number; y: number } | null = null;
   private static readonly CLICK_THRESHOLD = 4;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -53,6 +54,7 @@ export class InputManager {
     if (e.button === 1) this.mouseButtons.middle = true;
     if (e.button === 2) {
       this.mouseButtons.right = true;
+      this.rightClickEvent = { x: e.clientX, y: e.clientY };
       // Right-click always gets immediate pointer lock; cancel any pending left click
       this.leftClickPending = false;
       this.canvas.requestPointerLock();
@@ -116,11 +118,16 @@ export class InputManager {
     return this.leftClickEvent;
   }
 
+  getRightClick(): { x: number; y: number } | null {
+    return this.rightClickEvent;
+  }
+
   resetDeltas(): void {
     this.mouseDelta.x = 0;
     this.mouseDelta.y = 0;
     this.scrollDelta = 0;
     this.leftClickEvent = null;
+    this.rightClickEvent = null;
   }
 
   dispose(): void {

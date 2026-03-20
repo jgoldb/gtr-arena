@@ -64,6 +64,26 @@ export class PlayerController implements Targetable {
     return this.characterModel.displayName;
   }
 
+  get autoAttackDamage(): number {
+    return this.characterModel.autoAttackDamage;
+  }
+
+  get autoAttackSpeed(): number {
+    return this.characterModel.autoAttackSpeed;
+  }
+
+  get autoAttackRange(): number {
+    return this.characterModel.autoAttackRange;
+  }
+
+  setAutoAttacking(active: boolean): void {
+    this.characterModel.setAutoAttacking(active);
+  }
+
+  triggerSwing(): void {
+    this.characterModel.triggerSwing();
+  }
+
   die(): void {
     if (this.dead) return;
     this.dead = true;

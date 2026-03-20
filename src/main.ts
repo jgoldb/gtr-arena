@@ -7,6 +7,7 @@ import { UnitFrame } from './ui/UnitFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { ActionBar } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
+import { FloatingCombatText } from './ui/FloatingCombatText';
 import { BasicAttack } from './engine/combat/Ability';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -64,6 +65,13 @@ document.getElementById('target-frame-container')!.appendChild(targetFrame.eleme
 // UI — error text (center screen)
 const errorText = new ErrorText();
 document.body.appendChild(errorText.element);
+
+// UI — floating combat text (damage/heal numbers over targets)
+const combatText = new FloatingCombatText(engine.camera);
+document.body.appendChild(combatText.element);
+engine.combatSystem.onCombatText = (target, amount, type) => {
+  combatText.spawn(target.mesh, amount, type);
+};
 
 // UI — death screen (no backdrop — camera must remain interactive)
 const deathScreen = document.createElement('div');
@@ -143,11 +151,17 @@ document.body.appendChild(actionBar.element);
 
 let deathScreenShown = false;
 
+let lastFrameTime = performance.now();
 function updateFrames() {
   requestAnimationFrame(updateFrames);
+  const now = performance.now();
+  const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
+  lastFrameTime = now;
+
   playerFrame.update(engine.playerController);
   targetFrame.update(engine.targetingSystem.currentTarget);
   actionBar.update();
+  combatText.update(dt);
 
   // Show death screen when player dies
   if (engine.playerController.dead && !deathScreenShown) {

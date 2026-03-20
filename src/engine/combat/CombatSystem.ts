@@ -16,6 +16,7 @@ export class CombatSystem {
   private static readonly COMBAT_DURATION = 5; // seconds before leaving combat
   private combatTimers = new Map<Targetable, number>(); // entity → seconds remaining
   private regenSystem: RegenSystem;
+  onCombatText?: (target: Targetable, amount: number, type: 'damage' | 'heal') => void;
 
   constructor(regenSystem: RegenSystem) {
     this.regenSystem = regenSystem;
@@ -137,6 +138,9 @@ export class CombatSystem {
     }
     if (target) {
       target.hp = Math.max(0, target.hp - ability.damage);
+      if (ability.damage > 0) {
+        this.onCombatText?.(target, ability.damage, 'damage');
+      }
 
       // Check for kill
       if (target.hp <= 0 && !target.dead) {
@@ -157,5 +161,19 @@ export class CombatSystem {
     this.cooldowns.set(ability.id, ability.cooldown);
 
     return { success: true };
+  }
+
+  applyAutoAttackDamage(attacker: Targetable, target: Targetable, damage: number): void {
+    if (attacker.dead || target.dead) return;
+    target.hp = Math.max(0, target.hp - damage);
+    this.onCombatText?.(target, damage, 'damage');
+    if (target.hp <= 0 && !target.dead) {
+      target.die();
+      this.combatTimers.delete(target);
+    }
+    if (target.hostile) {
+      this.enterCombat(attacker);
+      this.enterCombat(target);
+    }
   }
 }

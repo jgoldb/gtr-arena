@@ -16,6 +16,9 @@ const CORK = 0x8b6914;
 export class DrRetardo extends CharacterModel {
   readonly id = 'dr-retardo';
   readonly displayName = 'Dr. Retardo';
+  readonly autoAttackDamage = 6;
+  readonly autoAttackSpeed = 1.2;
+  readonly autoAttackRange = 3;
 
   // Declared via declare to avoid useDefineForClassFields overwriting
   // values set during the parent constructor's buildModel() call.
@@ -502,6 +505,66 @@ export class DrRetardo extends CharacterModel {
         hair.userData.baseY +
         Math.sin(this.runPhase * 1.2 + i * 0.8) * 0.012 * this.runWeight;
     }
+  }
+
+  protected override getSwingDuration(): number {
+    return 0.35;
+  }
+
+  protected override animateCombatStance(weight: number): void {
+    // Legs spread wider, uncoordinated stance
+    this.leftLegGroup.rotation.z -= 0.2 * weight;
+    this.rightLegGroup.rotation.z += 0.18 * weight;
+    this.leftLegGroup.rotation.x += 0.05 * weight;
+    this.rightLegGroup.rotation.x += 0.08 * weight;
+
+    // Arms flailing in the air
+    this.leftArmGroup.rotation.x -= 0.9 * weight;
+    this.rightArmGroup.rotation.x -= 0.9 * weight;
+    this.leftArmGroup.rotation.z -= 0.3 * weight;
+    this.rightArmGroup.rotation.z += 0.3 * weight;
+
+    // Chaotic flailing motion
+    const flailTime = this.idleTime * 4;
+    this.leftArmGroup.rotation.x += Math.sin(flailTime) * 0.2 * weight;
+    this.leftArmGroup.rotation.z += Math.cos(flailTime * 1.3) * 0.15 * weight;
+    this.rightArmGroup.rotation.x += Math.sin(flailTime * 1.1 + 2) * 0.2 * weight;
+    this.rightArmGroup.rotation.z += Math.cos(flailTime * 0.9 + 1) * 0.15 * weight;
+
+    // Body sways side to side
+    this.bodyGroup.rotation.z += Math.sin(this.idleTime * 1.8) * 0.04 * weight;
+    this.bodyGroup.rotation.y += Math.sin(this.idleTime * 1.2) * 0.05 * weight;
+  }
+
+  protected override animateAttackSwing(t: number, alternateArm: boolean): void {
+    // Bonk: swing one arm down, alternating each attack
+    const armGroup = alternateArm ? this.leftArmGroup : this.rightArmGroup;
+    const zSign = alternateArm ? -1 : 1;
+
+    let armX: number;
+    let armZ: number;
+
+    if (t < 0.2) {
+      // Quick wind up
+      const p = t / 0.2;
+      armX = -0.3 * p;
+      armZ = 0;
+    } else if (t < 0.5) {
+      // Bonk down
+      const p = (t - 0.2) / 0.3;
+      const ease = 1 - Math.pow(1 - p, 3);
+      armX = -0.3 + 2.0 * ease;
+      armZ = -zSign * 0.3 * ease;
+    } else {
+      // Recovery
+      const p = (t - 0.5) / 0.5;
+      const ease = p * p * (3 - 2 * p);
+      armX = 1.7 * (1 - ease);
+      armZ = -zSign * 0.3 * (1 - ease);
+    }
+
+    armGroup.rotation.x += armX;
+    armGroup.rotation.z += armZ;
   }
 
   protected override animateDeath(t: number): void {
