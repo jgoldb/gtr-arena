@@ -107,6 +107,8 @@ export class MapBuilder {
         continue;
       }
 
+      if (obstacle.visible === false) continue;
+
       const mesh = this.createObstacleMesh(obstacle);
       mesh.position.set(obstacle.position.x, obstacle.position.y, obstacle.position.z);
 

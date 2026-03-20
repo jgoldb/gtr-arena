@@ -249,6 +249,7 @@ export class Engine {
     this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController);
     this.playerController.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(this.playerController, 'crash-out'));
 
+    this.mapManager.update(deltaTime);
     this.playerController.update(deltaTime);
     for (const npc of this.npcs) npc.update(deltaTime);
     // Despawn dead NPCs after their timer expires

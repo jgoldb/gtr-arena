@@ -55,6 +55,29 @@ killBtn.addEventListener('click', () => {
 });
 npcContainer.appendChild(killBtn);
 
+// UI — Open Gates test button (in NPC panel)
+const gatesBtn = document.createElement('button');
+gatesBtn.textContent = 'Open Gates';
+gatesBtn.style.cssText = `
+  padding: 6px 10px;
+  font-size: 13px;
+  background: rgba(40, 100, 160, 0.85);
+  color: #ddd;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+  width: 100%;
+  margin-top: 4px;
+`;
+gatesBtn.addEventListener('click', () => {
+  const script = engine.mapManager.getScript();
+  if (script && 'forceOpenDoors' in script) {
+    (script as { forceOpenDoors: () => void }).forceOpenDoors();
+  }
+});
+npcContainer.appendChild(gatesBtn);
+
 // UI — unit frames (top-left)
 const playerFrame = new UnitFrame({ getPortrait });
 document.getElementById('player-frame-container')!.appendChild(playerFrame.element);

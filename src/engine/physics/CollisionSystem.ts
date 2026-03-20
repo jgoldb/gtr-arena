@@ -286,6 +286,15 @@ export class CollisionSystem {
     return { x: px + wx, z: pz + wz };
   }
 
+  addCollider(collider: Collider): void {
+    this.colliders.push(collider);
+  }
+
+  removeCollider(collider: Collider): void {
+    const idx = this.colliders.indexOf(collider);
+    if (idx !== -1) this.colliders.splice(idx, 1);
+  }
+
   getColliders(): readonly Collider[] {
     return this.colliders;
   }

@@ -2,18 +2,21 @@ import * as THREE from 'three';
 import { MapConfig, ALL_MAPS } from './MapConfig';
 import { MapBuilder, BuiltMap } from './MapBuilder';
 import { CollisionSystem } from '../physics/CollisionSystem';
+import { THE_CAGE } from './TheCageMap';
+import type { MapScript } from './MapScript';
 
 export class MapManager {
   private scene: THREE.Scene;
   private maps: Map<string, MapConfig> = new Map();
   private currentMap: BuiltMap | null = null;
   private currentConfig: MapConfig | null = null;
+  private currentScript: MapScript | null = null;
   readonly collision = new CollisionSystem();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
 
-    for (const map of ALL_MAPS) {
+    for (const map of [...ALL_MAPS, THE_CAGE]) {
       this.maps.set(map.id, map);
     }
   }
@@ -23,6 +26,12 @@ export class MapManager {
     if (!config) {
       console.error(`Map "${id}" not found`);
       return;
+    }
+
+    // Dispose active map script before removing the scene group
+    if (this.currentScript) {
+      this.currentScript.dispose();
+      this.currentScript = null;
     }
 
     // Remove existing map group
@@ -47,6 +56,20 @@ export class MapManager {
     this.currentMap = MapBuilder.build(config, this.scene);
     this.currentConfig = config;
     this.collision.buildFromObstacles(config.obstacles);
+
+    // Initialize map script if the config defines one
+    if (config.createScript) {
+      this.currentScript = config.createScript();
+      this.currentScript.init(this.scene, this.currentMap.group, this.collision);
+    }
+  }
+
+  update(dt: number): void {
+    this.currentScript?.update(dt);
+  }
+
+  getScript(): MapScript | null {
+    return this.currentScript;
   }
 
   getCurrentConfig(): MapConfig | null {
@@ -65,6 +88,10 @@ export class MapManager {
       return { x: 0, y: 0, z: 0 };
     }
     return { ...this.currentConfig.spawnPoint };
+  }
+
+  getNpcSpawnBounds(): { minX: number; maxX: number; minZ: number; maxZ: number } {
+    return this.currentConfig?.npcSpawnBounds ?? this.getBounds();
   }
 
   getAvailableMaps(): MapConfig[] {

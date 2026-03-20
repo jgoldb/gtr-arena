@@ -5,7 +5,8 @@
       "Bash(npx tsc:*)",
       "Bash(grep -E \"\\\\.\\(json|ts|html\\)$\")",
       "Bash(find /c/Users/Joey/Repos/gtr/src/ui -type f -name *.ts)",
-      "Bash(npx vite:*)"
+      "Bash(npx vite:*)",
+      "Bash(xargs wc:*)"
     ]
   }
 }

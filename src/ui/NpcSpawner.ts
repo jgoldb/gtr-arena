@@ -87,7 +87,7 @@ export class NpcSpawner {
   }
 
   private pickSpawnPosition(engine: Engine): THREE.Vector3 {
-    const bounds = engine.mapManager.getBounds();
+    const bounds = engine.mapManager.getNpcSpawnBounds();
     const playerPos = engine.playerController.getPosition();
 
     // Pick a random position within the inner portion of the arena,
