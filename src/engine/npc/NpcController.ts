@@ -20,6 +20,10 @@ export class NpcController implements Targetable {
   maxHp = 100;
   mana = 100;
   maxMana = 100;
+  inCombat = false;
+  dead = false;
+  private static readonly DESPAWN_DELAY = 10;
+  private deathTimer = 0;
   private characterModel: CharacterModel;
 
   constructor(characterId: CharacterId, position: THREE.Vector3) {
@@ -39,7 +43,22 @@ export class NpcController implements Targetable {
     return this.characterModel.displayName;
   }
 
+  die(): void {
+    if (this.dead) return;
+    this.dead = true;
+    this.hp = 0;
+    this.inCombat = false;
+    this.characterModel.startDeath();
+  }
+
+  get shouldDespawn(): boolean {
+    return this.dead && this.deathTimer >= NpcController.DESPAWN_DELAY;
+  }
+
   update(dt: number): void {
+    if (this.dead) {
+      this.deathTimer += dt;
+    }
     this.characterModel.update(dt, IDLE_INPUT);
   }
 

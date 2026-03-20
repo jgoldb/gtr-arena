@@ -21,5 +21,8 @@ export interface Targetable {
   maxHp: number;
   mana: number;
   maxMana: number;
+  inCombat: boolean;
+  dead: boolean;
   readonly mesh: THREE.Group;
+  die(): void;
 }

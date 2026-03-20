@@ -299,4 +299,24 @@ export class TheJanitor extends CharacterModel {
         Math.cos(this.idleTime * 2.0) * 0.06 * intensity;
     }
   }
+
+  protected override animateDeath(t: number): void {
+    super.animateDeath(t);
+
+    const fall = t < 0.15 ? 0 : Math.min(1, (t - 0.15) / 0.55);
+    const fallEase = 1 - Math.pow(1 - fall, 2);
+
+    // Cap tips off the head
+    this.headGroup.rotation.z += fallEase * 0.4;
+
+    // Mop head droops
+    if (this.mopHead) {
+      this.mopHead.rotation.z = fallEase * 0.6;
+    }
+
+    // Bucket water spills
+    if (this.bucketWater) {
+      this.bucketWater.rotation.x = fallEase * 0.8;
+    }
+  }
 }

@@ -28,6 +28,10 @@ export abstract class CharacterModel {
   protected idleTime = 0;
   protected smoothedTurnSpeed = 0;
 
+  // Death animation
+  private static readonly DEATH_DURATION = 1.5;
+  protected deathTime = -1; // -1 = alive, >= 0 = seconds since death
+
   constructor() {
     this.group = new THREE.Group();
     this.initSkeleton();
@@ -65,7 +69,29 @@ export abstract class CharacterModel {
 
   protected abstract buildModel(): void;
 
+  startDeath(): void {
+    this.deathTime = 0;
+  }
+
+  resetDeath(): void {
+    this.deathTime = -1;
+    this.group.rotation.x = 0;
+    this.group.position.y = 0;
+  }
+
+  get isDying(): boolean {
+    return this.deathTime >= 0;
+  }
+
   update(dt: number, input: AnimationInput): void {
+    // Death animation overrides everything
+    if (this.deathTime >= 0) {
+      this.deathTime += dt;
+      const t = Math.min(1, this.deathTime / CharacterModel.DEATH_DURATION);
+      this.animateDeath(t);
+      return;
+    }
+
     // Blend weights toward targets
     const wantRun = input.isMoving && input.isGrounded ? 1 : 0;
     this.runWeight += (wantRun - this.runWeight) * Math.min(1, 10 * dt);
@@ -130,6 +156,38 @@ export abstract class CharacterModel {
   }
 
   protected onAnimate(_dt: number, _input: AnimationInput): void {}
+
+  protected animateDeath(t: number): void {
+    // Reset all bones
+    this.leftArmGroup.rotation.set(0, 0, 0);
+    this.rightArmGroup.rotation.set(0, 0, 0);
+    this.leftLegGroup.rotation.set(0, 0, 0);
+    this.rightLegGroup.rotation.set(0, 0, 0);
+    this.bodyGroup.rotation.set(0, 0, 0);
+    this.bodyGroup.position.y = 0;
+    this.headGroup.rotation.set(0, 0, 0);
+
+    // Phase timing
+    const stagger = Math.min(1, t / 0.15);
+    const fall = t < 0.15 ? 0 : Math.min(1, (t - 0.15) / 0.55);
+    const fallEase = 1 - Math.pow(1 - fall, 2);
+
+    // Arms flail outward and back
+    this.leftArmGroup.rotation.z = -(stagger * 0.3 + fallEase * 0.9);
+    this.rightArmGroup.rotation.z = stagger * 0.3 + fallEase * 0.9;
+    this.leftArmGroup.rotation.x = -(stagger * 0.2 + fallEase * 0.5);
+    this.rightArmGroup.rotation.x = -(stagger * 0.2 + fallEase * 0.5);
+
+    // Body slight twist for drama
+    this.bodyGroup.rotation.z = fallEase * 0.15;
+
+    // Tip the whole model backward (group.rotation.y = PI is preserved)
+    // Stagger recoil fades out so final rotation is exactly PI/2 (flat)
+    const recoil = stagger * (1 - fallEase) * 0.08;
+    this.group.rotation.x = recoil + fallEase * (Math.PI / 2);
+    // Lift just enough to keep the torso depth above the ground plane
+    this.group.position.y = fallEase * 0.15;
+  }
 
   dispose(): void {
     this.group.traverse((child) => {

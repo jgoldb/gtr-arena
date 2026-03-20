@@ -8,8 +8,10 @@ export interface UnitFrameOptions {
 export class UnitFrame {
   readonly element: HTMLElement;
   private portraitImg: HTMLImageElement;
+  private skullOverlay: HTMLElement;
   private nameEl: HTMLElement;
   private modelEl: HTMLElement;
+  private combatIcon: HTMLElement;
   private hpBar: HTMLElement;
   private hpFill: HTMLElement;
   private hpText: HTMLElement;
@@ -41,6 +43,7 @@ export class UnitFrame {
     // Portrait
     const portraitWrap = document.createElement('div');
     portraitWrap.style.cssText = `
+      position: relative;
       width: 48px;
       height: 48px;
       flex-shrink: 0;
@@ -54,6 +57,21 @@ export class UnitFrame {
     this.portraitImg.alt = '';
     portraitWrap.appendChild(this.portraitImg);
 
+    this.skullOverlay = document.createElement('div');
+    this.skullOverlay.textContent = '\uD83D\uDC80';
+    this.skullOverlay.style.cssText = `
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.6);
+      font-size: 24px;
+      line-height: 48px;
+      text-align: center;
+    `;
+    portraitWrap.appendChild(this.skullOverlay);
+
     // Info column (name + bars)
     const info = document.createElement('div');
     info.style.cssText = 'flex: 1; min-width: 0;';
@@ -66,11 +84,17 @@ export class UnitFrame {
     this.nameEl = document.createElement('span');
     this.nameEl.style.cssText = 'color: #fff; font-size: 13px; font-weight: bold;';
 
+    this.combatIcon = document.createElement('span');
+    this.combatIcon.textContent = '\u2694';
+    this.combatIcon.style.cssText =
+      'color: #cc3333; font-size: 13px; margin-left: 4px; display: none;';
+
     this.modelEl = document.createElement('span');
     this.modelEl.style.cssText =
       'color: rgba(255,255,255,0.5); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
 
     nameRow.appendChild(this.nameEl);
+    nameRow.appendChild(this.combatIcon);
     nameRow.appendChild(this.modelEl);
     info.appendChild(nameRow);
 
@@ -155,9 +179,13 @@ export class UnitFrame {
       }
     }
 
-    // Name and model
+    // Skull overlay on portrait when dead
+    this.skullOverlay.style.display = target.dead ? 'flex' : 'none';
+
+    // Name, combat indicator, and model
     this.nameEl.textContent = target.name;
-    this.nameEl.style.color = hostile ? '#ff4444' : '#fff';
+    this.nameEl.style.color = hostile ? '#ff4444' : target.dead ? '#888' : '#fff';
+    this.combatIcon.style.display = target.inCombat ? 'inline' : 'none';
     this.modelEl.textContent = target.modelName;
 
     // HP bar — red for hostile targets, green otherwise

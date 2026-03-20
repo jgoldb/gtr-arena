@@ -7,6 +7,8 @@ import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
 import { TargetingSystem } from './targeting/TargetingSystem';
+import { CombatSystem } from './combat/CombatSystem';
+import { RegenSystem } from './combat/RegenSystem';
 
 export class Engine {
   readonly scene: THREE.Scene;
@@ -18,6 +20,8 @@ export class Engine {
   readonly playerController: PlayerController;
   readonly thirdPersonCamera: ThirdPersonCamera;
   readonly targetingSystem: TargetingSystem;
+  readonly regenSystem: RegenSystem;
+  readonly combatSystem: CombatSystem;
   private readonly npcs: NpcController[] = [];
 
   private animationFrameId: number | null = null;
@@ -57,6 +61,8 @@ export class Engine {
     );
 
     this.targetingSystem = new TargetingSystem(this.camera, this.scene, canvas);
+    this.regenSystem = new RegenSystem(() => [this.playerController, ...this.npcs]);
+    this.combatSystem = new CombatSystem(this.regenSystem);
   }
 
   start(): void {
@@ -134,6 +140,14 @@ export class Engine {
 
     this.playerController.update(deltaTime);
     for (const npc of this.npcs) npc.update(deltaTime);
+    // Despawn dead NPCs after their timer expires
+    for (let i = this.npcs.length - 1; i >= 0; i--) {
+      if (this.npcs[i].shouldDespawn) {
+        this.removeNpc(this.npcs[i]);
+      }
+    }
+    this.combatSystem.update(deltaTime);
+    this.regenSystem.update(deltaTime);
     this.targetingSystem.update(deltaTime);
     this.thirdPersonCamera.update(deltaTime);
     this.renderer.render(this.scene, this.camera);

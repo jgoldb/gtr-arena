@@ -503,4 +503,29 @@ export class DrRetardo extends CharacterModel {
         Math.sin(this.runPhase * 1.2 + i * 0.8) * 0.012 * this.runWeight;
     }
   }
+
+  protected override animateDeath(t: number): void {
+    super.animateDeath(t);
+
+    const fall = t < 0.15 ? 0 : Math.min(1, (t - 0.15) / 0.55);
+    const fallEase = 1 - Math.pow(1 - fall, 2);
+
+    // Flask glow fades out
+    if (this.flaskLight) {
+      this.flaskLight.intensity = 0.5 * (1 - fallEase);
+    }
+    if (this.flaskLiquid) {
+      (this.flaskLiquid.material as THREE.MeshStandardMaterial).emissiveIntensity =
+        1.0 * (1 - fallEase);
+    }
+
+    // Hair droops downward
+    for (let i = 0; i < this.hairMeshes.length; i++) {
+      const hair = this.hairMeshes[i];
+      hair.position.y = hair.userData.baseY - fallEase * 0.04;
+    }
+
+    // Glasses tilt
+    this.headGroup.rotation.z += fallEase * 0.3;
+  }
 }

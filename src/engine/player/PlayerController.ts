@@ -13,6 +13,8 @@ export class PlayerController implements Targetable {
   maxHp = 100;
   mana = 100;
   maxMana = 100;
+  inCombat = false;
+  dead = false;
   speed = 8;
   jumpForce = 7;
   gravity = 20;
@@ -62,15 +64,42 @@ export class PlayerController implements Targetable {
     return this.characterModel.displayName;
   }
 
+  die(): void {
+    if (this.dead) return;
+    this.dead = true;
+    this.hp = 0;
+    this.inCombat = false;
+    this.characterModel.startDeath();
+  }
+
   respawn(): void {
+    this.dead = false;
+    this.hp = this.maxHp;
+    this.mana = this.maxMana;
+    this.inCombat = false;
+    this.characterModel.resetDeath();
     const spawn = this.mapManager.getSpawnPoint();
     this.mesh.position.set(spawn.x, spawn.y, spawn.z);
+    this.velocityY = 0;
+    this.grounded = true;
     // Face toward map center
     this.targetRotation = Math.atan2(-spawn.x, -spawn.z);
     this.mesh.rotation.y = this.targetRotation;
   }
 
   update(deltaTime: number): void {
+    if (this.dead) {
+      // Only animate the death pose, no movement
+      this.characterModel.update(deltaTime, {
+        isMoving: false,
+        isGrounded: this.grounded,
+        velocityY: 0,
+        turnSpeed: 0,
+        speedMultiplier: 1,
+      });
+      return;
+    }
+
     const cameraAzimuth = this.cameraAzimuthGetter();
     const rightHeld = this.input.isMouseButtonDown('right');
     const leftHeld = this.input.isMouseButtonDown('left');
