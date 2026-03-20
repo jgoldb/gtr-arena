@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from './CharacterModel';
+import { BucketSplash } from '../../combat/Ability';
 
 const SKIN = 0xb8896e;
 const OVERALLS = 0x4a5568;
@@ -16,9 +17,15 @@ const BELT = 0x5c4033;
 export class TheJanitor extends CharacterModel {
   readonly id = 'janitor';
   readonly displayName = 'The Janitor';
-  readonly autoAttackDamage = 15;
+  readonly baseMaxHp = 475;
+  readonly baseMaxMana = 48;
+  readonly autoAttackDamageMin = 11;
+  readonly autoAttackDamageMax = 19;
   readonly autoAttackSpeed = 2.5;
   readonly autoAttackRange = 3;
+  readonly critChance = 0.22;
+  readonly dodgeChance = 0.17;
+  readonly abilities = [BucketSplash] as const;
 
   private declare mopHead: THREE.Mesh;
   private declare bucketWater: THREE.Mesh;

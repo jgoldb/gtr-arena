@@ -13,15 +13,18 @@ export class TargetingSystem {
   private ring: THREE.Mesh;
   private ringMat: THREE.MeshBasicMaterial;
   private ringTime = 0;
+  private getLocalPlayer: () => Targetable;
 
   constructor(
     camera: THREE.PerspectiveCamera,
     scene: THREE.Scene,
-    canvas: HTMLCanvasElement
+    canvas: HTMLCanvasElement,
+    getLocalPlayer: () => Targetable
   ) {
     this.camera = camera;
     this.scene = scene;
     this.canvas = canvas;
+    this.getLocalPlayer = getLocalPlayer;
 
     // Build target ring indicator
     const geo = new THREE.RingGeometry(0.5, 0.65, 64);
@@ -59,7 +62,9 @@ export class TargetingSystem {
     this.ringMat.opacity = 0.4 + Math.sin(this.ringTime * 3) * 0.15;
 
     // Color: red for hostile, green for friendly
-    this.ringMat.color.set(this.currentTarget.hostile ? 0xff3333 : 0x33ff33);
+    this.ringMat.color.set(
+      this.currentTarget.isHostileTo(this.getLocalPlayer()) ? 0xff3333 : 0x33ff33
+    );
   }
 
   processClick(screenX: number, screenY: number): void {

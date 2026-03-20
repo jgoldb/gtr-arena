@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from './CharacterModel';
+import type { Ability } from '../../combat/Ability';
 
 const SKIN = 0xf0d6b8;
 const LABCOAT = 0xf0f0f0;
@@ -16,9 +17,15 @@ const CORK = 0x8b6914;
 export class DrRetardo extends CharacterModel {
   readonly id = 'dr-retardo';
   readonly displayName = 'Dr. Retardo';
-  readonly autoAttackDamage = 6;
+  readonly baseMaxHp = 369;
+  readonly baseMaxMana = 125;
+  readonly autoAttackDamageMin = 3;
+  readonly autoAttackDamageMax = 6;
   readonly autoAttackSpeed = 1.2;
   readonly autoAttackRange = 3;
+  readonly critChance = 0.07;
+  readonly dodgeChance = 0.05;
+  readonly abilities: readonly Ability[] = [];
 
   // Declared via declare to avoid useDefineForClassFields overwriting
   // values set during the parent constructor's buildModel() call.

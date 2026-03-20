@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Ability } from '../../combat/Ability';
 
 export interface AnimationInput {
   isMoving: boolean;
@@ -12,6 +13,7 @@ export abstract class CharacterModel {
   readonly group: THREE.Group;
   abstract readonly id: string;
   abstract readonly displayName: string;
+  abstract readonly abilities: readonly Ability[];
 
   // Skeleton bone groups (pivots for animation)
   protected bodyGroup = new THREE.Group();
@@ -28,10 +30,23 @@ export abstract class CharacterModel {
   protected idleTime = 0;
   protected smoothedTurnSpeed = 0;
 
+  // Base stats (defined by each character)
+  abstract readonly baseMaxHp: number;
+  abstract readonly baseMaxMana: number;
+
   // Auto-attack stats (defined by each character)
-  abstract readonly autoAttackDamage: number;
+  abstract readonly autoAttackDamageMin: number;
+  abstract readonly autoAttackDamageMax: number;
   abstract readonly autoAttackSpeed: number; // seconds between swings
   abstract readonly autoAttackRange: number;
+  abstract readonly critChance: number;  // 0–1
+  abstract readonly dodgeChance: number; // 0–1
+
+  rollAutoAttackDamage(): number {
+    return this.autoAttackDamageMin + Math.floor(
+      Math.random() * (this.autoAttackDamageMax - this.autoAttackDamageMin + 1)
+    );
+  }
 
   // Auto-attack animation state
   private _autoAttacking = false;

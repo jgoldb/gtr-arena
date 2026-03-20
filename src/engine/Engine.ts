@@ -3,12 +3,14 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
+import type { Ability } from './combat/Ability';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
 import { TargetingSystem } from './targeting/TargetingSystem';
 import { CombatSystem } from './combat/CombatSystem';
 import { RegenSystem } from './combat/RegenSystem';
+import { BuffSystem } from './combat/BuffSystem';
 import type { Targetable } from './types';
 
 export class Engine {
@@ -22,12 +24,15 @@ export class Engine {
   readonly thirdPersonCamera: ThirdPersonCamera;
   readonly targetingSystem: TargetingSystem;
   readonly regenSystem: RegenSystem;
+  readonly buffSystem: BuffSystem;
   readonly combatSystem: CombatSystem;
   private readonly npcs: NpcController[] = [];
   private autoAttacking = false;
   private autoAttackTimer = 0;
   private autoAttackTarget: Targetable | null = null;
 
+  onCharacterChange?: (abilities: readonly Ability[]) => void;
+  onAutoAttackError?: (message: string) => void;
   private animationFrameId: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -64,9 +69,12 @@ export class Engine {
       () => this.thirdPersonCamera.getAzimuth()
     );
 
-    this.targetingSystem = new TargetingSystem(this.camera, this.scene, canvas);
+    this.targetingSystem = new TargetingSystem(
+      this.camera, this.scene, canvas, () => this.playerController
+    );
     this.regenSystem = new RegenSystem(() => [this.playerController, ...this.npcs]);
-    this.combatSystem = new CombatSystem(this.regenSystem);
+    this.buffSystem = new BuffSystem();
+    this.combatSystem = new CombatSystem(this.regenSystem, this.buffSystem);
   }
 
   start(): void {
@@ -94,11 +102,21 @@ export class Engine {
   }
 
   setCharacter(id: CharacterId): void {
+    this.stopAutoAttack();
+    this.buffSystem.clearEntity(this.playerController);
+    this.combatSystem.leaveCombat(this.playerController);
+    this.combatSystem.clearCooldowns();
     this.playerController.setCharacter(id);
+    this.playerController.dead = false;
+    this.onCharacterChange?.(this.playerController.abilities);
   }
 
   spawnNpc(characterId: CharacterId, position: THREE.Vector3): NpcController {
     const npc = new NpcController(characterId, position);
+    npc.autoAttackTarget = this.playerController;
+    npc.onAutoAttackHit = (attacker, target, damage) => {
+      this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
+    };
     this.npcs.push(npc);
     this.scene.add(npc.mesh);
     return npc;
@@ -113,6 +131,7 @@ export class Engine {
       if (this.autoAttackTarget === npc) {
         this.stopAutoAttack();
       }
+      this.buffSystem.clearEntity(npc);
       this.npcs.splice(idx, 1);
       this.scene.remove(npc.mesh);
       npc.dispose();
@@ -125,6 +144,7 @@ export class Engine {
       if (this.targetingSystem.currentTarget === npc) {
         this.targetingSystem.currentTarget = null;
       }
+      this.buffSystem.clearEntity(npc);
       this.scene.remove(npc.mesh);
       npc.dispose();
     }
@@ -164,7 +184,7 @@ export class Engine {
     const target = this.targetingSystem.currentTarget;
 
     // Stop conditions
-    if (player.dead || !target || target.dead || !target.hostile || target !== this.autoAttackTarget) {
+    if (player.dead || !target || target.dead || !target.isHostileTo(player) || target !== this.autoAttackTarget) {
       this.stopAutoAttack();
       return;
     }
@@ -190,14 +210,15 @@ export class Engine {
       const rotY = player.mesh.rotation.y;
       const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
       if (forward.dot(toTarget) <= 0.5) {
-        this.autoAttackTimer = player.autoAttackSpeed;
+        this.autoAttackTimer = 0;
+        this.onAutoAttackError?.('Not facing target');
         return;
       }
 
       // Swing!
       this.autoAttackTimer = 0;
       player.triggerSwing();
-      this.combatSystem.applyAutoAttackDamage(player, target, player.autoAttackDamage);
+      this.combatSystem.applyAutoAttackDamage(player, target, player.rollAutoAttackDamage());
     }
   }
 
@@ -216,7 +237,7 @@ export class Engine {
     const rightClick = this.input.getRightClick();
     if (rightClick) {
       const target = this.targetingSystem.processRightClick(rightClick.x, rightClick.y);
-      if (target && target.hostile && !target.dead) {
+      if (target && target.isHostileTo(this.playerController) && !target.dead) {
         this.startAutoAttack(target);
       }
     }
@@ -231,6 +252,7 @@ export class Engine {
       }
     }
     this.combatSystem.update(deltaTime);
+    this.buffSystem.update(deltaTime);
     this.regenSystem.update(deltaTime);
     this.targetingSystem.update(deltaTime);
     this.thirdPersonCamera.update(deltaTime);

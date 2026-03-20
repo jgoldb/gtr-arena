@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Ability } from './Ability';
 import type { Targetable } from '../types';
 import type { RegenSystem } from './RegenSystem';
+import type { BuffSystem } from './BuffSystem';
 
 export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead';
 
@@ -11,15 +12,20 @@ export interface CombatResult {
   errorMessage?: string;
 }
 
+export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge';
+
 export class CombatSystem {
   private cooldowns = new Map<string, number>(); // ability id → remaining seconds
   private static readonly COMBAT_DURATION = 5; // seconds before leaving combat
+  private static readonly MISS_CHANCE = 0.03; // 3% flat miss chance
   private combatTimers = new Map<Targetable, number>(); // entity → seconds remaining
   private regenSystem: RegenSystem;
-  onCombatText?: (target: Targetable, amount: number, type: 'damage' | 'heal') => void;
+  private buffSystem: BuffSystem;
+  onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
 
-  constructor(regenSystem: RegenSystem) {
+  constructor(regenSystem: RegenSystem, buffSystem: BuffSystem) {
     this.regenSystem = regenSystem;
+    this.buffSystem = buffSystem;
   }
 
   enterCombat(entity: Targetable): void {
@@ -50,6 +56,15 @@ export class CombatSystem {
     const dot = forward.dot(new THREE.Vector3(toTarget.x, 0, toTarget.z).normalize());
     // cos(60°) = 0.5 → 120° cone in front
     return dot > 0.5;
+  }
+
+  /** Roll hit outcome: miss → dodge → crit → normal */
+  private rollOutcome(attacker: Targetable, target: Targetable): 'miss' | 'dodge' | 'crit' | 'normal' {
+    const roll = Math.random();
+    if (roll < CombatSystem.MISS_CHANCE) return 'miss';
+    if (roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
+    if (Math.random() < attacker.critChance) return 'crit';
+    return 'normal';
   }
 
   private getDistance(a: THREE.Vector3, b: THREE.Vector3): number {
@@ -87,6 +102,15 @@ export class CombatSystem {
     return this.cooldowns.get(abilityId) ?? 0;
   }
 
+  clearCooldowns(): void {
+    this.cooldowns.clear();
+  }
+
+  leaveCombat(entity: Targetable): void {
+    entity.inCombat = false;
+    this.combatTimers.delete(entity);
+  }
+
   useAbility(
     ability: Ability,
     attacker: Targetable,
@@ -108,7 +132,7 @@ export class CombatSystem {
 
     // Check target requirement
     if (ability.requiresHostileTarget) {
-      if (!target || !target.hostile) {
+      if (!target || !target.isHostileTo(attacker)) {
         return { success: false, error: 'no-target', errorMessage: 'No hostile target' };
       }
     }
@@ -137,24 +161,37 @@ export class CombatSystem {
       this.regenSystem.notifyManaUsed(attacker);
     }
     if (target) {
-      target.hp = Math.max(0, target.hp - ability.damage);
-      if (ability.damage > 0) {
-        this.onCombatText?.(target, ability.damage, 'damage');
+      const outcome = this.rollOutcome(attacker, target);
+
+      if (outcome === 'miss') {
+        this.onCombatText?.(target, 0, 'miss');
+      } else if (outcome === 'dodge') {
+        this.onCombatText?.(target, 0, 'dodge');
+      } else {
+        const multiplier = outcome === 'crit' ? 2 : 1;
+        const damage = ability.damage * multiplier;
+        target.hp = Math.max(0, target.hp - damage);
+        if (damage > 0) {
+          this.onCombatText?.(target, damage, outcome === 'crit' ? 'crit' : 'damage');
+        }
+
+        // Apply debuff only on hit
+        if (ability.appliesDebuff) {
+          this.buffSystem.apply(target, ability.appliesDebuff);
+        }
+
+        // Check for kill
+        if (target.hp <= 0 && !target.dead) {
+          target.die();
+          this.combatTimers.delete(target);
+        }
       }
 
-      // Check for kill
-      if (target.hp <= 0 && !target.dead) {
-        target.die();
-        this.combatTimers.delete(target);
-      }
-
-      // Combat entry rules
-      if (target.hostile) {
-        // Hostile action: both characters enter combat
+      // Combat entry rules (regardless of outcome)
+      if (target.isHostileTo(attacker)) {
         this.enterCombat(attacker);
         this.enterCombat(target);
       } else if (target.inCombat) {
-        // Friendly action on an in-combat ally: initiator enters combat
         this.enterCombat(attacker);
       }
     }
@@ -163,17 +200,29 @@ export class CombatSystem {
     return { success: true };
   }
 
-  applyAutoAttackDamage(attacker: Targetable, target: Targetable, damage: number): void {
+  applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {
     if (attacker.dead || target.dead) return;
-    target.hp = Math.max(0, target.hp - damage);
-    this.onCombatText?.(target, damage, 'damage');
-    if (target.hp <= 0 && !target.dead) {
-      target.die();
-      this.combatTimers.delete(target);
+
+    const outcome = this.rollOutcome(attacker, target);
+
+    if (outcome === 'miss') {
+      this.onCombatText?.(target, 0, 'miss');
+    } else if (outcome === 'dodge') {
+      this.onCombatText?.(target, 0, 'dodge');
+    } else {
+      const critMult = outcome === 'crit' ? 2 : 1;
+      const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
+      const damage = Math.round(baseDamage * buffMult * critMult);
+      target.hp = Math.max(0, target.hp - damage);
+      this.onCombatText?.(target, damage, outcome === 'crit' ? 'crit' : 'damage');
+      if (target.hp <= 0 && !target.dead) {
+        target.die();
+        this.combatTimers.delete(target);
+      }
     }
-    if (target.hostile) {
-      this.enterCombat(attacker);
-      this.enterCombat(target);
-    }
+
+    // Auto-attacks are always hostile actions — both parties enter combat
+    this.enterCombat(attacker);
+    this.enterCombat(target);
   }
 }

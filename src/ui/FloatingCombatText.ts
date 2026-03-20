@@ -6,6 +6,7 @@ interface CombatTextEntry {
   offsetY: number; // accumulates upward drift in screen-px
   elapsed: number;
   jitterX: number;
+  isCrit: boolean;
 }
 
 const DURATION = 1.5; // seconds
@@ -29,20 +30,48 @@ export class FloatingCombatText {
     `;
   }
 
-  spawn(target: THREE.Object3D, amount: number, type: 'damage' | 'heal'): void {
+  spawn(target: THREE.Object3D, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge'): void {
     const el = document.createElement('div');
 
-    const text = type === 'heal' ? `+${amount}` : `${amount}`;
+    let text: string;
+    let color: string;
+    let fontSize: number;
+    switch (type) {
+      case 'heal':
+        text = `+${amount}`;
+        color = '#22ff44';
+        fontSize = FONT_SIZE;
+        break;
+      case 'crit':
+        text = `${amount}`;
+        color = '#ffcc00';
+        fontSize = FONT_SIZE * 1.6;
+        break;
+      case 'miss':
+        text = 'Miss';
+        color = '#aaaaaa';
+        fontSize = FONT_SIZE;
+        break;
+      case 'dodge':
+        text = 'Dodge';
+        color = '#aaaaaa';
+        fontSize = FONT_SIZE;
+        break;
+      default:
+        text = `${amount}`;
+        color = '#ffffff';
+        fontSize = FONT_SIZE;
+        break;
+    }
     el.textContent = text;
 
-    const color = type === 'heal' ? '#22ff44' : '#ffffff';
     // Random horizontal jitter so overlapping hits spread out
     const jitterX = (Math.random() - 0.5) * 30;
 
     el.style.cssText = `
       position: absolute;
       color: ${color};
-      font-size: ${FONT_SIZE}px;
+      font-size: ${fontSize}px;
       font-weight: bold;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       text-shadow:
@@ -64,6 +93,7 @@ export class FloatingCombatText {
       offsetY: 0,
       elapsed: 0,
       jitterX,
+      isCrit: type === 'crit',
     });
   }
 
@@ -104,9 +134,10 @@ export class FloatingCombatText {
         ? 1 - (entry.elapsed - fadeStart) / (DURATION - fadeStart)
         : 1;
 
-      // Scale: start slightly large, settle to normal
+      // Scale: start slightly large, settle to normal (crits are more dramatic)
+      const scaleBonus = entry.isCrit ? 0.8 : 0.4;
       const scale = entry.elapsed < 0.15
-        ? 1 + 0.4 * (1 - entry.elapsed / 0.15)
+        ? 1 + scaleBonus * (1 - entry.elapsed / 0.15)
         : 1;
 
       entry.element.style.left = `${screenX}px`;

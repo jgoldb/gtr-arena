@@ -1,4 +1,4 @@
-import type { Ability } from '../engine/combat/Ability';
+import { YARDS_TO_UNITS, type Ability } from '../engine/combat/Ability';
 import type { CombatSystem } from '../engine/combat/CombatSystem';
 
 export interface ActionBarSlot {
@@ -7,9 +7,11 @@ export interface ActionBarSlot {
   keyCode: string; // KeyboardEvent.code ("Digit1", etc.)
 }
 
+export type AbilityUsabilityStatus = 'usable' | 'no-target' | 'out-of-range' | 'not-enough-resource';
+
 export interface ActionBarCallbacks {
   onActivate: (ability: Ability) => void;
-  isAbilityUsable: (ability: Ability) => boolean;
+  getAbilityStatus: (ability: Ability) => AbilityUsabilityStatus;
   getCombatSystem: () => CombatSystem;
   isDisabled?: () => boolean;
 }
@@ -29,6 +31,7 @@ export class ActionBar {
   private slotElements: HTMLElement[] = [];
   private cooldownOverlays: HTMLElement[] = [];
   private cooldownTexts: HTMLElement[] = [];
+  private statusOverlays: HTMLElement[] = [];
   private tooltipEl: HTMLElement;
   private callbacks: ActionBarCallbacks;
   private dragSourceIndex: number | null = null;
@@ -95,6 +98,12 @@ export class ActionBar {
     this.renderSlot(index);
   }
 
+  clearAllSlots(): void {
+    for (let i = 0; i < this.slots.length; i++) {
+      this.setSlotAbility(i, null);
+    }
+  }
+
   update(): void {
     const combat = this.callbacks.getCombatSystem();
     const disabled = this.callbacks.isDisabled?.() ?? false;
@@ -103,10 +112,12 @@ export class ActionBar {
       const slotEl = this.slotElements[i];
       const overlay = this.cooldownOverlays[i];
       const cdText = this.cooldownTexts[i];
+      const statusOv = this.statusOverlays[i];
 
       if (!slot.ability) {
         slotEl.style.opacity = disabled ? '0.3' : '1';
         overlay.style.background = 'transparent';
+        statusOv.style.background = 'transparent';
         cdText.textContent = '';
         continue;
       }
@@ -114,16 +125,27 @@ export class ActionBar {
       if (disabled) {
         slotEl.style.opacity = '0.3';
         overlay.style.background = 'transparent';
+        statusOv.style.background = 'transparent';
         cdText.textContent = '';
         continue;
       }
 
-      const usable = this.callbacks.isAbilityUsable(slot.ability);
+      const status = this.callbacks.getAbilityStatus(slot.ability);
       const cdRemaining = combat.getCooldownRemaining(slot.ability.id);
       const onCooldown = cdRemaining > 0;
 
-      // Dim if not usable (no hostile target or on cooldown)
-      slotEl.style.opacity = usable && !onCooldown ? '1' : '0.5';
+      // Status tint: red for out-of-range, blue for not-enough-resource
+      if (status === 'out-of-range') {
+        statusOv.style.background = 'rgba(255, 40, 40, 0.35)';
+      } else if (status === 'not-enough-resource') {
+        statusOv.style.background = 'rgba(40, 80, 220, 0.4)';
+      } else {
+        statusOv.style.background = 'transparent';
+      }
+
+      // Dim if no target or on cooldown; tinted states stay full brightness
+      slotEl.style.opacity =
+        status === 'no-target' || onCooldown ? '0.5' : '1';
 
       // Circular cooldown sweep (clock-wipe from 12 o'clock, clockwise)
       if (onCooldown) {
@@ -163,6 +185,20 @@ export class ActionBar {
       pointer-events: none;
     `;
     container.appendChild(iconEl);
+
+    // Status overlay — colored tint for out-of-range / not-enough-resource
+    const statusOverlay = document.createElement('div');
+    statusOverlay.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 2px;
+      pointer-events: none;
+    `;
+    container.appendChild(statusOverlay);
+    this.statusOverlays.push(statusOverlay);
 
     // Cooldown overlay — circular sweep via conic-gradient
     const cooldownOverlay = document.createElement('div');
@@ -281,7 +317,8 @@ export class ActionBar {
   }
 
   private showTooltip(ability: Ability, keybind: string, anchor: HTMLElement): void {
-    const rangeLabel = ability.range <= 5 ? 'Melee Range' : `${ability.range} yd range`;
+    const rangeYards = Math.round(ability.range / YARDS_TO_UNITS);
+    const rangeLabel = rangeYards <= 5 ? 'Melee Range' : `${rangeYards} yd range`;
 
     this.tooltipEl.innerHTML = `
       <div style="

@@ -3,16 +3,17 @@ import { InputManager } from '../input/InputManager';
 import { MapManager } from '../map/MapManager';
 import { CharacterModel } from './characters/CharacterModel';
 import { createCharacter, CharacterId } from './characters';
+import type { Ability } from '../combat/Ability';
 import type { Targetable } from '../types';
 
 export class PlayerController implements Targetable {
   readonly mesh: THREE.Group;
   readonly name = 'Player';
-  readonly hostile = false;
-  hp = 100;
-  maxHp = 100;
-  mana = 100;
-  maxMana = 100;
+  readonly team = 0;
+  hp = 0;
+  maxHp = 0;
+  mana = 0;
+  maxMana = 0;
   inCombat = false;
   dead = false;
   speed = 8;
@@ -48,6 +49,7 @@ export class PlayerController implements Targetable {
     this.mesh.userData.targetRef = this;
     this.characterModel = createCharacter('janitor');
     this.mesh.add(this.characterModel.group);
+    this.applyModelStats();
     scene.add(this.mesh);
 
     this.respawn();
@@ -58,14 +60,26 @@ export class PlayerController implements Targetable {
     this.characterModel.dispose();
     this.characterModel = createCharacter(id);
     this.mesh.add(this.characterModel.group);
+    this.applyModelStats();
+  }
+
+  private applyModelStats(): void {
+    this.maxHp = this.characterModel.baseMaxHp;
+    this.maxMana = this.characterModel.baseMaxMana;
+    this.hp = this.maxHp;
+    this.mana = this.maxMana;
+  }
+
+  isHostileTo(other: Targetable): boolean {
+    return this.team !== other.team;
   }
 
   get modelName(): string {
     return this.characterModel.displayName;
   }
 
-  get autoAttackDamage(): number {
-    return this.characterModel.autoAttackDamage;
+  rollAutoAttackDamage(): number {
+    return this.characterModel.rollAutoAttackDamage();
   }
 
   get autoAttackSpeed(): number {
@@ -74,6 +88,18 @@ export class PlayerController implements Targetable {
 
   get autoAttackRange(): number {
     return this.characterModel.autoAttackRange;
+  }
+
+  get critChance(): number {
+    return this.characterModel.critChance;
+  }
+
+  get dodgeChance(): number {
+    return this.characterModel.dodgeChance;
+  }
+
+  get abilities(): readonly Ability[] {
+    return this.characterModel.abilities;
   }
 
   setAutoAttacking(active: boolean): void {

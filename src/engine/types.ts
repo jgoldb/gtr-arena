@@ -16,13 +16,16 @@ export interface GameSystem {
 export interface Targetable {
   readonly name: string;
   readonly modelName: string;
-  readonly hostile: boolean;
+  readonly team: number;
+  isHostileTo(other: Targetable): boolean;
   hp: number;
   maxHp: number;
   mana: number;
   maxMana: number;
   inCombat: boolean;
   dead: boolean;
+  readonly critChance: number;
+  readonly dodgeChance: number;
   readonly mesh: THREE.Group;
   die(): void;
 }
