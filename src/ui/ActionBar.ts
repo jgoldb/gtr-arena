@@ -249,7 +249,7 @@ export class ActionBar {
     container.addEventListener('mouseenter', () => {
       const ab = this.slots[index].ability;
       if (!ab) return;
-      this.showTooltip(ab, this.slots[index].keybind, container);
+      this.showTooltip(ab, container);
     });
     container.addEventListener('mouseleave', () => {
       this.tooltipEl.style.display = 'none';
@@ -316,9 +316,13 @@ export class ActionBar {
     return container;
   }
 
-  private showTooltip(ability: Ability, keybind: string, anchor: HTMLElement): void {
-    const rangeYards = Math.round(ability.range / YARDS_TO_UNITS);
-    const rangeLabel = rangeYards <= 5 ? 'Melee Range' : `${rangeYards} yd range`;
+  private showTooltip(ability: Ability, anchor: HTMLElement): void {
+    let rangeSpan = '';
+    if (ability.range !== undefined) {
+      const rangeYards = Math.round(ability.range / YARDS_TO_UNITS);
+      const label = rangeYards <= 5 ? 'Melee Range' : `${rangeYards} yd range`;
+      rangeSpan = `<span>${label}</span>`;
+    }
 
     this.tooltipEl.innerHTML = `
       <div style="
@@ -335,7 +339,7 @@ export class ActionBar {
         font-size: 11px;
         margin-bottom: 2px;
       ">
-        <span>${rangeLabel}</span>
+        ${rangeSpan}
         <span>${ability.manaCost} Mana</span>
       </div>
 
@@ -349,25 +353,7 @@ export class ActionBar {
         color: #eee;
         font-size: 12px;
         line-height: 1.4;
-        margin-bottom: 6px;
       ">${ability.description}</div>
-
-      <div style="
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-top: 1px solid rgba(255,255,255,0.1);
-        padding-top: 5px;
-      ">
-        <span style="color: #ff8800; font-size: 12px; font-weight: bold;">${ability.damage} Damage</span>
-        <span style="
-          color: rgba(255,255,255,0.4);
-          font-size: 10px;
-          background: rgba(255,255,255,0.08);
-          padding: 1px 5px;
-          border-radius: 2px;
-        ">${keybind}</span>
-      </div>
     `;
 
     // Position above the slot

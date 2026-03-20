@@ -1,8 +1,8 @@
 import type { Targetable } from '../types';
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent';
-  readonly value: number; // e.g. 50 = +50%
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent';
+  readonly value: number; // e.g. 50 = +50%, -20 = -20%
 }
 
 export interface BuffDefinition {
@@ -57,6 +57,46 @@ export class BuffSystem {
     const all = this.activeBuffs.get(target);
     if (!all) return [];
     return all.filter(b => b.definition.type === 'debuff');
+  }
+
+  hasDebuff(target: Targetable, debuffId: string): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.id === debuffId && b.definition.type === 'debuff');
+  }
+
+  hasBuff(target: Targetable, buffId: string): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.id === buffId && b.definition.type === 'buff');
+  }
+
+  getAutoAttackSpeedMultiplier(target: Targetable): number {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return 1;
+    let mult = 1;
+    for (const buff of buffs) {
+      for (const effect of buff.definition.effects) {
+        if (effect.type === 'autoAttackSpeedPercent') {
+          mult += effect.value / 100;
+        }
+      }
+    }
+    return mult;
+  }
+
+  getMovementSpeedMultiplier(target: Targetable): number {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return 1;
+    let mult = 1;
+    for (const buff of buffs) {
+      for (const effect of buff.definition.effects) {
+        if (effect.type === 'movementSpeedPercent') {
+          mult += effect.value / 100;
+        }
+      }
+    }
+    return mult;
   }
 
   getAutoAttackDamageTakenMultiplier(target: Targetable): number {

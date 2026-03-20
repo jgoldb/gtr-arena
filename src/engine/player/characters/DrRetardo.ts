@@ -22,7 +22,7 @@ export class DrRetardo extends CharacterModel {
   readonly autoAttackDamageMin = 3;
   readonly autoAttackDamageMax = 6;
   readonly autoAttackSpeed = 1.2;
-  readonly autoAttackRange = 3;
+  readonly autoAttackRange = 1.8;
   readonly critChance = 0.07;
   readonly dodgeChance = 0.05;
   readonly abilities: readonly Ability[] = [];

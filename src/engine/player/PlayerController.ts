@@ -110,6 +110,16 @@ export class PlayerController implements Targetable {
     this.characterModel.triggerSwing();
   }
 
+  triggerAbilityAnimation(abilityId: string): void {
+    this.characterModel.triggerAbilityAnimation(abilityId);
+  }
+
+  setAbilityBuffActive(buffId: string, active: boolean): void {
+    this.characterModel.setAbilityBuffActive(buffId, active);
+  }
+
+  movementSpeedModifier = 1;
+
   die(): void {
     if (this.dead) return;
     this.dead = true;
@@ -176,7 +186,7 @@ export class PlayerController implements Targetable {
     const isMoving = moveDir.lengthSq() > 0;
     const isBackpedaling = sDown && !wDown;
     const speedMultiplier = isBackpedaling ? this.backpedalMultiplier : 1;
-    const effectiveSpeed = (this.inWater ? this.speed * this.waterSpeedMultiplier : this.speed) * speedMultiplier;
+    const effectiveSpeed = (this.inWater ? this.speed * this.waterSpeedMultiplier : this.speed) * speedMultiplier * this.movementSpeedModifier;
 
     if (this.grounded) {
       // On ground: full movement control

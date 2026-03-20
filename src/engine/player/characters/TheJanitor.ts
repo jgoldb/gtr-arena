@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from './CharacterModel';
-import { BucketSplash } from '../../combat/Ability';
+import { BucketSplash, Mop, CrashOut } from '../../combat/Ability';
 
 const SKIN = 0xb8896e;
 const OVERALLS = 0x4a5568;
@@ -22,13 +22,28 @@ export class TheJanitor extends CharacterModel {
   readonly autoAttackDamageMin = 11;
   readonly autoAttackDamageMax = 19;
   readonly autoAttackSpeed = 2.5;
-  readonly autoAttackRange = 3;
+  readonly autoAttackRange = 1.8;
   readonly critChance = 0.22;
   readonly dodgeChance = 0.17;
-  readonly abilities = [BucketSplash] as const;
+  readonly abilities = [BucketSplash, Mop, CrashOut] as const;
 
   private declare mopHead: THREE.Mesh;
   private declare bucketWater: THREE.Mesh;
+
+  // Splash particle state
+  private static readonly SPLASH_DROPLET_COUNT = 12;
+  private static readonly SPLASH_FLIGHT_DURATION = 0.5;
+  private declare splashDroplets: THREE.Mesh[];
+  private declare splashVelocities: THREE.Vector3[];
+  private declare splashMaterial: THREE.MeshStandardMaterial;
+  private declare splashActive: boolean;
+  private declare splashTime: number;
+  private declare splashLaunched: boolean;
+  private declare splashBucketTilt: number;
+
+  // Crash Out visual state
+  private crashOutActive = false;
+  private crashOutWeight = 0;
 
   protected buildModel(): void {
     // Stocky build — wider shoulders
@@ -41,6 +56,7 @@ export class TheJanitor extends CharacterModel {
     this.buildLegs();
     this.buildMop();
     this.buildBucket();
+    this.buildSplashDroplets();
   }
 
   // ── Head ───────────────────────────────────────────────
@@ -292,9 +308,69 @@ export class TheJanitor extends CharacterModel {
     this.leftArmGroup.add(handle);
   }
 
+  // ── Splash droplets (water spray particles) ────────────
+
+  private buildSplashDroplets(): void {
+    this.splashDroplets = [];
+    this.splashVelocities = [];
+    this.splashActive = false;
+    this.splashTime = 0;
+    this.splashLaunched = false;
+    this.splashBucketTilt = 0;
+
+    const geo = new THREE.SphereGeometry(0.03, 4, 4);
+    this.splashMaterial = new THREE.MeshStandardMaterial({
+      color: BUCKET_WATER,
+      roughness: 0.3,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.85,
+    });
+
+    for (let i = 0; i < TheJanitor.SPLASH_DROPLET_COUNT; i++) {
+      const droplet = new THREE.Mesh(geo, this.splashMaterial);
+      droplet.castShadow = false;
+      droplet.visible = false;
+      this.group.add(droplet);
+      this.splashDroplets.push(droplet);
+      this.splashVelocities.push(new THREE.Vector3());
+    }
+  }
+
+  private launchSplashDroplets(): void {
+    this.splashLaunched = true;
+    this.splashActive = true;
+    this.splashTime = 0;
+
+    // Get bucket position in group-local space
+    this.bucketWater.updateWorldMatrix(true, false);
+    const worldPos = new THREE.Vector3();
+    this.bucketWater.getWorldPosition(worldPos);
+    this.group.worldToLocal(worldPos);
+
+    for (let i = 0; i < TheJanitor.SPLASH_DROPLET_COUNT; i++) {
+      const droplet = this.splashDroplets[i];
+      droplet.visible = true;
+      droplet.scale.setScalar(0.6 + Math.random() * 0.8);
+      droplet.position.copy(worldPos);
+
+      // Forward is -Z in group-local space; spray with random spread
+      const spreadH = (Math.random() - 0.5) * 1.0;
+      const speedFwd = 3.0 + Math.random() * 2.5;
+      const speedUp = 0.5 + Math.random() * 2.5;
+      this.splashVelocities[i].set(
+        Math.sin(spreadH) * speedFwd,
+        speedUp,
+        -Math.cos(spreadH) * speedFwd
+      );
+    }
+
+    this.splashMaterial.opacity = 0.85;
+  }
+
   // ── Character-specific animation ──────────────────────
 
-  protected onAnimate(_dt: number, _input: AnimationInput): void {
+  protected override onAnimate(dt: number, _input: AnimationInput): void {
     // Mop head wobble
     if (this.mopHead) {
       this.mopHead.rotation.z = Math.sin(this.idleTime * 3) * 0.05;
@@ -307,11 +383,199 @@ export class TheJanitor extends CharacterModel {
         Math.sin(this.idleTime * 2.5 + 1) * 0.08 * intensity;
       this.bucketWater.rotation.z =
         Math.cos(this.idleTime * 2.0) * 0.06 * intensity;
+      // Add splash pour tilt
+      this.bucketWater.rotation.x += this.splashBucketTilt;
+      this.splashBucketTilt = 0;
+    }
+
+    // Update splash droplets
+    if (this.splashActive) {
+      this.splashTime += dt;
+      const life = this.splashTime / TheJanitor.SPLASH_FLIGHT_DURATION;
+
+      for (let i = 0; i < this.splashDroplets.length; i++) {
+        const d = this.splashDroplets[i];
+        if (!d.visible) continue;
+        d.position.addScaledVector(this.splashVelocities[i], dt);
+        this.splashVelocities[i].y -= 8 * dt;
+      }
+
+      this.splashMaterial.opacity = 0.85 * Math.max(0, 1 - life);
+
+      if (life >= 1) {
+        this.splashActive = false;
+        for (const d of this.splashDroplets) d.visible = false;
+      }
+    }
+
+    // Crash Out visual: scale up + red tint
+    const wantCrash = this.crashOutActive ? 1 : 0;
+    this.crashOutWeight += (wantCrash - this.crashOutWeight) * Math.min(1, 8 * dt);
+    if (this.crashOutWeight < 0.001 && !this.crashOutActive) this.crashOutWeight = 0;
+
+    this.group.scale.setScalar(1 + this.crashOutWeight * 0.25);
+    const r = this.crashOutWeight * 0.35;
+    this.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        (child.material as THREE.MeshStandardMaterial).emissive.setRGB(r, 0, 0);
+      }
+    });
+  }
+
+  override setAbilityBuffActive(buffId: string, active: boolean): void {
+    if (buffId === 'crash-out') {
+      this.crashOutActive = active;
     }
   }
 
   protected override getSwingDuration(): number {
     return 0.5;
+  }
+
+  protected override getAbilityAnimDuration(abilityId: string): number {
+    if (abilityId === 'mop') return 0.5;
+    return 0.6; // bucket-splash default
+  }
+
+  protected override animateAbilityUse(abilityId: string, t: number): void {
+    if (abilityId === 'bucket-splash') {
+      this.animateBucketSplash(t);
+    } else if (abilityId === 'mop') {
+      this.animateMopStrike(t);
+    } else if (abilityId === 'crash-out') {
+      this.animateCrashOut(t);
+    }
+  }
+
+  private animateBucketSplash(t: number): void {
+    let leftArmX: number;
+    let leftArmZ: number;
+    let bodyRotY: number;
+    let bodyRotX: number;
+    let bodyY: number;
+    let bucketTilt: number;
+
+    if (t < 0.20) {
+      // Wind up: pull bucket back, coil body
+      this.splashLaunched = false;
+      const p = t / 0.20;
+      const ease = p * p;
+      leftArmX = -0.4 * ease;
+      leftArmZ = 0.15 * ease;
+      bodyRotY = 0.15 * ease;
+      bodyRotX = -0.05 * ease;
+      bodyY = 0;
+      bucketTilt = 0;
+    } else if (t < 0.45) {
+      // Thrust: arm swings forward, bucket tips to pour
+      const p = (t - 0.20) / 0.25;
+      const ease = 1 - Math.pow(1 - p, 3);
+      leftArmX = -0.4 + 1.9 * ease;
+      leftArmZ = 0.15 - 0.25 * ease;
+      bodyRotY = 0.15 - 0.35 * ease;
+      bodyRotX = -0.05 + 0.20 * ease;
+      bodyY = -0.03 * ease;
+      bucketTilt = 1.2 * ease;
+
+      // Launch droplets at peak thrust
+      if (!this.splashLaunched && p > 0.6) {
+        this.launchSplashDroplets();
+      }
+    } else {
+      // Recovery: return to normal
+      const p = (t - 0.45) / 0.55;
+      const ease = p * p * (3 - 2 * p);
+      leftArmX = 1.5 * (1 - ease);
+      leftArmZ = -0.1 * (1 - ease);
+      bodyRotY = -0.2 * (1 - ease);
+      bodyRotX = 0.15 * (1 - ease);
+      bodyY = -0.03 * (1 - ease);
+      bucketTilt = 1.2 * (1 - ease);
+    }
+
+    this.leftArmGroup.rotation.x += leftArmX;
+    this.leftArmGroup.rotation.z += leftArmZ;
+    this.bodyGroup.rotation.y += bodyRotY;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.bodyGroup.position.y += bodyY;
+    this.splashBucketTilt = bucketTilt;
+  }
+
+  private animateMopStrike(t: number): void {
+    let rightArmX: number;
+    let rightArmZ: number;
+    let bodyRotX: number;
+    let bodyRotY: number;
+    let bodyY: number;
+
+    if (t < 0.30) {
+      // Wind up: raise mop high overhead
+      const p = t / 0.30;
+      const ease = p * p;
+      rightArmX = -2.2 * ease;
+      rightArmZ = 0.2 * ease;
+      bodyRotX = -0.1 * ease;
+      bodyRotY = -0.1 * ease;
+      bodyY = 0.02 * ease;
+    } else if (t < 0.55) {
+      // Strike: slam mop down
+      const p = (t - 0.30) / 0.25;
+      const ease = 1 - Math.pow(1 - p, 3);
+      rightArmX = -2.2 + 4.0 * ease;
+      rightArmZ = 0.2 * (1 - ease);
+      bodyRotX = -0.1 + 0.35 * ease;
+      bodyRotY = -0.1 + 0.25 * ease;
+      bodyY = 0.02 - 0.07 * ease;
+    } else {
+      // Recovery: return to normal
+      const p = (t - 0.55) / 0.45;
+      const ease = p * p * (3 - 2 * p);
+      rightArmX = 1.8 * (1 - ease);
+      rightArmZ = 0;
+      bodyRotX = 0.25 * (1 - ease);
+      bodyRotY = 0.15 * (1 - ease);
+      bodyY = -0.05 * (1 - ease);
+    }
+
+    this.rightArmGroup.rotation.x += rightArmX;
+    this.rightArmGroup.rotation.z += rightArmZ;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.bodyGroup.rotation.y += bodyRotY;
+    this.bodyGroup.position.y += bodyY;
+  }
+
+  private animateCrashOut(t: number): void {
+    let armSpreadZ: number;
+    let headTiltX: number;
+    let bodyY: number;
+
+    if (t < 0.40) {
+      // Tense up: arms pull in, body crouches
+      const p = t / 0.40;
+      const ease = p * p;
+      armSpreadZ = -0.2 * ease;
+      headTiltX = 0.15 * ease;
+      bodyY = -0.05 * ease;
+    } else if (t < 0.70) {
+      // Explode: arms thrust wide, head tilts back, body rises
+      const p = (t - 0.40) / 0.30;
+      const ease = 1 - Math.pow(1 - p, 3);
+      armSpreadZ = -0.2 + 1.0 * ease;
+      headTiltX = 0.15 - 0.55 * ease;
+      bodyY = -0.05 + 0.11 * ease;
+    } else {
+      // Settle
+      const p = (t - 0.70) / 0.30;
+      const ease = p * p * (3 - 2 * p);
+      armSpreadZ = 0.8 * (1 - ease);
+      headTiltX = -0.4 * (1 - ease);
+      bodyY = 0.06 * (1 - ease);
+    }
+
+    this.leftArmGroup.rotation.z -= armSpreadZ;
+    this.rightArmGroup.rotation.z += armSpreadZ;
+    this.headGroup.rotation.x += headTiltX;
+    this.bodyGroup.position.y += bodyY;
   }
 
   protected override animateCombatStance(weight: number): void {
@@ -370,6 +634,22 @@ export class TheJanitor extends CharacterModel {
     this.rightArmGroup.rotation.x += armX;
     this.bodyGroup.rotation.x += bodyX;
     this.bodyGroup.position.y += bodyY;
+  }
+
+  override startDeath(): void {
+    super.startDeath();
+    this.splashActive = false;
+    this.splashBucketTilt = 0;
+    for (const d of this.splashDroplets) d.visible = false;
+    // Reset crash out visual
+    this.crashOutActive = false;
+    this.crashOutWeight = 0;
+    this.group.scale.setScalar(1);
+    this.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        (child.material as THREE.MeshStandardMaterial).emissive.setRGB(0, 0, 0);
+      }
+    });
   }
 
   protected override animateDeath(t: number): void {

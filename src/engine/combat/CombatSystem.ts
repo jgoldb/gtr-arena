@@ -62,7 +62,11 @@ export class CombatSystem {
   private rollOutcome(attacker: Targetable, target: Targetable): 'miss' | 'dodge' | 'crit' | 'normal' {
     const roll = Math.random();
     if (roll < CombatSystem.MISS_CHANCE) return 'miss';
-    if (roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
+    // Can only dodge if facing the attacker
+    const targetFacingAttacker = this.isFacing(
+      target.mesh.position, target.mesh.rotation.y, attacker.mesh.position
+    );
+    if (targetFacingAttacker && roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
     if (Math.random() < attacker.critChance) return 'crit';
     return 'normal';
   }
@@ -142,14 +146,13 @@ export class CombatSystem {
       return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
     }
 
-    // Check range
-    if (target) {
+    // Check range and facing (only for targeted abilities)
+    if (ability.requiresHostileTarget && target) {
       const dist = this.getDistance(attacker.mesh.position, target.mesh.position);
-      if (dist > ability.range) {
+      if (dist > ability.range!) {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
       }
 
-      // Check facing
       if (!this.isFacing(attacker.mesh.position, attackerRotY, target.mesh.position)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
       }
@@ -160,7 +163,7 @@ export class CombatSystem {
     if (ability.manaCost > 0) {
       this.regenSystem.notifyManaUsed(attacker);
     }
-    if (target) {
+    if (ability.requiresHostileTarget && target) {
       const outcome = this.rollOutcome(attacker, target);
 
       if (outcome === 'miss') {
@@ -168,8 +171,25 @@ export class CombatSystem {
       } else if (outcome === 'dodge') {
         this.onCombatText?.(target, 0, 'dodge');
       } else {
+        // Calculate base damage (variable or flat)
+        let baseDamage: number;
+        if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
+          baseDamage = ability.damageMin + Math.floor(
+            Math.random() * (ability.damageMax - ability.damageMin + 1)
+          );
+        } else {
+          baseDamage = ability.damage;
+        }
+
+        // Apply conditional bonus damage
+        if (ability.bonusDamagePercent && ability.bonusDamageRequiresDebuff) {
+          if (this.buffSystem.hasDebuff(target, ability.bonusDamageRequiresDebuff)) {
+            baseDamage = Math.round(baseDamage * (1 + ability.bonusDamagePercent / 100));
+          }
+        }
+
         const multiplier = outcome === 'crit' ? 2 : 1;
-        const damage = ability.damage * multiplier;
+        const damage = baseDamage * multiplier;
         target.hp = Math.max(0, target.hp - damage);
         if (damage > 0) {
           this.onCombatText?.(target, damage, outcome === 'crit' ? 'crit' : 'damage');
@@ -195,6 +215,11 @@ export class CombatSystem {
         this.enterCombat(attacker);
       }
     }
+    // Apply self buff
+    if (ability.appliesSelfBuff) {
+      this.buffSystem.apply(attacker, ability.appliesSelfBuff);
+    }
+
     this.cooldowns.set(ability.id, ability.cooldown);
 
     return { success: true };

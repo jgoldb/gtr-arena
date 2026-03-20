@@ -191,7 +191,8 @@ export class Engine {
 
     this.autoAttackTimer += dt;
 
-    if (this.autoAttackTimer >= player.autoAttackSpeed) {
+    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(player);
+    if (this.autoAttackTimer >= player.autoAttackSpeed / atkSpeedMult) {
       // Check range
       const dx = player.mesh.position.x - target.mesh.position.x;
       const dz = player.mesh.position.z - target.mesh.position.z;
@@ -243,6 +244,11 @@ export class Engine {
     }
 
     this.updateAutoAttack(deltaTime);
+
+    // Update buff-driven modifiers before player update
+    this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController);
+    this.playerController.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(this.playerController, 'crash-out'));
+
     this.playerController.update(deltaTime);
     for (const npc of this.npcs) npc.update(deltaTime);
     // Despawn dead NPCs after their timer expires

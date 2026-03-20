@@ -138,7 +138,9 @@ const actionBar = new ActionBar({
       engine.playerController.mesh.rotation.y,
       engine.targetingSystem.currentTarget
     );
-    if (!result.success && result.errorMessage) {
+    if (result.success) {
+      engine.playerController.triggerAbilityAnimation(ability.id);
+    } else if (result.errorMessage) {
       errorText.show(result.errorMessage);
     }
   },
@@ -154,7 +156,7 @@ const actionBar = new ActionBar({
       const dx = player.mesh.position.x - target.mesh.position.x;
       const dz = player.mesh.position.z - target.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
-      if (dist > ability.range) return 'out-of-range';
+      if (dist > ability.range!) return 'out-of-range';
     }
     return 'usable';
   },

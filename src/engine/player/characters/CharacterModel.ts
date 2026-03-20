@@ -54,6 +54,10 @@ export abstract class CharacterModel {
   protected attackAnimTime = -1; // -1 = not swinging
   protected attackArmToggle = false; // for alternating arms
 
+  // Ability animation state
+  protected abilityAnimTime = -1; // -1 = not playing
+  protected abilityAnimId = '';
+
   // Death animation
   private static readonly DEATH_DURATION = 1.5;
   protected deathTime = -1; // -1 = alive, >= 0 = seconds since death
@@ -100,6 +104,8 @@ export abstract class CharacterModel {
     this._autoAttacking = false;
     this.combatStanceWeight = 0;
     this.attackAnimTime = -1;
+    this.abilityAnimTime = -1;
+    this.abilityAnimId = '';
   }
 
   resetDeath(): void {
@@ -107,6 +113,8 @@ export abstract class CharacterModel {
     this._autoAttacking = false;
     this.combatStanceWeight = 0;
     this.attackAnimTime = -1;
+    this.abilityAnimTime = -1;
+    this.abilityAnimId = '';
     this.group.rotation.x = 0;
     this.group.position.y = 0;
   }
@@ -125,6 +133,11 @@ export abstract class CharacterModel {
 
   triggerSwing(): void {
     this.attackAnimTime = 0;
+  }
+
+  triggerAbilityAnimation(abilityId: string): void {
+    this.abilityAnimTime = 0;
+    this.abilityAnimId = abilityId;
   }
 
   get isSwinging(): boolean {
@@ -218,11 +231,25 @@ export abstract class CharacterModel {
       }
     }
 
+    // --- Ability animation layer ---
+    if (this.abilityAnimTime >= 0) {
+      this.abilityAnimTime += dt;
+      const dur = this.getAbilityAnimDuration(this.abilityAnimId);
+      const t = Math.min(1, this.abilityAnimTime / dur);
+      this.animateAbilityUse(this.abilityAnimId, t);
+      if (t >= 1) {
+        this.abilityAnimTime = -1;
+        this.abilityAnimId = '';
+      }
+    }
+
     // Character-specific animation
     this.onAnimate(dt, input);
   }
 
   protected onAnimate(_dt: number, _input: AnimationInput): void {}
+
+  setAbilityBuffActive(_buffId: string, _active: boolean): void {}
 
   protected getSwingDuration(): number {
     return 0.4;
@@ -230,6 +257,8 @@ export abstract class CharacterModel {
 
   protected animateCombatStance(_weight: number): void {}
   protected animateAttackSwing(_t: number, _alternateArm: boolean): void {}
+  protected getAbilityAnimDuration(_abilityId: string): number { return 0.6; }
+  protected animateAbilityUse(_abilityId: string, _t: number): void {}
 
   protected animateDeath(t: number): void {
     // Reset all bones
