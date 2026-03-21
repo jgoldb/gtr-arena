@@ -10,11 +10,11 @@
   },
   "dependencies": {
     "@gtr/shared": "*",
+    "tsx": "^4.19.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/ws": "^8.5.13",
-    "tsx": "^4.19.0",
     "typescript": "~5.7.0"
   }
 }

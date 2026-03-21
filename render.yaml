@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: gtr-arena
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev && npm run build -w @gtr/client
+    startCommand: npx tsx packages/server/src/index.ts
