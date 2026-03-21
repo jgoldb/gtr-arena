@@ -10,6 +10,7 @@ import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
 import { Nameplates } from './ui/Nameplates';
 import { EscapeMenu } from './ui/EscapeMenu';
+import { DebugHUD } from './ui/DebugHUD';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats } from '@gtr/shared';
 import type { Ability } from './engine/combat/Ability';
@@ -47,6 +48,7 @@ let mpCastBarFill: HTMLDivElement | null = null;
 let mpCastBarHeader: HTMLDivElement | null = null;
 let mpGameOverScreen: HTMLDivElement | null = null;
 let mpEscapeMenu: EscapeMenu | null = null;
+let mpDebugHUD: DebugHUD | null = null;
 let mpFrameLoopId: number | null = null;
 let mpSelectedTargetId: string | null = null;
 
@@ -62,6 +64,7 @@ let pgNameplates: Nameplates | null = null;
 let pgDeathScreen: HTMLDivElement | null = null;
 let pgCastBarContainer: HTMLDivElement | null = null;
 let pgEscapeMenu: EscapeMenu | null = null;
+let pgDebugHUD: DebugHUD | null = null;
 let pgFrameLoopId: number | null = null;
 let pgResizeHandler: (() => void) | null = null;
 
@@ -117,6 +120,8 @@ function cleanupMultiplayerUI(): void {
   mpGameOverScreen = null;
   mpEscapeMenu?.dispose();
   mpEscapeMenu = null;
+  mpDebugHUD?.dispose();
+  mpDebugHUD = null;
   if (mpFrameLoopId !== null) {
     cancelAnimationFrame(mpFrameLoopId);
     mpFrameLoopId = null;
@@ -155,6 +160,8 @@ function cleanupPlaygroundUI(): void {
   pgCastBarContainer = null;
   pgEscapeMenu?.dispose();
   pgEscapeMenu = null;
+  pgDebugHUD?.dispose();
+  pgDebugHUD = null;
   // Clear sidebar panel containers (CharacterSelector, MapSelector, NpcSpawner, debug buttons)
   const containers = ['map-selector-container', 'debug-panel-container', 'character-selector-container', 'npc-spawner-container'];
   for (const id of containers) {
@@ -451,6 +458,10 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
   });
   document.body.appendChild(mpEscapeMenu.element);
 
+  // Debug HUD (toggle with L key)
+  mpDebugHUD = new DebugHUD(true);
+  document.body.appendChild(mpDebugHUD.element);
+
   // Targeting and auto-attack are handled inside ClientEngine via InputManager
   // (same polling approach as playground mode — no DOM event handlers needed)
   clientEngine.onTargetChanged = (entityId) => {
@@ -508,6 +519,10 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     mpTargetFrame?.updateCombatText(dt);
     mpActionBar?.update();
     mpCombatText?.update(dt);
+    if (mpDebugHUD) {
+      mpDebugHUD.update(dt);
+      mpDebugHUD.pushLatency(clientEngine.latency);
+    }
 
     // Nameplates: local player + remote entities
     if (mpNameplates) {
@@ -930,6 +945,10 @@ async function startPlayground(): Promise<void> {
   pgEscapeMenu = escapeMenu;
   document.body.appendChild(escapeMenu.element);
 
+  // Debug HUD (toggle with L key)
+  pgDebugHUD = new DebugHUD(false);
+  document.body.appendChild(pgDebugHUD.element);
+
   let deathScreenShown = false;
   let lastFrameTime = performance.now();
   function updateFrames(): void {
@@ -966,6 +985,7 @@ async function startPlayground(): Promise<void> {
 
     combatText.update(dt);
     nameplates.update(engine.playerController, engine.getNpcs());
+    pgDebugHUD?.update(dt);
 
     if (engine.playerController.dead && !deathScreenShown) { deathScreenShown = true; deathScreen.style.display = 'block'; }
     else if (!engine.playerController.dead && deathScreenShown) { deathScreenShown = false; }
