@@ -65,6 +65,13 @@ interface DiscombobBubbles {
   bubbles: THREE.Mesh[];
 }
 
+interface ActiveFullRetardAura {
+  group: THREE.Group;
+  puffs: THREE.Mesh[];
+  elapsed: number;
+  nextTickAt: number;
+}
+
 export class Engine {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
@@ -83,6 +90,7 @@ export class Engine {
   private readonly chemicalPools: ActiveChemicalPool[] = [];
   private readonly activeDots: ActiveDot[] = [];
   private readonly discombobEffects: DiscombobBubbles[] = [];
+  private fullRetardAura: ActiveFullRetardAura | null = null;
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamTarget: Targetable | null = null;
   private autoAttacking = false;
@@ -197,6 +205,7 @@ export class Engine {
   loadMap(id: string): void {
     this.clearGasClouds();
     this.clearChemicalPools();
+    this.cleanupFullRetardFumes();
     this.clearNpcs();
     this.mapManager.loadMap(id);
     this.playerController.respawn();
@@ -965,6 +974,164 @@ export class Engine {
     this.gasClouds.length = 0;
   }
 
+  // ── Full Retard aura (AoE damage + heal while buff active) ──
+
+  private spawnFullRetardFumes(): void {
+    const meleeRange = this.playerController.autoAttackRange;
+    const group = new THREE.Group();
+
+    // Subtle ground disc showing aura radius
+    const baseMat = new THREE.MeshStandardMaterial({
+      color: 0x8b7a00,
+      transparent: true,
+      opacity: 0.12,
+      roughness: 1.0,
+      depthWrite: false,
+    });
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(meleeRange, meleeRange, 0.04, 24),
+      baseMat
+    );
+    base.position.y = 0.02;
+    base.renderOrder = 1;
+    group.add(base);
+
+    // Noxious fume puffs orbiting within melee range
+    const puffs: THREE.Mesh[] = [];
+    for (let i = 0; i < 18; i++) {
+      const angle = (i / 18) * Math.PI * 2;
+      const r = meleeRange * (0.2 + Math.random() * 0.7);
+      const size = 0.15 + Math.random() * 0.35;
+      const colorVariant = Math.random();
+      const color = colorVariant < 0.33 ? 0x8b7a00 : colorVariant < 0.66 ? 0x6b5a00 : 0x9b8b10;
+      const puffMat = new THREE.MeshStandardMaterial({
+        color,
+        transparent: true,
+        opacity: 0.12 + Math.random() * 0.08,
+        roughness: 1.0,
+        depthWrite: false,
+        emissive: 0x4a3b00,
+        emissiveIntensity: 0.4,
+      });
+      const puff = new THREE.Mesh(
+        new THREE.SphereGeometry(size, 8, 6),
+        puffMat
+      );
+      puff.position.set(
+        Math.cos(angle) * r,
+        0.08 + Math.random() * 0.5,
+        Math.sin(angle) * r
+      );
+      puff.renderOrder = 2;
+      puff.userData.orbitAngle = angle;
+      puff.userData.orbitRadius = r;
+      puff.userData.orbitSpeed = 0.3 + Math.random() * 0.5;
+      puff.userData.baseY = puff.position.y;
+      puff.userData.baseOpacity = (puff.material as THREE.MeshStandardMaterial).opacity;
+      puff.userData.baseScale = 0.7 + Math.random() * 0.5;
+      puff.scale.setScalar(puff.userData.baseScale);
+      group.add(puff);
+      puffs.push(puff);
+    }
+
+    group.position.set(
+      this.playerController.mesh.position.x,
+      0,
+      this.playerController.mesh.position.z
+    );
+    this.scene.add(group);
+
+    this.fullRetardAura = {
+      group,
+      puffs,
+      elapsed: 0,
+      nextTickAt: 1,
+    };
+  }
+
+  private cleanupFullRetardFumes(): void {
+    if (!this.fullRetardAura) return;
+    this.fullRetardAura.group.traverse(child => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    });
+    this.scene.remove(this.fullRetardAura.group);
+    this.fullRetardAura = null;
+  }
+
+  private updateFullRetardAura(dt: number): void {
+    const hasBuff = this.buffSystem.hasBuff(this.playerController, 'full-retard');
+
+    if (hasBuff && !this.fullRetardAura) {
+      this.spawnFullRetardFumes();
+    } else if (!hasBuff && this.fullRetardAura) {
+      this.cleanupFullRetardFumes();
+    }
+
+    if (!this.fullRetardAura) return;
+
+    const aura = this.fullRetardAura;
+    aura.elapsed += dt;
+
+    // Follow player
+    aura.group.position.set(
+      this.playerController.mesh.position.x,
+      0,
+      this.playerController.mesh.position.z
+    );
+
+    const meleeRange = this.playerController.autoAttackRange;
+
+    // Tick every 1 second: 10 damage to hostiles, 15 heal to friendlies in melee range
+    while (aura.elapsed >= aura.nextTickAt) {
+      // Damage hostiles
+      for (const npc of this.npcs) {
+        if (npc.dead || !npc.isHostileTo(this.playerController)) continue;
+        const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
+        const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
+        if (dx * dx + dz * dz <= meleeRange * meleeRange) {
+          const dmg = this.combatSystem.processDamageAbsorb(npc, 10, this.playerController);
+          npc.hp = Math.max(0, npc.hp - dmg);
+          if (dmg > 0) this.combatSystem.onCombatText?.(npc, dmg, 'damage');
+          this.combatSystem.enterCombat(this.playerController);
+          this.combatSystem.enterCombat(npc);
+          if (npc.hp <= 0 && !npc.dead) npc.die();
+        }
+      }
+
+      // Heal friendlies (including self — self heals for 3, allies for 15)
+      const allTargets: Targetable[] = [this.playerController, ...this.npcs];
+      for (const target of allTargets) {
+        if (target.dead || target.isHostileTo(this.playerController)) continue;
+        const dx = this.playerController.mesh.position.x - target.mesh.position.x;
+        const dz = this.playerController.mesh.position.z - target.mesh.position.z;
+        if (dx * dx + dz * dz <= meleeRange * meleeRange) {
+          const heal = target === this.playerController ? 3 : 15;
+          this.combatSystem.applyHeal(target, heal);
+        }
+      }
+
+      aura.nextTickAt += 1;
+    }
+
+    // Animate puffs — orbiting, rising, pulsing
+    const fadeIn = Math.min(1, aura.elapsed / 0.5);
+    aura.group.rotation.y += dt * 0.4;
+    for (const puff of aura.puffs) {
+      const a = puff.userData.orbitAngle + aura.elapsed * puff.userData.orbitSpeed;
+      const r = puff.userData.orbitRadius;
+      puff.position.x = Math.cos(a) * r;
+      puff.position.z = Math.sin(a) * r;
+      puff.position.y = puff.userData.baseY + Math.sin(aura.elapsed * 2 + a) * 0.15;
+      const pulse = 1 + Math.sin(aura.elapsed * 2.5 + a * 2) * 0.2;
+      puff.scale.setScalar(puff.userData.baseScale * pulse);
+      (puff.material as THREE.MeshStandardMaterial).opacity =
+        puff.userData.baseOpacity * fadeIn;
+    }
+  }
+
   // ── Discombobulate shadow bubbles ────────────────────
   private updateDiscombobEffects(dt: number): void {
     // Spawn effects for newly discombobulated targets
@@ -1265,6 +1432,7 @@ export class Engine {
     this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController);
     this.playerController.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(this.playerController, 'crash-out'));
     this.playerController.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(this.playerController, 'retard-strength'));
+    this.playerController.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(this.playerController, 'full-retard'));
 
     // Stun state — player
     const playerStunned = this.buffSystem.isStunned(this.playerController);
@@ -1379,6 +1547,7 @@ export class Engine {
     this.updateGasClouds(deltaTime);
     this.updateChemicalPools(deltaTime);
     this.updateActiveDots(deltaTime);
+    this.updateFullRetardAura(deltaTime);
     this.updateDiscombobEffects(deltaTime);
     this.updateChannelBeam();
     this.combatSystem.update(deltaTime);
@@ -1396,6 +1565,7 @@ export class Engine {
     this.stop();
     this.clearGasClouds();
     this.clearChemicalPools();
+    this.cleanupFullRetardFumes();
     this.clearNpcs();
     // Clean up discombob effects
     for (const effect of this.discombobEffects) {

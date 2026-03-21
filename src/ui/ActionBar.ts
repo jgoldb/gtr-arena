@@ -337,6 +337,9 @@ export class ActionBar {
     if (hasCooldown) {
       statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${ability.cooldown}s cooldown</div>`;
     }
+    if (ability.castTime) {
+      statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${ability.castTime}s cast</div>`;
+    }
 
     this.tooltipEl.innerHTML = `
       <div style="

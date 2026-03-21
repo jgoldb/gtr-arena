@@ -279,3 +279,27 @@ export const Chudmax: Ability = {
   description:
     'Channel the chud at your target for 3 seconds. Heals friendly targets for 120 or damages hostile targets for 80 over the duration.',
 };
+
+export const FullRetardBuff: BuffDefinition = {
+  id: 'full-retard',
+  name: 'Full Retard',
+  icon: '🤯',
+  duration: 7,
+  type: 'buff',
+  description: 'Deals damage to all enemies and heals all friendlies in melee range.',
+  effects: [],
+};
+
+export const FullRetard: Ability = {
+  id: 'full-retard',
+  name: 'Full Retard',
+  icon: '🤯',
+  manaCost: 30,
+  cooldown: 60,
+  castTime: 2,
+  damage: 0,
+  requiresHostileTarget: false,
+  description:
+    'Never go full retard. But if you do...',
+  appliesSelfBuff: FullRetardBuff,
+};

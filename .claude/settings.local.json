@@ -8,7 +8,8 @@
       "Bash(npx vite:*)",
       "Bash(xargs wc:*)",
       "Bash(xargs grep:*)",
-      "Bash(find /c/Users/Joey/Repos/gtr/src -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))"
+      "Bash(find /c/Users/Joey/Repos/gtr/src -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
+      "Bash(grep -r \"castTime\\\\|cast_time\" /c/Users/Joey/Repos/gtr/src --include=*.ts --include=*.tsx)"
     ]
   }
 }

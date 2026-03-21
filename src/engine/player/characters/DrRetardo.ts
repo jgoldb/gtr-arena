@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from './CharacterModel';
-import { BottleChuck, ChemicalSpill, Chudmax, Discombobulate, RetardStrength, type Ability } from '../../combat/Ability';
+import { BottleChuck, ChemicalSpill, Chudmax, Discombobulate, FullRetard, RetardStrength, type Ability } from '../../combat/Ability';
 
 const SKIN = 0xf0d6b8;
 const LABCOAT = 0xf0f0f0;
@@ -25,7 +25,7 @@ export class DrRetardo extends CharacterModel {
   readonly autoAttackRange = 1.8;
   readonly critChance = 0.07;
   readonly dodgeChance = 0.05;
-  readonly abilities: readonly Ability[] = [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength];
+  readonly abilities: readonly Ability[] = [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard];
 
   // Declared via declare to avoid useDefineForClassFields overwriting
   // values set during the parent constructor's buildModel() call.
@@ -56,6 +56,8 @@ export class DrRetardo extends CharacterModel {
   private chudmaxChannelActive = false;
   private retardStrengthActive = false;
   private retardStrengthWeight = 0;
+  private fullRetardActive = false;
+  private fullRetardWeight = 0;
 
   protected buildModel(): void {
     this.hairMeshes = [];
@@ -688,6 +690,57 @@ export class DrRetardo extends CharacterModel {
       });
     }
 
+    // ── Full Retard buff visual ────────────────────────────
+    const frTarget = this.fullRetardActive ? 1 : 0;
+    const frSpeed = 6;
+    this.fullRetardWeight += (frTarget - this.fullRetardWeight) * Math.min(1, dt * frSpeed);
+    if (this.fullRetardWeight > 0.01) {
+      const w = this.fullRetardWeight;
+
+      // Pulsate a noxious yellow-brown glow
+      const pulse = 0.5 + Math.sin(this.idleTime * 6) * 0.5;
+      const glow = w * (0.3 + pulse * 0.5);
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.emissive) {
+            // Store originals if not already stored by retard strength
+            if (mat.userData.frOrigEmissiveR === undefined) {
+              mat.userData.frOrigEmissiveR = mat.emissive.r;
+              mat.userData.frOrigEmissiveG = mat.emissive.g;
+              mat.userData.frOrigEmissiveB = mat.emissive.b;
+              mat.userData.frOrigEmissiveIntensity = mat.emissiveIntensity;
+            }
+            // Blend toward noxious yellow-brown
+            mat.emissive.r = mat.userData.frOrigEmissiveR * (1 - w) + 0.7 * w;
+            mat.emissive.g = mat.userData.frOrigEmissiveG * (1 - w) + 0.6 * w;
+            mat.emissive.b = mat.userData.frOrigEmissiveB * (1 - w) + 0.05 * w;
+            mat.emissiveIntensity = mat.userData.frOrigEmissiveIntensity + glow;
+          }
+        }
+      });
+    } else if (this.fullRetardWeight <= 0.01 && this.fullRetardWeight > 0) {
+      // Restore original emissives
+      this.fullRetardWeight = 0;
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.userData.frOrigEmissiveR !== undefined) {
+            mat.emissive.setRGB(
+              mat.userData.frOrigEmissiveR,
+              mat.userData.frOrigEmissiveG,
+              mat.userData.frOrigEmissiveB
+            );
+            mat.emissiveIntensity = mat.userData.frOrigEmissiveIntensity;
+            delete mat.userData.frOrigEmissiveR;
+            delete mat.userData.frOrigEmissiveG;
+            delete mat.userData.frOrigEmissiveB;
+            delete mat.userData.frOrigEmissiveIntensity;
+          }
+        }
+      });
+    }
+
     // Angle arms outward slightly to clear the bulky coat
     this.leftArmGroup.rotation.z -= 0.2;
     this.rightArmGroup.rotation.z += 0.2;
@@ -837,6 +890,8 @@ export class DrRetardo extends CharacterModel {
       this.animateDiscombobCast(t);
     } else if (abilityId === 'retard-strength') {
       this.animateRetardStrengthCast(t);
+    } else if (abilityId === 'full-retard') {
+      this.animateFullRetardCast(t);
     }
   }
 
@@ -906,6 +961,51 @@ export class DrRetardo extends CharacterModel {
     this.headGroup.rotation.z += Math.sin(t * shakeSpeed * 0.9 + 2) * 0.06 * shakeIntensity;
   }
 
+  // ── Full Retard cast animation (wild flexing) ────
+  private animateFullRetardCast(t: number): void {
+    const blend = Math.min(1, t / 0.1);
+
+    // Wide stance — legs spread for power pose
+    this.leftLegGroup.rotation.z -= 0.2 * blend;
+    this.rightLegGroup.rotation.z += 0.2 * blend;
+    this.leftLegGroup.rotation.x += 0.3 * blend;
+    this.rightLegGroup.rotation.x += 0.3 * blend;
+
+    // Body crouches slightly, puffs chest out
+    this.bodyGroup.position.y -= 0.15 * blend;
+    this.bodyGroup.rotation.x += 0.1 * blend;
+
+    // Alternating flex poses — arms pump wildly
+    const flexSpeed = 8;
+    const flexPhase = Math.sin(t * flexSpeed * Math.PI * 2);
+
+    // Left arm: bicep curl flex
+    this.leftArmGroup.rotation.x += (-1.8 + flexPhase * 0.5) * blend;
+    this.leftArmGroup.rotation.z -= (0.8 + flexPhase * 0.3) * blend;
+
+    // Right arm: alternating with left
+    this.rightArmGroup.rotation.x += (-1.8 - flexPhase * 0.5) * blend;
+    this.rightArmGroup.rotation.z += (0.8 - flexPhase * 0.3) * blend;
+
+    // Body rocks side to side with each flex
+    this.bodyGroup.rotation.z += Math.sin(t * flexSpeed * Math.PI * 2) * 0.12 * blend;
+
+    // Head tilts back — straining with effort
+    this.headGroup.rotation.x += 0.35 * blend;
+    this.headGroup.rotation.z += Math.sin(t * flexSpeed * Math.PI * 2 * 2) * 0.08 * blend;
+
+    // Full-body shaking that intensifies over cast
+    const shakeIntensity = blend * (0.2 + t * 0.8);
+    const shakeSpeed = 30;
+    this.bodyGroup.rotation.x += Math.sin(t * shakeSpeed) * 0.04 * shakeIntensity;
+    this.bodyGroup.rotation.z += Math.cos(t * shakeSpeed * 1.3) * 0.03 * shakeIntensity;
+
+    // Arms tremble
+    const armShake = Math.sin(t * shakeSpeed * 1.1 + 1) * 0.06 * shakeIntensity;
+    this.leftArmGroup.rotation.x += armShake;
+    this.rightArmGroup.rotation.x -= armShake;
+  }
+
   private animateDiscombobCelebration(t: number): void {
     if (t < 0.45) {
       // Jump up with arms raised
@@ -938,6 +1038,8 @@ export class DrRetardo extends CharacterModel {
   override setAbilityBuffActive(buffId: string, active: boolean): void {
     if (buffId === 'retard-strength') {
       this.retardStrengthActive = active;
+    } else if (buffId === 'full-retard') {
+      this.fullRetardActive = active;
     }
   }
 
