@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from './CharacterModel';
-import { BucketSplash, Mop, BigBoot, FartBomb, CrashOut } from '../../combat/Ability';
+import { BucketSplash, Mop, BigBoot, FartBomb, CrashOut, Sweep } from '../../combat/Ability';
 
 const SKIN = 0xb8896e;
 const OVERALLS = 0x4a5568;
@@ -25,10 +25,12 @@ export class TheJanitor extends CharacterModel {
   readonly autoAttackRange = 1.8;
   readonly critChance = 0.22;
   readonly dodgeChance = 0.17;
-  readonly abilities = [BucketSplash, Mop, BigBoot, FartBomb, CrashOut] as const;
+  readonly abilities = [Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut] as const;
 
   private declare mopHead: THREE.Mesh;
+  private declare mopGroup: THREE.Group;
   private declare bucketWater: THREE.Mesh;
+  private declare bucketGroup: THREE.Group;
 
   // Splash particle state
   private static readonly SPLASH_DROPLET_COUNT = 12;
@@ -229,8 +231,10 @@ export class TheJanitor extends CharacterModel {
 
   // ── Mop (right hand) ──────────────────────────────────
 
+  private static readonly MOP_BASE_ROT_X = Math.PI / 2 + 0.15;
+
   private buildMop(): void {
-    const mopGroup = new THREE.Group();
+    this.mopGroup = new THREE.Group();
 
     // Handle — offset so the hand grips slightly above center
     const handle = this.createMesh(
@@ -239,7 +243,7 @@ export class TheJanitor extends CharacterModel {
       { roughness: 0.8 },
     );
     handle.position.set(0, -0.10, 0);
-    mopGroup.add(handle);
+    this.mopGroup.add(handle);
 
     // Mop head (flat sponge/rag block)
     this.mopHead = this.createMesh(
@@ -248,7 +252,7 @@ export class TheJanitor extends CharacterModel {
       { roughness: 1.0 },
     );
     this.mopHead.position.set(0, -0.62, 0);
-    mopGroup.add(this.mopHead);
+    this.mopGroup.add(this.mopHead);
 
     // Hanging mop strings
     for (let i = 0; i < 5; i++) {
@@ -258,18 +262,20 @@ export class TheJanitor extends CharacterModel {
         { roughness: 1.0 },
       );
       string.position.set((i - 2) * 0.035, -0.68, 0);
-      mopGroup.add(string);
+      this.mopGroup.add(string);
     }
 
     // Position at hand, rotate to near-horizontal with slight upward angle
-    mopGroup.position.set(0, -0.50, 0);
-    mopGroup.rotation.x = Math.PI / 2 + 0.15;
-    this.rightArmGroup.add(mopGroup);
+    this.mopGroup.position.set(0, -0.50, 0);
+    this.mopGroup.rotation.x = TheJanitor.MOP_BASE_ROT_X;
+    this.rightArmGroup.add(this.mopGroup);
   }
 
   // ── Bucket (left hand) ────────────────────────────────
 
   private buildBucket(): void {
+    this.bucketGroup = new THREE.Group();
+
     // Body (tapered cylinder)
     const body = this.createMesh(
       new THREE.CylinderGeometry(0.10, 0.08, 0.18, 10),
@@ -277,7 +283,7 @@ export class TheJanitor extends CharacterModel {
       { roughness: 0.5, metalness: 0.4 },
     );
     body.position.set(0, -0.69, -0.05);
-    this.leftArmGroup.add(body);
+    this.bucketGroup.add(body);
 
     // Rim
     const rim = this.createMesh(
@@ -287,7 +293,7 @@ export class TheJanitor extends CharacterModel {
     );
     rim.rotation.x = Math.PI / 2;
     rim.position.set(0, -0.60, -0.05);
-    this.leftArmGroup.add(rim);
+    this.bucketGroup.add(rim);
 
     // Dirty water surface
     this.bucketWater = this.createMesh(
@@ -296,7 +302,7 @@ export class TheJanitor extends CharacterModel {
       { roughness: 0.3 },
     );
     this.bucketWater.position.set(0, -0.62, -0.05);
-    this.leftArmGroup.add(this.bucketWater);
+    this.bucketGroup.add(this.bucketWater);
 
     // Handle (half-torus arc over the top)
     const handle = this.createMesh(
@@ -305,7 +311,9 @@ export class TheJanitor extends CharacterModel {
       { roughness: 0.4, metalness: 0.5 },
     );
     handle.position.set(0, -0.60, -0.05);
-    this.leftArmGroup.add(handle);
+    this.bucketGroup.add(handle);
+
+    this.leftArmGroup.add(this.bucketGroup);
   }
 
   // ── Splash droplets (water spray particles) ────────────
@@ -436,6 +444,7 @@ export class TheJanitor extends CharacterModel {
     if (abilityId === 'mop') return 0.5;
     if (abilityId === 'big-boot') return 0.55;
     if (abilityId === 'fart-bomb') return 0.6;
+    if (abilityId === 'sweep') return 1.0;
     return 0.6; // bucket-splash default
   }
 
@@ -450,6 +459,8 @@ export class TheJanitor extends CharacterModel {
       this.animateFartBomb(t);
     } else if (abilityId === 'crash-out') {
       this.animateCrashOut(t);
+    } else if (abilityId === 'sweep') {
+      this.animateSweep(t);
     }
   }
 
@@ -668,6 +679,68 @@ export class TheJanitor extends CharacterModel {
     this.bodyGroup.position.y += bodyY;
   }
 
+  private animateSweep(t: number): void {
+    // Mop rotation: transition from default (forward) to horizontal (sideways)
+    const baseRotX = TheJanitor.MOP_BASE_ROT_X;
+    const horizRotX = 0;           // remove forward tilt
+    const horizRotZ = -Math.PI / 2; // swing handle from Y-axis to X-axis (horizontal)
+
+    let leftArmX: number;
+    let rightArmX: number;
+    let leftArmZ: number;
+    let rightArmZ: number;
+    let bodyRotX: number;
+    let bodyY: number;
+    let mopBlend: number; // 0 = default, 1 = horizontal
+
+    if (t < 0.08) {
+      // Quick wind-up: tuck bucket away, bring both arms forward to grip mop
+      const p = t / 0.08;
+      const ease = p * p;
+      leftArmX = 1.4 * ease;    // Left arm forward
+      rightArmX = 0.8 * ease;   // Right arm forward
+      leftArmZ = 0.3 * ease;    // Pull left arm inward
+      rightArmZ = -0.15 * ease; // Pull right arm inward
+      bodyRotX = 0.25 * ease;   // Lean forward
+      bodyY = -0.04 * ease;     // Slight crouch
+      mopBlend = ease;
+      this.bucketGroup.visible = ease < 0.5;
+    } else if (t < 0.88) {
+      // Full charge: both arms extended, mop horizontal between hands
+      leftArmX = 1.4;
+      rightArmX = 0.8;
+      leftArmZ = 0.3;
+      rightArmZ = -0.15;
+      bodyRotX = 0.25;
+      bodyY = -0.04;
+      mopBlend = 1;
+      this.bucketGroup.visible = false;
+    } else {
+      // Recovery: return to normal, unsheath bucket
+      const p = (t - 0.88) / 0.12;
+      const ease = p * p * (3 - 2 * p);
+      leftArmX = 1.4 * (1 - ease);
+      rightArmX = 0.8 * (1 - ease);
+      leftArmZ = 0.3 * (1 - ease);
+      rightArmZ = -0.15 * (1 - ease);
+      bodyRotX = 0.25 * (1 - ease);
+      bodyY = -0.04 * (1 - ease);
+      mopBlend = 1 - ease;
+      this.bucketGroup.visible = ease > 0.5;
+    }
+
+    this.leftArmGroup.rotation.x += leftArmX;
+    this.rightArmGroup.rotation.x += rightArmX;
+    this.leftArmGroup.rotation.z += leftArmZ;
+    this.rightArmGroup.rotation.z += rightArmZ;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.bodyGroup.position.y += bodyY;
+
+    // Blend mop rotation from default pose to horizontal two-handed grip
+    this.mopGroup.rotation.x = baseRotX + (horizRotX - baseRotX) * mopBlend;
+    this.mopGroup.rotation.z = horizRotZ * mopBlend;
+  }
+
   protected override animateCombatStance(weight: number): void {
     // Legs into fighting stance — spread apart, slight bend
     this.leftLegGroup.rotation.z -= 0.15 * weight;
@@ -730,6 +803,9 @@ export class TheJanitor extends CharacterModel {
     super.startDeath();
     this.splashActive = false;
     this.splashBucketTilt = 0;
+    this.bucketGroup.visible = true;
+    this.mopGroup.rotation.x = TheJanitor.MOP_BASE_ROT_X;
+    this.mopGroup.rotation.z = 0;
     for (const d of this.splashDroplets) d.visible = false;
     // Reset crash out visual
     this.crashOutActive = false;

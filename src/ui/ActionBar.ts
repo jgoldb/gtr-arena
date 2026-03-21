@@ -255,9 +255,13 @@ export class ActionBar {
       this.tooltipEl.style.display = 'none';
     });
 
-    // Click to activate
+    // Click to activate (only on quick click, not drag)
+    let didDrag = false;
     container.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
+      if (e.button === 0) didDrag = false;
+    });
+    container.addEventListener('click', (e) => {
+      if (e.button !== 0 || didDrag) return;
       if (this.callbacks.isDisabled?.()) return;
       const ab = this.slots[index].ability;
       if (ab) {
@@ -273,6 +277,7 @@ export class ActionBar {
         e.preventDefault();
         return;
       }
+      didDrag = true;
       this.dragSourceIndex = index;
       container.style.opacity = '0.4';
       e.dataTransfer!.effectAllowed = 'move';

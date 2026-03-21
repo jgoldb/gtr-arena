@@ -4,6 +4,7 @@ import type { ActiveBuff } from '../engine/combat/BuffSystem';
 export interface UnitFrameOptions {
   localPlayer?: Targetable;
   getPortrait?: (modelName: string) => string | undefined;
+  onClick?: (target: Targetable) => void;
 }
 
 export class UnitFrame {
@@ -25,6 +26,8 @@ export class UnitFrame {
   private localPlayer: Targetable | undefined;
   private getPortrait: ((modelName: string) => string | undefined) | undefined;
   private lastModelName = '';
+  private currentTarget: Targetable | null = null;
+  private onClick: ((target: Targetable) => void) | undefined;
   private combatTextEl: HTMLElement;
   private combatTextTimer = -1; // -1 = inactive
   private tooltipEl: HTMLElement;
@@ -33,6 +36,7 @@ export class UnitFrame {
   constructor(options?: UnitFrameOptions) {
     this.localPlayer = options?.localPlayer;
     this.getPortrait = options?.getPortrait;
+    this.onClick = options?.onClick;
 
     this.element = document.createElement('div');
     this.element.style.cssText = `
@@ -43,9 +47,15 @@ export class UnitFrame {
       width: 260px;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       display: none;
-      cursor: default;
+      cursor: pointer;
       user-select: none;
     `;
+
+    this.element.addEventListener('mousedown', (e) => {
+      if (e.button === 0 && this.currentTarget && this.onClick) {
+        this.onClick(this.currentTarget);
+      }
+    });
 
     // Outer flex: portrait | info column
     const row = document.createElement('div');
@@ -437,6 +447,7 @@ export class UnitFrame {
     buffs?: readonly ActiveBuff[],
     debuffs?: readonly ActiveBuff[]
   ): void {
+    this.currentTarget = target;
     if (!target) {
       this.element.style.display = 'none';
       this.lastModelName = '';

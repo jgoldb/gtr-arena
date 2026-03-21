@@ -109,10 +109,13 @@ stunBtn.addEventListener('click', () => {
 npcContainer.appendChild(stunBtn);
 
 // UI — unit frames (top-left)
-const playerFrame = new UnitFrame({ getPortrait });
+const setTarget = (t: import('./engine/types').Targetable) => {
+  engine.targetingSystem.currentTarget = t;
+};
+const playerFrame = new UnitFrame({ getPortrait, onClick: setTarget });
 document.getElementById('player-frame-container')!.appendChild(playerFrame.element);
 
-const targetFrame = new UnitFrame({ localPlayer: engine.playerController, getPortrait });
+const targetFrame = new UnitFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
 document.getElementById('target-frame-container')!.appendChild(targetFrame.element);
 
 // UI — error text (center screen)
@@ -204,6 +207,9 @@ const actionBar = new ActionBar({
           engine.playerController
         );
       }
+      if (ability.id === 'sweep') {
+        engine.startSweepCharge();
+      }
     } else if (result.errorMessage) {
       errorText.show(result.errorMessage);
     }
@@ -225,7 +231,7 @@ const actionBar = new ActionBar({
     return 'usable';
   },
   getCombatSystem: () => engine.combatSystem,
-  isDisabled: () => engine.playerController.dead || engine.playerController.stunned,
+  isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging,
 });
 document.body.appendChild(actionBar.element);
 

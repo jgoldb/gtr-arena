@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import type { Ability } from './combat/Ability';
+import { yardsToUnits, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
@@ -47,6 +47,14 @@ export class Engine {
   private autoAttacking = false;
   private autoAttackTimer = 0;
   private autoAttackTarget: Targetable | null = null;
+  private sweepCharge: {
+    elapsed: number;
+    duration: number;
+    direction: THREE.Vector3;
+    speed: number;
+    hitTargets: Set<Targetable>;
+    maxDamage: number;
+  } | null = null;
 
   onCharacterChange?: (abilities: readonly Ability[]) => void;
   onAutoAttackError?: (message: string) => void;
@@ -391,6 +399,69 @@ export class Engine {
     this.gasClouds.length = 0;
   }
 
+  startSweepCharge(): void {
+    const player = this.playerController;
+    const rotY = player.mesh.rotation.y;
+    const direction = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+
+    this.stopAutoAttack();
+    player.charging = true;
+    this.sweepCharge = {
+      elapsed: 0,
+      duration: 1.0,
+      direction,
+      speed: yardsToUnits(20), // 20 yards/sec = 12 world units/sec
+      hitTargets: new Set(),
+      maxDamage: 80,
+    };
+  }
+
+  private updateSweepCharge(dt: number): void {
+    if (!this.sweepCharge) return;
+
+    const charge = this.sweepCharge;
+    charge.elapsed += dt;
+
+    // Move player forward
+    this.playerController.mesh.position.addScaledVector(charge.direction, charge.speed * dt);
+
+    // Hit detection: check all hostile NPCs
+    const hitRadius = 1.0; // world units (~1.67 yards)
+    for (const npc of this.npcs) {
+      if (npc.dead || charge.hitTargets.has(npc)) continue;
+      const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
+      const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist <= hitRadius) {
+        charge.hitTargets.add(npc);
+        // Damage scales linearly: 0% at t=0, 100% at t=duration
+        const damagePercent = Math.min(1, charge.elapsed / charge.duration);
+        const baseDamage = Math.round(charge.maxDamage * damagePercent);
+        if (baseDamage > 0) {
+          this.combatSystem.applySweepDamage(this.playerController, npc, baseDamage);
+        }
+      }
+    }
+
+    // End charge
+    if (charge.elapsed >= charge.duration) {
+      // AoE burst at end: full damage to all hostiles in melee range
+      const meleeRange = this.playerController.autoAttackRange;
+      for (const npc of this.npcs) {
+        if (npc.dead) continue;
+        const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
+        const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist <= meleeRange) {
+          this.combatSystem.applySweepDamage(this.playerController, npc, charge.maxDamage);
+        }
+      }
+
+      this.playerController.charging = false;
+      this.sweepCharge = null;
+    }
+  }
+
   private updateAutoAttack(dt: number): void {
     if (!this.autoAttacking) return;
 
@@ -483,6 +554,15 @@ export class Engine {
     // Stun state — NPCs
     for (const npc of this.npcs) {
       npc.setStunned(this.buffSystem.isStunned(npc));
+    }
+
+    // Sweep charge: move player before collision resolution in player update
+    this.updateSweepCharge(deltaTime);
+
+    // Cancel sweep if stunned
+    if (playerStunned && this.sweepCharge) {
+      this.playerController.charging = false;
+      this.sweepCharge = null;
     }
 
     this.mapManager.update(deltaTime);

@@ -148,3 +148,15 @@ export const CrashOut: Ability = {
     'Enrages The Janitor into a fit of fury, increasing auto-attack speed by 300% but slowing movement speed by 20% for 10 sec.',
   appliesSelfBuff: CrashOutBuff,
 };
+
+export const Sweep: Ability = {
+  id: 'sweep',
+  name: 'Sweep',
+  icon: '🌪️',
+  manaCost: 10,
+  cooldown: 15,
+  damage: 80,
+  requiresHostileTarget: false,
+  description:
+    'Thrust forward with incredible ferocity, dealing damage to anyone in your way. Damage increases with distance. At the end, deals extra damage to targets within melee range.',
+};

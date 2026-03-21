@@ -245,6 +245,35 @@ export class CombatSystem {
     return this.collisionSystem.hasLineOfSight(a.x, a.z, b.x, b.z);
   }
 
+  /** Apply sweep charge damage: can miss or crit, but CANNOT be dodged. */
+  applySweepDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {
+    if (attacker.dead || target.dead) return;
+
+    const roll = Math.random();
+    if (roll < CombatSystem.MISS_CHANCE) {
+      this.onCombatText?.(target, 0, 'miss');
+      this.enterCombat(attacker);
+      this.enterCombat(target);
+      return;
+    }
+
+    const isCrit = Math.random() < attacker.critChance;
+    const multiplier = isCrit ? 2 : 1;
+    const damage = Math.round(baseDamage * multiplier);
+    target.hp = Math.max(0, target.hp - damage);
+    if (damage > 0) {
+      this.onCombatText?.(target, damage, isCrit ? 'crit' : 'damage');
+    }
+
+    this.enterCombat(attacker);
+    this.enterCombat(target);
+
+    if (target.hp <= 0 && !target.dead) {
+      target.die();
+      this.combatTimers.delete(target);
+    }
+  }
+
   applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {
     if (attacker.dead || target.dead) return;
 

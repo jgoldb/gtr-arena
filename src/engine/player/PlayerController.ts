@@ -16,7 +16,7 @@ export class PlayerController implements Targetable {
   maxMana = 0;
   inCombat = false;
   dead = false;
-  speed = 8;
+  speed = 5.6;
   jumpForce = 7;
   gravity = 20;
   waterSpeedMultiplier = 0.5;
@@ -125,6 +125,7 @@ export class PlayerController implements Targetable {
 
   movementSpeedModifier = 1;
   stunned = false;
+  charging = false;
 
   die(): void {
     if (this.dead) return;
@@ -181,6 +182,36 @@ export class PlayerController implements Targetable {
       }
       this.characterModel.update(deltaTime, {
         isMoving: false,
+        isGrounded: this.grounded,
+        velocityY: this.velocityY,
+        turnSpeed: 0,
+        speedMultiplier: 1,
+        strafeDirection: 0,
+      });
+      return;
+    }
+
+    if (this.charging) {
+      // During charge: skip input, resolve collision on position set by Engine
+      this.velocityY -= this.gravity * deltaTime;
+      this.mesh.position.y += this.velocityY * deltaTime;
+      const resolved = this.mapManager.collision.resolve(
+        this.mesh.position.x, this.mesh.position.z,
+        this.mesh.position.y, this.collisionRadius
+      );
+      this.mesh.position.x = resolved.x;
+      this.mesh.position.z = resolved.z;
+      if (this.mesh.position.y <= resolved.groundY) {
+        this.mesh.position.y = resolved.groundY;
+        this.velocityY = 0;
+        this.grounded = true;
+      }
+      const bounds = this.mapManager.getBounds();
+      const margin = this.collisionRadius;
+      this.mesh.position.x = Math.max(bounds.minX + margin, Math.min(bounds.maxX - margin, this.mesh.position.x));
+      this.mesh.position.z = Math.max(bounds.minZ + margin, Math.min(bounds.maxZ - margin, this.mesh.position.z));
+      this.characterModel.update(deltaTime, {
+        isMoving: true,
         isGrounded: this.grounded,
         velocityY: this.velocityY,
         turnSpeed: 0,

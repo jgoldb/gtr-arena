@@ -70,6 +70,8 @@ export class FloatingCombatText {
 
     el.style.cssText = `
       position: absolute;
+      left: -9999px;
+      top: -9999px;
       color: ${color};
       font-size: ${fontSize}px;
       font-weight: bold;
