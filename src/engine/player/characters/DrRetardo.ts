@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from './CharacterModel';
-import { BottleChuck, Chudmax, Discombobulate, type Ability } from '../../combat/Ability';
+import { BottleChuck, ChemicalSpill, Chudmax, Discombobulate, type Ability } from '../../combat/Ability';
 
 const SKIN = 0xf0d6b8;
 const LABCOAT = 0xf0f0f0;
@@ -25,7 +25,7 @@ export class DrRetardo extends CharacterModel {
   readonly autoAttackRange = 1.8;
   readonly critChance = 0.07;
   readonly dodgeChance = 0.05;
-  readonly abilities: readonly Ability[] = [BottleChuck, Discombobulate, Chudmax];
+  readonly abilities: readonly Ability[] = [BottleChuck, Discombobulate, Chudmax, ChemicalSpill];
 
   // Declared via declare to avoid useDefineForClassFields overwriting
   // values set during the parent constructor's buildModel() call.
@@ -760,6 +760,7 @@ export class DrRetardo extends CharacterModel {
   protected override getAbilityAnimDuration(abilityId: string): number {
     if (abilityId === 'bottle-chuck') return 0.7;
     if (abilityId === 'discombobulate') return 0.6;
+    if (abilityId === 'chemical-spill') return 0.9;
     return 0.6;
   }
 
@@ -768,6 +769,8 @@ export class DrRetardo extends CharacterModel {
       this.animateBottleChuck(t);
     } else if (abilityId === 'discombobulate') {
       this.animateDiscombobCelebration(t);
+    } else if (abilityId === 'chemical-spill') {
+      this.animateChemicalSpill(t);
     }
   }
 
@@ -868,6 +871,54 @@ export class DrRetardo extends CharacterModel {
     // Legs slightly spread for stability
     this.leftLegGroup.rotation.z -= 0.08 * blend;
     this.rightLegGroup.rotation.z += 0.08 * blend;
+  }
+
+  // ── Chemical Spill animation (pour flask & test tube onto the ground) ────
+  private animateChemicalSpill(t: number): void {
+    if (t < 0.25) {
+      // Bring both arms forward and downward — preparing to pour
+      const p = t / 0.25;
+      const ease = p * p;
+      // Arms swing forward and down
+      this.leftArmGroup.rotation.x += 1.8 * ease;
+      this.rightArmGroup.rotation.x += 1.8 * ease;
+      // Spread arms slightly outward
+      this.leftArmGroup.rotation.z += 0.3 * ease;
+      this.rightArmGroup.rotation.z -= 0.3 * ease;
+      // Body leans forward
+      this.bodyGroup.rotation.x -= 0.3 * ease;
+      // Head looks down at the ground
+      this.headGroup.rotation.x -= 0.35 * ease;
+    } else if (t < 0.7) {
+      // Pouring phase — arms extended down, wrists rotate to pour
+      const p = (t - 0.25) / 0.45;
+      // Hold arms forward and down
+      this.leftArmGroup.rotation.x += 1.8;
+      this.rightArmGroup.rotation.x += 1.8;
+      this.leftArmGroup.rotation.z += 0.3;
+      this.rightArmGroup.rotation.z -= 0.3;
+      this.bodyGroup.rotation.x -= 0.3;
+      this.headGroup.rotation.x -= 0.35;
+      // Rotate arms inward to tip flasks — pouring motion
+      const pourAngle = Math.sin(p * Math.PI) * 0.6;
+      this.leftArmGroup.rotation.z += pourAngle;
+      this.rightArmGroup.rotation.z -= pourAngle;
+      // Gentle rocking while pouring
+      const rock = Math.sin(p * Math.PI * 3) * 0.06;
+      this.leftArmGroup.rotation.x += rock;
+      this.rightArmGroup.rotation.x -= rock;
+    } else {
+      // Recovery — stand back up
+      const p = (t - 0.7) / 0.3;
+      const ease = p * p * (3 - 2 * p);
+      const fade = 1 - ease;
+      this.leftArmGroup.rotation.x += 1.8 * fade;
+      this.rightArmGroup.rotation.x += 1.8 * fade;
+      this.leftArmGroup.rotation.z += 0.3 * fade;
+      this.rightArmGroup.rotation.z -= 0.3 * fade;
+      this.bodyGroup.rotation.x -= 0.3 * fade;
+      this.headGroup.rotation.x -= 0.35 * fade;
+    }
   }
 
   private animateBottleChuck(t: number): void {

@@ -204,13 +204,45 @@ export const Discombobulate: Ability = {
   appliesDebuff: DiscombobulateDebuff,
 };
 
+export const ChemicalSpillSpeedBuff: BuffDefinition = {
+  id: 'chemical-spill-speed',
+  name: 'Chemical Spill',
+  icon: '🧪',
+  duration: 4,
+  type: 'buff',
+  description: 'Movement speed increased by 40%.',
+  effects: [{ type: 'movementSpeedPercent', value: 40 }],
+};
+
+export const ChemicalSpillDot: BuffDefinition = {
+  id: 'chemical-spill-dot',
+  name: 'Chemical Spill',
+  icon: '🧪',
+  duration: 6,
+  type: 'debuff',
+  description: 'Taking 20 damage every 2 seconds from mysterious chemicals.',
+  effects: [],
+};
+
+export const ChemicalSpill: Ability = {
+  id: 'chemical-spill',
+  name: 'Chemical Spill',
+  icon: '🧪',
+  manaCost: 10,
+  cooldown: 8,
+  damage: 0,
+  requiresHostileTarget: false,
+  description:
+    'Spill a vial of mysterious chemicals onto the ground that other players can slip on. Activates after 2 seconds. Friendly players receive a 40% movement speed increase for 4 seconds. Hostile players take 40 damage and an additional 60 damage over 6 seconds.',
+};
+
 export const Chudmax: Ability = {
   id: 'chudmax',
   name: 'Chudmax',
   icon: '🧬',
   range: yardsToUnits(15),
   manaCost: 15,
-  cooldown: 0,
+  cooldown: 1.5,
   castTime: 3,
   damage: 80,
   healAmount: 120,

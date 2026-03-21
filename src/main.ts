@@ -8,7 +8,7 @@ import { renderPortraits } from './ui/PortraitRenderer';
 import { ActionBar } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
-import { DebugStun, DiscombobulateDebuff, FartBombDebuff, yardsToUnits, type Ability } from './engine/combat/Ability';
+import { ChemicalSpillDot, ChemicalSpillSpeedBuff, DebugStun, DiscombobulateDebuff, FartBombDebuff, yardsToUnits, type Ability } from './engine/combat/Ability';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas element not found');
@@ -267,6 +267,21 @@ function onAbilitySuccess(ability: Ability): void {
   if (ability.id === 'sweep') {
     engine.startSweepCharge();
   }
+  if (ability.id === 'chemical-spill') {
+    engine.spawnChemicalPool(
+      engine.playerController.mesh.position.clone(),
+      yardsToUnits(3),   // small pool radius
+      30,                // pool duration (seconds)
+      ChemicalSpillSpeedBuff,
+      ChemicalSpillDot,
+      40,                // initial damage to hostiles
+      60,                // total DoT damage
+      2,                 // DoT tick interval
+      6,                 // DoT duration
+      engine.playerController,
+      2                  // 2 second activation delay
+    );
+  }
 }
 
 // Cast completion callback
@@ -280,6 +295,10 @@ engine.onCastFailed = (message) => {
 // UI — action bar (bottom center)
 const actionBar = new ActionBar({
   onActivate: (ability) => {
+    // Interrupt active channel when using another ability (only if not on cooldown)
+    if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) {
+      engine.cancelCasting();
+    }
     if (ability.castTime) {
       // Start casting instead of instant use
       const result = engine.startCasting(
@@ -332,7 +351,7 @@ const actionBar = new ActionBar({
     return 'usable';
   },
   getCombatSystem: () => engine.combatSystem,
-  isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || engine.isCasting(),
+  isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || (engine.isCasting() && !engine.isChanneling()),
 });
 document.body.appendChild(actionBar.element);
 

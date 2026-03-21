@@ -29,6 +29,36 @@ interface ActiveGasCloud {
   affectedTargets: Set<Targetable>;
 }
 
+interface ActiveChemicalPool {
+  group: THREE.Group;
+  ripples: THREE.Mesh[];
+  center: THREE.Vector3;
+  radius: number;
+  duration: number;
+  elapsed: number;
+  speedBuff: BuffDefinition;
+  dot: BuffDefinition;
+  initialDamage: number;
+  dotDamagePerTick: number;
+  dotTickInterval: number;
+  dotDuration: number;
+  owner: Targetable;
+  activationDelay: number; // seconds before pool becomes active
+  consumed: boolean;       // true once triggered by a player
+  consumeElapsed: number;  // fade-out timer after consumption
+}
+
+interface ActiveDot {
+  target: Targetable;
+  debuff: BuffDefinition;
+  totalDuration: number;
+  elapsed: number;
+  tickInterval: number;
+  nextTickAt: number;
+  damagePerTick: number;
+  owner: Targetable;
+}
+
 interface DiscombobBubbles {
   target: Targetable;
   group: THREE.Group;
@@ -50,6 +80,8 @@ export class Engine {
   readonly combatSystem: CombatSystem;
   private readonly npcs: NpcController[] = [];
   private readonly gasClouds: ActiveGasCloud[] = [];
+  private readonly chemicalPools: ActiveChemicalPool[] = [];
+  private readonly activeDots: ActiveDot[] = [];
   private readonly discombobEffects: DiscombobBubbles[] = [];
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamTarget: Targetable | null = null;
@@ -163,6 +195,7 @@ export class Engine {
 
   loadMap(id: string): void {
     this.clearGasClouds();
+    this.clearChemicalPools();
     this.clearNpcs();
     this.mapManager.loadMap(id);
     this.playerController.respawn();
@@ -203,6 +236,12 @@ export class Engine {
       // Remove from any active gas clouds
       for (const cloud of this.gasClouds) {
         cloud.affectedTargets.delete(npc);
+      }
+      // Remove from active dots
+      for (let j = this.activeDots.length - 1; j >= 0; j--) {
+        if (this.activeDots[j].target === npc) {
+          this.activeDots.splice(j, 1);
+        }
       }
       this.buffSystem.clearEntity(npc);
       this.npcs.splice(idx, 1);
@@ -354,6 +393,10 @@ export class Engine {
     return this.casting !== null;
   }
 
+  isChanneling(): boolean {
+    return this.casting !== null && this.casting.isChannel;
+  }
+
   getCastingState(): {
     abilityName: string;
     elapsed: number;
@@ -474,6 +517,327 @@ export class Engine {
       owner,
       affectedTargets: new Set(),
     });
+  }
+
+  spawnChemicalPool(
+    position: THREE.Vector3,
+    radius: number,
+    duration: number,
+    speedBuff: BuffDefinition,
+    dot: BuffDefinition,
+    initialDamage: number,
+    dotTotalDamage: number,
+    dotTickInterval: number,
+    dotDuration: number,
+    owner: Targetable,
+    activationDelay: number = 0
+  ): void {
+    const dotTickCount = Math.floor(dotDuration / dotTickInterval);
+    const dotDamagePerTick = Math.round(dotTotalDamage / dotTickCount);
+
+    const group = new THREE.Group();
+    group.position.set(position.x, 0.02, position.z);
+
+    // Base pool disc — mixed green/purple chemical liquid
+    const baseMat = new THREE.MeshStandardMaterial({
+      color: 0x44aa66,
+      transparent: true,
+      opacity: 0.35,
+      roughness: 0.2,
+      metalness: 0.1,
+      depthWrite: false,
+      emissive: 0x228844,
+      emissiveIntensity: 0.3,
+    });
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, 0.02, 24),
+      baseMat
+    );
+    base.position.y = 0.01;
+    base.renderOrder = 1;
+    group.add(base);
+
+    // Secondary purple layer — slightly smaller, offset
+    const purpleMat = new THREE.MeshStandardMaterial({
+      color: 0x8844cc,
+      transparent: true,
+      opacity: 0.25,
+      roughness: 0.2,
+      depthWrite: false,
+      emissive: 0x6633aa,
+      emissiveIntensity: 0.4,
+    });
+    const purpleLayer = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius * 0.75, radius * 0.8, 0.02, 24),
+      purpleMat
+    );
+    purpleLayer.position.y = 0.02;
+    purpleLayer.renderOrder = 2;
+    group.add(purpleLayer);
+
+    // Ripple rings — concentric circles that pulse outward
+    const ripples: THREE.Mesh[] = [];
+    for (let i = 0; i < 4; i++) {
+      const rippleRadius = radius * (0.3 + i * 0.2);
+      const rippleMat = new THREE.MeshStandardMaterial({
+        color: i % 2 === 0 ? 0x55dd77 : 0xaa55dd,
+        transparent: true,
+        opacity: 0.15,
+        roughness: 0.1,
+        depthWrite: false,
+        emissive: i % 2 === 0 ? 0x33bb55 : 0x8833bb,
+        emissiveIntensity: 0.5,
+      });
+      const ripple = new THREE.Mesh(
+        new THREE.TorusGeometry(rippleRadius, 0.03, 4, 24),
+        rippleMat
+      );
+      ripple.rotation.x = -Math.PI / 2;
+      ripple.position.y = 0.03;
+      ripple.renderOrder = 3;
+      ripple.userData.baseRadius = rippleRadius;
+      ripple.userData.phase = i * Math.PI * 0.5;
+      group.add(ripple);
+      ripples.push(ripple);
+    }
+
+    // Small bubble spheres sitting on the surface
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const r = radius * (0.2 + Math.random() * 0.6);
+      const size = 0.04 + Math.random() * 0.06;
+      const bubbleMat = new THREE.MeshStandardMaterial({
+        color: i % 2 === 0 ? 0x66ff88 : 0xcc88ff,
+        transparent: true,
+        opacity: 0.4 + Math.random() * 0.2,
+        roughness: 0.1,
+        depthWrite: false,
+        emissive: i % 2 === 0 ? 0x33dd55 : 0x9955cc,
+        emissiveIntensity: 0.6,
+      });
+      const bubble = new THREE.Mesh(
+        new THREE.SphereGeometry(size, 6, 6),
+        bubbleMat
+      );
+      bubble.position.set(
+        Math.cos(angle) * r,
+        0.03 + Math.random() * 0.04,
+        Math.sin(angle) * r
+      );
+      bubble.renderOrder = 4;
+      group.add(bubble);
+    }
+
+    this.scene.add(group);
+
+    this.chemicalPools.push({
+      group,
+      ripples,
+      center: new THREE.Vector3(position.x, 0, position.z),
+      radius,
+      duration,
+      elapsed: 0,
+      speedBuff,
+      dot,
+      initialDamage,
+      dotDamagePerTick,
+      dotTickInterval,
+      dotDuration,
+      owner,
+      activationDelay,
+      consumed: false,
+      consumeElapsed: 0,
+    });
+  }
+
+  private static readonly POOL_CONSUME_DURATION = 0.6; // fast fade-out on trigger
+
+  private updateChemicalPools(dt: number): void {
+    for (let i = this.chemicalPools.length - 1; i >= 0; i--) {
+      const pool = this.chemicalPools[i];
+      pool.elapsed += dt;
+
+      // If consumed, just fade out and expire
+      if (pool.consumed) {
+        pool.consumeElapsed += dt;
+        const fade = Math.max(0, 1 - pool.consumeElapsed / Engine.POOL_CONSUME_DURATION);
+        pool.group.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            const mat = child.material as THREE.MeshStandardMaterial;
+            if (mat.userData.baseOpacity === undefined) {
+              mat.userData.baseOpacity = mat.opacity;
+            }
+            mat.opacity = mat.userData.baseOpacity * fade;
+          }
+        });
+        // Shrink as it's consumed
+        pool.group.scale.setScalar(fade);
+
+        if (pool.consumeElapsed >= Engine.POOL_CONSUME_DURATION) {
+          pool.group.traverse(child => {
+            if (child instanceof THREE.Mesh) {
+              child.geometry.dispose();
+              (child.material as THREE.Material).dispose();
+            }
+          });
+          this.scene.remove(pool.group);
+          this.chemicalPools.splice(i, 1);
+        }
+        continue;
+      }
+
+      // Pool must arm before it can be triggered
+      if (pool.elapsed < pool.activationDelay) {
+        // Animate ripples (dimmed while arming)
+        for (const ripple of pool.ripples) {
+          const phase = ripple.userData.phase as number;
+          const pulse = 1 + Math.sin(pool.elapsed * 2.5 + phase) * 0.15;
+          ripple.scale.setScalar(pulse);
+          (ripple.material as THREE.MeshStandardMaterial).opacity =
+            0.08 * (0.6 + Math.sin(pool.elapsed * 3 + phase) * 0.4);
+        }
+        pool.group.rotation.y += dt * 0.15;
+        // Fade in during arming
+        const fade = Math.min(1, pool.elapsed / 0.4) * 0.5;
+        pool.group.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            const mat = child.material as THREE.MeshStandardMaterial;
+            if (mat.userData.baseOpacity === undefined) {
+              mat.userData.baseOpacity = mat.opacity;
+            }
+            mat.opacity = mat.userData.baseOpacity * fade;
+          }
+        });
+        continue;
+      }
+
+      // Collect all potential targets (both friendly and hostile, including owner)
+      const allTargets: Targetable[] = [];
+      allTargets.push(this.playerController);
+      for (const npc of this.npcs) {
+        allTargets.push(npc);
+      }
+
+      // Check who is in the pool
+      for (const target of allTargets) {
+        if (target.dead) continue;
+        const dx = target.mesh.position.x - pool.center.x;
+        const dz = target.mesh.position.z - pool.center.z;
+        if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
+
+        // Target stepped in — trigger effects and consume the pool
+        if (target.isHostileTo(pool.owner)) {
+          // Hostile: deal initial damage + apply DoT
+          target.hp = Math.max(0, target.hp - pool.initialDamage);
+          this.combatSystem.onCombatText?.(target, pool.initialDamage, 'damage');
+          this.combatSystem.enterCombat(pool.owner);
+          this.combatSystem.enterCombat(target);
+          if (target.hp <= 0 && !target.dead) {
+            target.die();
+          } else {
+            this.buffSystem.apply(target, pool.dot);
+            this.activeDots.push({
+              target,
+              debuff: pool.dot,
+              totalDuration: pool.dotDuration,
+              elapsed: 0,
+              tickInterval: pool.dotTickInterval,
+              nextTickAt: pool.dotTickInterval,
+              damagePerTick: pool.dotDamagePerTick,
+              owner: pool.owner,
+            });
+          }
+        } else {
+          // Friendly: apply speed buff
+          this.buffSystem.apply(target, pool.speedBuff);
+        }
+
+        // Consume the pool — one trigger only
+        pool.consumed = true;
+        break;
+      }
+
+      if (pool.consumed) continue;
+
+      // Animate ripples
+      for (const ripple of pool.ripples) {
+        const phase = ripple.userData.phase as number;
+        const pulse = 1 + Math.sin(pool.elapsed * 2.5 + phase) * 0.15;
+        ripple.scale.setScalar(pulse);
+        (ripple.material as THREE.MeshStandardMaterial).opacity =
+          0.15 * (0.6 + Math.sin(pool.elapsed * 3 + phase) * 0.4);
+      }
+
+      // Rotate pool slowly
+      pool.group.rotation.y += dt * 0.15;
+
+      // Fade in/out (natural expiry)
+      const fadeStart = pool.duration - 1.5;
+      const fade = pool.elapsed > fadeStart
+        ? Math.max(0, 1 - (pool.elapsed - fadeStart) / 1.5)
+        : Math.min(1, pool.elapsed / 0.4);
+
+      pool.group.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.userData.baseOpacity === undefined) {
+            mat.userData.baseOpacity = mat.opacity;
+          }
+          mat.opacity = mat.userData.baseOpacity * fade;
+        }
+      });
+
+      // Expire
+      if (pool.elapsed >= pool.duration) {
+        pool.group.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+        this.scene.remove(pool.group);
+        this.chemicalPools.splice(i, 1);
+      }
+    }
+  }
+
+  private updateActiveDots(dt: number): void {
+    for (let i = this.activeDots.length - 1; i >= 0; i--) {
+      const dot = this.activeDots[i];
+      dot.elapsed += dt;
+
+      // Tick damage
+      while (dot.elapsed >= dot.nextTickAt && dot.nextTickAt <= dot.totalDuration) {
+        if (!dot.target.dead) {
+          dot.target.hp = Math.max(0, dot.target.hp - dot.damagePerTick);
+          this.combatSystem.onCombatText?.(dot.target, dot.damagePerTick, 'damage');
+          this.combatSystem.enterCombat(dot.target);
+          if (dot.target.hp <= 0 && !dot.target.dead) {
+            dot.target.die();
+          }
+        }
+        dot.nextTickAt += dot.tickInterval;
+      }
+
+      // Expire
+      if (dot.elapsed >= dot.totalDuration || dot.target.dead) {
+        this.activeDots.splice(i, 1);
+      }
+    }
+  }
+
+  private clearChemicalPools(): void {
+    for (const pool of this.chemicalPools) {
+      pool.group.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      this.scene.remove(pool.group);
+    }
+    this.chemicalPools.length = 0;
+    this.activeDots.length = 0;
   }
 
   private updateGasClouds(dt: number): void {
@@ -997,6 +1361,8 @@ export class Engine {
       }
     }
     this.updateGasClouds(deltaTime);
+    this.updateChemicalPools(deltaTime);
+    this.updateActiveDots(deltaTime);
     this.updateDiscombobEffects(deltaTime);
     this.updateChannelBeam();
     this.combatSystem.update(deltaTime);
@@ -1013,6 +1379,7 @@ export class Engine {
   dispose(): void {
     this.stop();
     this.clearGasClouds();
+    this.clearChemicalPools();
     this.clearNpcs();
     // Clean up discombob effects
     for (const effect of this.discombobEffects) {
