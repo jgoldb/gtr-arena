@@ -165,7 +165,8 @@ export class CombatSystem {
         return { success: false, error: 'no-target', errorMessage: 'No hostile target' };
       }
     }
-    if (attacker.mana < ability.manaCost) {
+    const effectiveManaCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
+    if (attacker.mana < effectiveManaCost) {
       return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
     }
     if (ability.requiresHostileTarget && target) {
@@ -213,8 +214,9 @@ export class CombatSystem {
     if (!validation.success) return validation;
 
     // Success — apply effects
-    attacker.mana -= ability.manaCost;
-    if (ability.manaCost > 0) {
+    const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
+    attacker.mana -= effectiveCost;
+    if (effectiveCost > 0) {
       this.regenSystem.notifyManaUsed(attacker);
     }
     if (ability.requiresHostileTarget && target) {

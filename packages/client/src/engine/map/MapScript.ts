@@ -7,4 +7,6 @@ export interface MapScript {
   dispose(): void;
   /** Reset the arena countdown timer (used to synchronize after all clients are ready). */
   resetTimer?(): void;
+  /** Called when arena doors open. */
+  onDoorsOpen?: () => void;
 }

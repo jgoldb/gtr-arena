@@ -583,6 +583,18 @@ export class ClientEngine {
     return this.localBuffs;
   }
 
+  getManaCostMultiplier(): number {
+    let mult = 1;
+    for (const buff of this.localBuffs) {
+      if (buff.effects) {
+        for (const effect of buff.effects) {
+          if (effect.type === 'manaCostPercent') mult += effect.value / 100;
+        }
+      }
+    }
+    return Math.max(0, mult);
+  }
+
   /** Get the Three.js group for an entity (for raycasting/combat text positioning) */
   getEntityMesh(entityId: string): THREE.Group | undefined {
     if (entityId === this.localEntityId) return this.playerController.mesh;

@@ -295,7 +295,7 @@ export class UnitFrame {
     }
 
     const remaining = Math.ceil(aura.remaining);
-    const durationLabel = !isFinite(remaining) ? '' : `<div style="
+    const durationLabel = !(remaining > 0 && isFinite(remaining)) ? '' : `<div style="
       color: #aaa;
       font-size: 11px;
       margin-top: 4px;
@@ -347,17 +347,20 @@ export class UnitFrame {
         (el as any)._aura = aura;
         el.style.display = 'flex';
         (el.children[0] as HTMLElement).textContent = aura.definition.icon;
-        const finite = isFinite(aura.definition.duration);
+        const hasFiniteDuration = (aura.definition.duration > 0 && isFinite(aura.definition.duration))
+          || (aura.remaining > 0 && isFinite(aura.remaining));
+        el.style.background = hasFiniteDuration ? 'rgba(80, 80, 100, 0.8)' : 'transparent';
         // Duration sweep: fills up as time elapses (opposite of cooldown drain)
         const elapsed = aura.definition.duration - aura.remaining;
-        const degrees = finite && aura.definition.duration > 0
+        const degrees = hasFiniteDuration && isFinite(aura.definition.duration) && aura.definition.duration > 0
           ? (elapsed / aura.definition.duration) * 360
           : 0;
-        (el.children[1] as HTMLElement).style.background =
-          degrees > 0
-            ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
-            : 'transparent';
-        (el.children[2] as HTMLElement).textContent = finite ? Math.ceil(aura.remaining).toString() : '';
+        const sweepEl = el.children[1] as HTMLElement;
+        sweepEl.style.display = hasFiniteDuration ? '' : 'none';
+        sweepEl.style.background = degrees > 0
+          ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
+          : 'transparent';
+        (el.children[2] as HTMLElement).textContent = hasFiniteDuration ? Math.ceil(aura.remaining).toString() : '';
         // Refresh tooltip if this icon is hovered
         if (this.tooltipHoveredEl === el) {
           this.refreshTooltip(el);

@@ -45,11 +45,14 @@ export class BuffSystem {
     if (buff) buff.remaining = remaining;
   }
 
-  remove(target: Targetable, buffId: string): void {
+  remove(target: Targetable, buffId: string, silent = false): void {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return;
     const idx = buffs.findIndex(b => b.definition.id === buffId);
-    if (idx !== -1) buffs.splice(idx, 1);
+    if (idx !== -1) {
+      const removed = buffs.splice(idx, 1)[0];
+      if (!silent) this.onBuffExpired?.(target, removed.definition);
+    }
     if (buffs.length === 0) this.activeBuffs.delete(target);
   }
 
@@ -144,6 +147,20 @@ export class BuffSystem {
       }
       if (buffs.length === 0) this.activeBuffs.delete(entity);
     }
+  }
+
+  getManaCostMultiplier(source: Targetable): number {
+    const buffs = this.activeBuffs.get(source);
+    if (!buffs) return 1;
+    let mult = 1;
+    for (const buff of buffs) {
+      for (const effect of buff.definition.effects) {
+        if (effect.type === 'manaCostPercent') {
+          mult += effect.value / 100;
+        }
+      }
+    }
+    return Math.max(0, mult);
   }
 
   getDamageDealtMultiplier(source: Targetable): number {

@@ -159,11 +159,14 @@ export abstract class ArenaScript implements MapScript {
   // ---------------------------------------------------------------------------
   // Internal
   // ---------------------------------------------------------------------------
+  onDoorsOpen?: () => void;
+
   private triggerOpen(): void {
     this.opened = true;
     this.openAnimProgress = 0;
 
     this.onOpen();
+    this.onDoorsOpen?.();
 
     // Flash effects
     for (const pos of this.getFlashPositions()) {

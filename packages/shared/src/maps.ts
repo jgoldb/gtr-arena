@@ -12,12 +12,15 @@ export interface MapInfo {
   spawnPoints: SpawnPoint[];
   npcSpawnBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   obstacles: ObstacleConfig[];
+  /** Seconds before arena doors open. Players have Arena Preparation during this period. */
+  arenaOpenTime?: number;
 }
 
 export const MAPS: Record<string, MapInfo> = {
   'cage': {
     id: 'cage',
     name: 'The Cage',
+    arenaOpenTime: 30,
     spawnPoints: [
       { x: 0, y: 0, z: 26 },   // Team 0 — south pen
       { x: 0, y: 0, z: -26 },  // Team 1 — north pen
@@ -44,6 +47,7 @@ export const MAPS: Record<string, MapInfo> = {
   'celestial-ballroom': {
     id: 'celestial-ballroom',
     name: 'Celestial Ballroom',
+    arenaOpenTime: 30,
     spawnPoints: [
       { x: 0, y: 0, z: 32 },   // Team 0 — south bubble
       { x: 0, y: 0, z: -32 },  // Team 1 — north bubble

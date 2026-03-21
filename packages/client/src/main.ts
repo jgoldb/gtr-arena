@@ -365,7 +365,8 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
       clientEngine!.sendAbility(ability.id, mpSelectedTargetId);
     },
     getAbilityStatus: (ability) => {
-      if (player.mana < ability.manaCost) return 'not-enough-resource';
+      const effectiveManaCost = Math.round(ability.manaCost * clientEngine!.getManaCostMultiplier());
+      if (player.mana < effectiveManaCost) return 'not-enough-resource';
       if (ability.requiresHostileTarget) {
         if (!mpSelectedTargetId) return 'no-target';
         const target = clientEngine!.getRemoteEntity(mpSelectedTargetId);
@@ -497,13 +498,15 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     if (mpSelectedTargetId && mpTargetFrame) {
       const targetTarget = makeTargetable(mpSelectedTargetId);
       if (targetTarget) {
-        const targetE = clientEngine.getRemoteEntity(mpSelectedTargetId);
-        const tBuffs = (targetE?.buffs ?? []).filter(b => b.type === 'buff').map(b => ({
+        // Use local buffs when targeting self, remote entity buffs otherwise
+        const isSelf = mpSelectedTargetId === clientEngine.localId;
+        const rawBuffs = isSelf ? clientEngine.getLocalBuffs() : (clientEngine.getRemoteEntity(mpSelectedTargetId)?.buffs ?? []);
+        const tBuffs = rawBuffs.filter(b => b.type === 'buff').map(b => ({
           definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'buff', description: b.description, effects: [] },
           remaining: b.remaining,
           shieldRemaining: b.shieldRemaining,
         }));
-        const tDebuffs = (targetE?.buffs ?? []).filter(b => b.type === 'debuff').map(b => ({
+        const tDebuffs = rawBuffs.filter(b => b.type === 'debuff').map(b => ({
           definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'debuff', description: b.description, effects: [] },
           remaining: b.remaining,
         }));
@@ -825,6 +828,9 @@ async function startPlayground(): Promise<void> {
     }
   };
 
+  // Apply Arena Preparation now that SCT callbacks are wired
+  engine.applyArenaPreparation();
+
   // Death screen
   const deathScreen = document.createElement('div');
   pgDeathScreen = deathScreen;
@@ -897,7 +903,8 @@ async function startPlayground(): Promise<void> {
     },
     getAbilityStatus: (ability) => {
       const player = engine.playerController;
-      if (player.mana < ability.manaCost) return 'not-enough-resource';
+      const effectiveManaCost = Math.round(ability.manaCost * engine.buffSystem.getManaCostMultiplier(player));
+      if (player.mana < effectiveManaCost) return 'not-enough-resource';
       if (ability.requiresHostileTarget) {
         const target = engine.targetingSystem.currentTarget;
         if (!target || !target.isHostileTo(player) || target.dead) return 'no-target';

@@ -7,7 +7,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot } from '@gtr/shared';
+import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, ArenaPreparationBuff } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -200,6 +200,18 @@ export class ServerEngine {
     return this.entities;
   }
 
+  applyArenaPreparation(): void {
+    for (const entity of this.entities) {
+      this.buffSystem.apply(entity, ArenaPreparationBuff);
+    }
+  }
+
+  removeArenaPreparation(): void {
+    for (const entity of this.entities) {
+      this.buffSystem.remove(entity, ArenaPreparationBuff.id);
+    }
+  }
+
   updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean): void {
     const entity = this.getEntity(entityId);
     if (!entity || entity.dead) return;
@@ -381,8 +393,9 @@ export class ServerEngine {
     const isChannel = ability.isChannel ?? false;
 
     if (isChannel) {
-      entity.mana -= ability.manaCost;
-      if (ability.manaCost > 0) this.regenSystem.notifyManaUsed(entity);
+      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
+      entity.mana -= effectiveCost;
+      if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
       this.combatSystem.setCooldown(entity.id, ability.id, ability.cooldown);
       if (ability.cooldown > 0) {
         this.onSendToPlayer?.(entity.id, {
@@ -437,7 +450,7 @@ export class ServerEngine {
         id: `channel-${ability.id}`,
         name: ability.name,
         icon: ability.icon,
-        duration: Infinity,
+        duration: ability.castTime!, // remaining managed manually in tick loop
         type: isFriendly ? 'buff' : 'debuff',
         description: ability.description,
         effects: [],
@@ -1127,6 +1140,7 @@ export class ServerEngine {
         duration: b.definition.duration,
         description: b.definition.description,
         shieldRemaining: b.shieldRemaining,
+        effects: b.definition.effects.length > 0 ? b.definition.effects : undefined,
       })),
     }));
   }

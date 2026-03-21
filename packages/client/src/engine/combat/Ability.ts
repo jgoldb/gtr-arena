@@ -24,6 +24,7 @@ export {
   Chudmax,
   FullRetardBuff,
   FullRetard,
+  ArenaPreparationBuff,
 } from '@gtr/shared';
 
 export type { Ability, BuffDefinition, BuffEffect } from '@gtr/shared';

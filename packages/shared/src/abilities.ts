@@ -10,7 +10,7 @@ export function yardsToUnits(yards: number): number {
 // ── Buff/debuff system types ────────────────────────────────────────────
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'discombobulate' | 'damageDealtPercent';
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'discombobulate' | 'damageDealtPercent' | 'manaCostPercent';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
 }
 
@@ -156,6 +156,16 @@ export const FullRetardBuff: BuffDefinition = {
   type: 'buff',
   description: 'Deals damage to all enemies and heals all friendlies in melee range.',
   effects: [],
+};
+
+export const ArenaPreparationBuff: BuffDefinition = {
+  id: 'arena-preparation',
+  name: 'Arena Preparation',
+  icon: '⚔️',
+  duration: Infinity,
+  type: 'buff',
+  description: 'Preparing for arena combat. Mana cost of all abilities reduced by 100%.',
+  effects: [{ type: 'manaCostPercent', value: -100 }],
 };
 
 // ── Ability definitions ─────────────────────────────────────────────────

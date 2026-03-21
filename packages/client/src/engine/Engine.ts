@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { yardsToUnits, type Ability } from './combat/Ability';
+import { yardsToUnits, ArenaPreparationBuff, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
@@ -124,6 +124,7 @@ export class Engine {
   onCastComplete?: (ability: Ability, target: Targetable | null) => void;
   onCastFailed?: (message: string) => void;
 
+  private arenaPreparationActive = false;
   onCharacterChange?: (abilities: readonly Ability[]) => void;
   onAutoAttackError?: (message: string) => void;
   private animationFrameId: number | null = null;
@@ -185,6 +186,7 @@ export class Engine {
         }
       }
     };
+
   }
 
   start(): void {
@@ -212,6 +214,19 @@ export class Engine {
     this.clearNpcs();
     this.mapManager.loadMap(id);
     this.playerController.respawn();
+    this.applyArenaPreparation();
+  }
+
+  applyArenaPreparation(): void {
+    this.arenaPreparationActive = true;
+    this.buffSystem.apply(this.playerController, ArenaPreparationBuff);
+    const script = this.mapManager.getScript();
+    if (script) {
+      script.onDoorsOpen = () => {
+        this.arenaPreparationActive = false;
+        this.buffSystem.remove(this.playerController, ArenaPreparationBuff.id);
+      };
+    }
   }
 
   setCharacter(id: CharacterId): void {
@@ -222,6 +237,9 @@ export class Engine {
     this.combatSystem.clearCooldowns();
     this.playerController.setCharacter(id);
     this.playerController.dead = false;
+    if (this.arenaPreparationActive) {
+      this.buffSystem.apply(this.playerController, ArenaPreparationBuff);
+    }
     this.onCharacterChange?.(this.playerController.abilities);
   }
 
@@ -302,8 +320,9 @@ export class Engine {
 
     if (isChannel) {
       // Channels consume mana and start cooldown immediately
-      this.playerController.mana -= ability.manaCost;
-      if (ability.manaCost > 0) {
+      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(this.playerController));
+      this.playerController.mana -= effectiveCost;
+      if (effectiveCost > 0) {
         this.regenSystem.notifyManaUsed(this.playerController);
       }
       this.combatSystem.setCooldown(ability.id, ability.cooldown);
@@ -343,7 +362,7 @@ export class Engine {
         id: `channel-${ability.id}`,
         name: ability.name,
         icon: ability.icon,
-        duration: Infinity, // managed manually
+        duration: ability.castTime!, // remaining managed manually via updateChannelAuraRemaining
         type: isFriendly ? 'buff' : 'debuff',
         description: ability.description,
         effects: [],
@@ -413,7 +432,7 @@ export class Engine {
 
   private removeChannelAura(): void {
     if (!this.casting || !this.casting.isChannel || !this.casting.target) return;
-    this.buffSystem.remove(this.casting.target, `channel-${this.casting.ability.id}`);
+    this.buffSystem.remove(this.casting.target, `channel-${this.casting.ability.id}`, true);
   }
 
   isCasting(): boolean {

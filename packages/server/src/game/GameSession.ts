@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, MapInfo } from '@gtr/shared';
 import { MAPS } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
@@ -14,6 +14,7 @@ interface SessionPlayer {
 export class GameSession {
   readonly gameId: string;
   private readonly mapId: string;
+  private readonly mapInfo: MapInfo | undefined;
   private engine: ServerEngine;
   private players: SessionPlayer[];
   private sockets: Map<string, WebSocket>;
@@ -40,7 +41,8 @@ export class GameSession {
     this.onGameOver = onGameOver;
 
     this.mapId = mapId;
-    const mapInfo = MAPS[mapId];
+    this.mapInfo = MAPS[mapId];
+    const mapInfo = this.mapInfo;
     this.engine = new ServerEngine(mapInfo?.obstacles ?? []);
 
     this.players = players.map(p => ({
@@ -133,9 +135,18 @@ export class GameSession {
     };
     this.broadcast(countdownMsg);
 
+    // Start the engine tick loop immediately so game state (including buffs) is
+    // broadcast to clients during the preparation period.
+    this.engine.applyArenaPreparation();
+    this.engine.start();
+
+    // Remove the buff when the arena doors open (arenaOpenTime from map config).
+    const arenaOpenTime = this.mapInfo?.arenaOpenTime ?? 30;
     setTimeout(() => {
-      if (!this.stopped) this.engine.start();
-    }, GameSession.COUNTDOWN_SECONDS * 1000);
+      if (!this.stopped) {
+        this.engine.removeArenaPreparation();
+      }
+    }, arenaOpenTime * 1000);
   }
 
   stop(): void {
