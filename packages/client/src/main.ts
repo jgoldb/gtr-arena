@@ -300,7 +300,11 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
   document.body.appendChild(mpCombatText.element);
 
   // Nameplates
-  mpNameplates = new Nameplates(clientEngine.camera, clientEngine.scene);
+  mpNameplates = new Nameplates(
+    clientEngine.camera, clientEngine.scene,
+    (target) => { clientEngine!.selectTarget(target); },
+    (target) => { clientEngine!.targetingSystem.setNameplateHover(target); },
+  );
   document.body.appendChild(mpNameplates.element);
 
   // Unit frames
@@ -758,7 +762,11 @@ async function startPlayground(): Promise<void> {
   const combatText = new FloatingCombatText(engine.camera);
   pgCombatText = combatText;
   document.body.appendChild(combatText.element);
-  const nameplates = new Nameplates(engine.camera, engine.scene);
+  const nameplates = new Nameplates(
+    engine.camera, engine.scene,
+    (target) => { engine.targetingSystem.currentTarget = target; },
+    (target) => { engine.targetingSystem.setNameplateHover(target); },
+  );
   pgNameplates = nameplates;
   document.body.appendChild(nameplates.element);
 

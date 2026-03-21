@@ -17,7 +17,8 @@
       "Bash(timeout 5 npx tsx packages/server/src/index.ts)",
       "Bash(grep -rn \"channelBeam\\\\|channel.*beam\" \"C:\\\\Users\\\\Joey\\\\Repos\\\\gtr\\\\packages\\\\client\\\\src\"\" --include=\"*.ts \")",
       "Bash(npm run:*)",
-      "Bash(grep -r \"countdown\\\\|Countdown\\\\|arena.*gate\\\\|gate.*countdown\" /c/Users/Joey/Repos/gtr/packages/client --include=*.ts --include=*.tsx)"
+      "Bash(grep -r \"countdown\\\\|Countdown\\\\|arena.*gate\\\\|gate.*countdown\" /c/Users/Joey/Repos/gtr/packages/client --include=*.ts --include=*.tsx)",
+      "Bash(grep -n \"outlinePass\\\\|OutlinePass\\\\|SelectiveBloom\\\\|outline\" /c/Users/Joey/Repos/gtr/packages/client/src -r --include=*.ts)"
     ]
   }
 }

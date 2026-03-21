@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from '../player/characters/CharacterModel';
 import { createCharacter, CharacterId } from '../player/characters';
 import type { Targetable } from '../types';
+import { createTargetingHitArea } from '../targeting/targetingHitArea';
 
 const IDLE_INPUT: AnimationInput = {
   isMoving: false,
@@ -52,6 +53,7 @@ export class NpcController implements Targetable {
     this.mesh = new THREE.Group();
     this.mesh.userData.targetRef = this;
     this.mesh.add(this.characterModel.group);
+    this.mesh.add(createTargetingHitArea());
     this.mesh.position.copy(position);
 
     // Face toward map center

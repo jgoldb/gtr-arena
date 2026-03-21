@@ -34,10 +34,19 @@ export class Nameplates {
   private rayDir = new THREE.Vector3();
   private entries: Map<Targetable, NameplateEntry> = new Map();
   private worldPos = new THREE.Vector3();
+  private onClickTarget?: (target: Targetable) => void;
+  private onHoverTarget?: (target: Targetable | null) => void;
 
-  constructor(camera: THREE.PerspectiveCamera, scene: THREE.Scene) {
+  constructor(
+    camera: THREE.PerspectiveCamera,
+    scene: THREE.Scene,
+    onClickTarget?: (target: Targetable) => void,
+    onHoverTarget?: (target: Targetable | null) => void,
+  ) {
     this.camera = camera;
     this.scene = scene;
+    this.onClickTarget = onClickTarget;
+    this.onHoverTarget = onHoverTarget;
     this.element = document.createElement('div');
     this.element.style.cssText = `
       position: fixed;
@@ -179,9 +188,19 @@ export class Nameplates {
       transform: translate(-50%, -100%);
       text-align: center;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      pointer-events: none;
+      pointer-events: auto;
+      cursor: pointer;
       white-space: nowrap;
     `;
+    plate.addEventListener('click', () => {
+      this.onClickTarget?.(target);
+    });
+    plate.addEventListener('mouseenter', () => {
+      this.onHoverTarget?.(target);
+    });
+    plate.addEventListener('mouseleave', () => {
+      this.onHoverTarget?.(null);
+    });
 
     const nameEl = document.createElement('div');
     nameEl.textContent = target.name;

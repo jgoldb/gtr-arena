@@ -14,6 +14,10 @@ export class InputManager {
   private rightClickEvent: { x: number; y: number } | null = null;
   private static readonly CLICK_THRESHOLD = 4;
 
+  // Mouse screen position (for hover detection when pointer is NOT locked)
+  private mouseScreenX = 0;
+  private mouseScreenY = 0;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
 
@@ -83,6 +87,12 @@ export class InputManager {
     this.mouseDelta.x += e.movementX;
     this.mouseDelta.y += e.movementY;
 
+    // Track screen position when pointer is not locked (for hover detection)
+    if (!document.pointerLockElement) {
+      this.mouseScreenX = e.clientX;
+      this.mouseScreenY = e.clientY;
+    }
+
     if (this.leftClickPending) {
       this.leftDragDist += Math.abs(e.movementX) + Math.abs(e.movementY);
       if (this.leftDragDist > InputManager.CLICK_THRESHOLD) {
@@ -120,6 +130,12 @@ export class InputManager {
 
   getRightClick(): { x: number; y: number } | null {
     return this.rightClickEvent;
+  }
+
+  /** Returns mouse screen position when pointer is NOT locked (for hover detection), or null if locked. */
+  getMouseScreenPos(): { x: number; y: number } | null {
+    if (document.pointerLockElement) return null;
+    return { x: this.mouseScreenX, y: this.mouseScreenY };
   }
 
   resetDeltas(): void {

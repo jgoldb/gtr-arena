@@ -17,6 +17,7 @@ import { PlayerController } from '../engine/player/PlayerController';
 import { TargetingSystem } from '../engine/targeting/TargetingSystem';
 import { createCharacter, type CharacterModel } from '../engine/player/characters';
 import type { Targetable } from '../engine/types';
+import { createTargetingHitArea } from '../engine/targeting/targetingHitArea';
 import {
   type GasCloudVisual, type ChemPoolVisual, type FullRetardAuraVisual,
   POOL_CONSUME_DURATION,
@@ -182,6 +183,7 @@ export class ClientEngine {
     // so rotation on the wrapper doesn't overwrite CharacterModel's built-in π offset
     const mesh = new THREE.Group();
     mesh.add(model.group);
+    mesh.add(createTargetingHitArea());
     mesh.position.set(snap.x, snap.y, snap.z);
     mesh.rotation.y = snap.rotationY;
     this.scene.add(mesh);
@@ -582,6 +584,17 @@ export class ClientEngine {
     this.network.send({ type: 'set_target', targetEntityId });
   }
 
+  /** Programmatically select a target (e.g. from nameplate click). */
+  selectTarget(target: Targetable | null): void {
+    this.targetingSystem.currentTarget = target;
+    const newTargetId = this.findEntityIdByTargetable(target);
+    if (newTargetId !== this.selectedTargetId) {
+      this.selectedTargetId = newTargetId;
+      this.sendSetTarget(newTargetId);
+      this.onTargetChanged?.(newTargetId);
+    }
+  }
+
   sendAutoAttack(targetEntityId: string): void {
     this.network.send({ type: 'auto_attack', targetEntityId });
   }
@@ -768,7 +781,10 @@ export class ClientEngine {
       }
     }
 
-    // Update targeting ring animation
+    // Update cursor for hover detection (only when pointer is unlocked)
+    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos());
+
+    // Update targeting ring animation + target highlight
     this.targetingSystem.update(dt);
 
     // Consume input deltas so they don't accumulate

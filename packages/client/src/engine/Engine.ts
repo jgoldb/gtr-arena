@@ -1025,6 +1025,9 @@ export class Engine {
       }
     }
 
+    // Update cursor for hover detection (only when pointer is unlocked)
+    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos());
+
     this.updateAutoAttack(deltaTime);
 
     // Update buff-driven modifiers before player update
