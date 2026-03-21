@@ -287,6 +287,9 @@ export class Engine {
     if (this.casting) {
       return { success: false, error: 'casting', errorMessage: 'Already casting' };
     }
+    if (this.playerController.isMoving) {
+      return { success: false, error: 'moving', errorMessage: 'Cannot cast while moving' };
+    }
     const validation = this.combatSystem.validateAbility(
       ability, this.playerController, attackerRotY, target
     );

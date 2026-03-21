@@ -156,14 +156,18 @@ function startMultiplayer(msg: S2C_GameStart): void {
   // Wire up server message handlers
   clientEngine.onError = (message) => mpErrorText?.show(message);
 
-  clientEngine.onCombatText = (entityId, amount, type) => {
-    const mesh = clientEngine!.getEntityMesh(entityId);
-    if (mesh && mpCombatText) {
-      mpCombatText.spawn(mesh, amount, type as any);
+  clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
+    const localId = clientEngine!.localId;
+    const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
+    if (isLocalInvolved) {
+      const mesh = clientEngine!.getEntityMesh(targetEntityId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawn(mesh, amount, type as any);
+      }
     }
-    if (entityId === clientEngine!.localId) {
+    if (targetEntityId === localId) {
       mpPlayerFrame?.showCombatText(amount, type as any);
-    } else if (entityId === mpSelectedTargetId) {
+    } else if (targetEntityId === mpSelectedTargetId) {
       mpTargetFrame?.showCombatText(amount, type as any);
     }
   };
@@ -217,10 +221,22 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     return e?.targetable ?? null;
   };
 
-  mpPlayerFrame = new UnitFrame({ getPortrait });
+  const mpSetTarget = (t: Targetable) => {
+    clientEngine!.targetingSystem.currentTarget = t;
+    const entityId = t === player ? clientEngine!.localId : (() => {
+      for (const e of clientEngine!.getAllRemoteEntities()) {
+        if (e.targetable === t) return e.id;
+      }
+      return null;
+    })();
+    mpSelectedTargetId = entityId;
+    clientEngine!.selectedTargetId = entityId;
+    clientEngine!.sendSetTarget(entityId);
+  };
+  mpPlayerFrame = new UnitFrame({ getPortrait, onClick: mpSetTarget });
   playerFrameContainer.appendChild(mpPlayerFrame.element);
 
-  mpTargetFrame = new UnitFrame({ getPortrait });
+  mpTargetFrame = new UnitFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
   targetFrameContainer.appendChild(mpTargetFrame.element);
 
   // Action bar - abilities come from shared character data

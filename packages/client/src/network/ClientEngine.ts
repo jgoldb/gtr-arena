@@ -103,7 +103,7 @@ export class ClientEngine {
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
 
   // Event callbacks for UI
-  onCombatText?: (entityId: string, amount: number, type: string) => void;
+  onCombatText?: (sourceEntityId: string, targetEntityId: string, amount: number, type: string) => void;
   onCooldownUpdate?: (abilityId: string, remaining: number, total: number) => void;
   onError?: (message: string) => void;
   onTargetChanged?: (entityId: string | null) => void;
@@ -435,7 +435,7 @@ export class ClientEngine {
   }
 
   handleCombatEvent(msg: S2C_CombatEvent): void {
-    this.onCombatText?.(msg.targetEntityId, msg.amount, msg.combatType);
+    this.onCombatText?.(msg.sourceEntityId, msg.targetEntityId, msg.amount, msg.combatType);
   }
 
   handleAbilityEffect(msg: S2C_AbilityEffect): void {

@@ -85,6 +85,8 @@ export class TargetingSystem {
         this.currentTarget = targetable;
         return;
       }
+      // Solid environment mesh blocks LOS — stop looking behind it
+      if (this.isEnvironmentBlocker(hit.object)) break;
     }
 
     // Clicked on nothing targetable → clear target
@@ -107,12 +109,26 @@ export class TargetingSystem {
     for (const hit of intersects) {
       const targetable = this.findTargetable(hit.object);
       if (targetable) {
+        if (targetable === this.getLocalPlayer()) return null;
         this.currentTarget = targetable;
         return targetable;
       }
+      // Solid environment mesh blocks LOS — stop looking behind it
+      if (this.isEnvironmentBlocker(hit.object)) break;
     }
 
     return null;
+  }
+
+  /** Returns true if the object is a solid environment mesh (wall, pillar, door) that blocks targeting LOS. */
+  private isEnvironmentBlocker(obj: THREE.Object3D): boolean {
+    let current: THREE.Object3D | null = obj;
+    while (current) {
+      if (current.name === 'ground') return false;
+      if (current.name === 'map') return true;
+      current = current.parent;
+    }
+    return false;
   }
 
   private findTargetable(obj: THREE.Object3D): Targetable | null {

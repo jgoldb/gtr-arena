@@ -149,9 +149,10 @@ export class ServerEngine {
     this.regenSystem = new ServerRegenSystem(() => this.entities);
     this.combatSystem = new ServerCombatSystem(this.regenSystem, this.buffSystem, this.collision);
 
-    this.combatSystem.onCombatText = (target, amount, type) => {
+    this.combatSystem.onCombatText = (source, target, amount, type) => {
       this.pendingEvents.push({
         type: 'combat_event',
+        sourceEntityId: source.id,
         targetEntityId: target.id,
         amount,
         combatType: type,
@@ -349,6 +350,10 @@ export class ServerEngine {
       this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Already casting' });
       return;
     }
+    if (entity.isMoving) {
+      this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Cannot cast while moving' });
+      return;
+    }
 
     const validation = this.combatSystem.validateAbility(ability, entity, target);
     if (!validation.success) {
@@ -379,6 +384,7 @@ export class ServerEngine {
         if (this.combatSystem.rollMiss()) {
           this.pendingEvents.push({
             type: 'combat_event',
+            sourceEntityId: entity.id,
             targetEntityId: target.id,
             amount: 0,
             combatType: 'miss',
@@ -513,7 +519,7 @@ export class ServerEngine {
 
     if (isFriendly && ability.healAmount) {
       const healPerTick = Math.round(ability.healAmount / ability.channelTicks! * casting.damageMultiplier);
-      this.combatSystem.applyHeal(target, healPerTick);
+      this.combatSystem.applyHeal(entity, target, healPerTick);
       if (target.inCombat) {
         this.combatSystem.enterCombat(entity);
       }
@@ -716,7 +722,7 @@ export class ServerEngine {
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
-              type: 'combat_event', targetEntityId: entity.id, amount: actualDmg, combatType: 'damage',
+              type: 'combat_event', sourceEntityId: cloud.owner.id, targetEntityId: entity.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
           }
           this.combatSystem.enterCombat(entity);
@@ -783,7 +789,7 @@ export class ServerEngine {
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
-              type: 'combat_event', targetEntityId: entity.id, amount: actualDmg, combatType: 'damage',
+              type: 'combat_event', sourceEntityId: pool.owner.id, targetEntityId: entity.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
           }
           this.combatSystem.enterCombat(pool.owner);
@@ -822,7 +828,7 @@ export class ServerEngine {
           dot.target.hp = Math.max(0, dot.target.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
-              type: 'combat_event', targetEntityId: dot.target.id, amount: actualDmg, combatType: 'damage',
+              type: 'combat_event', sourceEntityId: dot.owner.id, targetEntityId: dot.target.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
           }
           this.combatSystem.enterCombat(dot.target);
@@ -866,7 +872,7 @@ export class ServerEngine {
             other.hp = Math.max(0, other.hp - dmg);
             if (dmg > 0) {
               this.pendingEvents.push({
-                type: 'combat_event', targetEntityId: other.id, amount: dmg, combatType: 'damage',
+                type: 'combat_event', sourceEntityId: aura.entity.id, targetEntityId: other.id, amount: dmg, combatType: 'damage',
               } as S2C_CombatEvent);
             }
             this.combatSystem.enterCombat(aura.entity);
@@ -882,7 +888,7 @@ export class ServerEngine {
           const dz = aura.entity.z - other.z;
           if (dx * dx + dz * dz <= meleeRange * meleeRange) {
             const heal = other === aura.entity ? 3 : 15;
-            this.combatSystem.applyHeal(other, heal);
+            this.combatSystem.applyHeal(aura.entity, other, heal);
           }
         }
 

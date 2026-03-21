@@ -131,6 +131,7 @@ export interface S2C_GameState {
 
 export interface S2C_CombatEvent {
   type: 'combat_event';
+  sourceEntityId: string;
   targetEntityId: string;
   amount: number;
   combatType: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge';

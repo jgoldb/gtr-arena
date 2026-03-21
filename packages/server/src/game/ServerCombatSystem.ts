@@ -23,7 +23,7 @@ export class ServerCombatSystem {
   private buffSystem: ServerBuffSystem;
   private collision: CollisionSystem;
 
-  onCombatText?: (target: ServerEntity, amount: number, type: CombatTextType) => void;
+  onCombatText?: (source: ServerEntity, target: ServerEntity, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: ServerEntity) => void;
 
   constructor(regenSystem: ServerRegenSystem, buffSystem: ServerBuffSystem, collision: CollisionSystem) {
@@ -205,7 +205,7 @@ export class ServerCombatSystem {
       const outcome = this.rollOutcome(attacker, target, false);
 
       if (outcome === 'miss') {
-        this.onCombatText?.(target, 0, 'miss');
+        this.onCombatText?.(attacker, target, 0, 'miss');
       } else {
         let baseDamage: number;
         if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
@@ -231,7 +231,7 @@ export class ServerCombatSystem {
         target.hp = Math.max(0, target.hp - actualDamage);
         if (damage > 0) this.onDirectDamageDealt?.(target);
         if (actualDamage > 0) {
-          this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+          this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
         }
 
         if (ability.appliesDebuff) {
@@ -265,7 +265,7 @@ export class ServerCombatSystem {
 
     const roll = Math.random();
     if (roll < ServerCombatSystem.MISS_CHANCE) {
-      this.onCombatText?.(target, 0, 'miss');
+      this.onCombatText?.(attacker, target, 0, 'miss');
       this.enterCombat(attacker);
       this.enterCombat(target);
       return;
@@ -280,7 +280,7 @@ export class ServerCombatSystem {
     target.hp = Math.max(0, target.hp - actualDamage);
     if (damage > 0) this.onDirectDamageDealt?.(target);
     if (actualDamage > 0) {
-      this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
+      this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage');
     }
 
     this.enterCombat(attacker);
@@ -303,7 +303,7 @@ export class ServerCombatSystem {
     target.hp = Math.max(0, target.hp - actualDamage);
     if (damage > 0) this.onDirectDamageDealt?.(target);
     if (actualDamage > 0) {
-      this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
+      this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage');
     }
     if (target.hp <= 0 && !target.dead) {
       target.die();
@@ -318,7 +318,7 @@ export class ServerCombatSystem {
     const { remaining, reflectDamage } = this.buffSystem.absorbDamage(target, damage);
     if (reflectDamage > 0 && attacker && !attacker.dead) {
       attacker.hp = Math.max(0, attacker.hp - reflectDamage);
-      this.onCombatText?.(attacker, reflectDamage, 'damage');
+      this.onCombatText?.(target, attacker, reflectDamage, 'damage');
       this.enterCombat(attacker);
       if (attacker.hp <= 0 && !attacker.dead) {
         attacker.die();
@@ -328,10 +328,10 @@ export class ServerCombatSystem {
     return remaining;
   }
 
-  applyHeal(target: ServerEntity, healAmount: number): void {
+  applyHeal(source: ServerEntity, target: ServerEntity, healAmount: number): void {
     if (target.dead) return;
     target.hp = Math.min(target.maxHp, target.hp + healAmount);
-    this.onCombatText?.(target, healAmount, 'heal');
+    this.onCombatText?.(source, target, healAmount, 'heal');
   }
 
   applyAutoAttackDamage(attacker: ServerEntity, target: ServerEntity, baseDamage: number): void {
@@ -340,9 +340,9 @@ export class ServerCombatSystem {
     const outcome = this.rollOutcome(attacker, target);
 
     if (outcome === 'miss') {
-      this.onCombatText?.(target, 0, 'miss');
+      this.onCombatText?.(attacker, target, 0, 'miss');
     } else if (outcome === 'dodge') {
-      this.onCombatText?.(target, 0, 'dodge');
+      this.onCombatText?.(attacker, target, 0, 'dodge');
     } else {
       const critMult = outcome === 'crit' ? 2 : 1;
       const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
@@ -352,7 +352,7 @@ export class ServerCombatSystem {
       target.hp = Math.max(0, target.hp - actualDamage);
       if (damage > 0) this.onDirectDamageDealt?.(target);
       if (actualDamage > 0) {
-        this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+        this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
       }
       if (target.hp <= 0 && !target.dead) {
         target.die();
