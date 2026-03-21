@@ -304,8 +304,14 @@ export class Engine {
         const dz = target.mesh.position.z - cloud.center.z;
         if (dx * dx + dz * dz <= cloud.radius * cloud.radius) {
           inCloud.add(target);
+          const isNew = !cloud.affectedTargets.has(target);
           this.buffSystem.apply(target, cloud.debuff);
           cloud.affectedTargets.add(target);
+          // Applying a hostile debuff enters both parties into combat
+          if (isNew) {
+            this.combatSystem.enterCombat(cloud.owner);
+            this.combatSystem.enterCombat(target);
+          }
         }
       }
 
@@ -323,7 +329,6 @@ export class Engine {
           if (target.dead) continue;
           target.hp = Math.max(0, target.hp - cloud.damagePerTick);
           this.combatSystem.onCombatText?.(target, cloud.damagePerTick, 'damage');
-          this.combatSystem.enterCombat(cloud.owner);
           this.combatSystem.enterCombat(target);
           if (target.hp <= 0 && !target.dead) {
             target.die();
