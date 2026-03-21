@@ -195,7 +195,7 @@ export const Discombobulate: Ability = {
   icon: '🌀',
   range: yardsToUnits(20),
   manaCost: 15,
-  cooldown: 0,
+  cooldown: 8,
   castTime: 1.5,
   damage: 0,
   requiresHostileTarget: true,

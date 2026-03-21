@@ -303,6 +303,11 @@ export class Engine {
       }
     }
 
+    // Non-channels: start a short interrupt cooldown; on success useAbility overwrites with the real one
+    if (!isChannel) {
+      this.combatSystem.setCooldown(ability.id, Engine.INTERRUPT_COOLDOWN);
+    }
+
     this.casting = {
       ability,
       target,
@@ -333,6 +338,8 @@ export class Engine {
     return { success: true };
   }
 
+  private static readonly INTERRUPT_COOLDOWN = 1; // seconds
+
   cancelCasting(): void {
     if (!this.casting) return;
     this.removeChannelAura();
@@ -343,6 +350,9 @@ export class Engine {
     if (!this.casting) return;
     const { ability, target } = this.casting;
     this.casting = null;
+
+    // Clear the interrupt cooldown so useAbility's validation passes
+    this.combatSystem.clearCooldown(ability.id);
 
     const result = this.combatSystem.useAbility(
       ability,

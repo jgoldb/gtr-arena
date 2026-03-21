@@ -149,10 +149,13 @@ export class ActionBar {
 
       // Circular cooldown sweep (clock-wipe from 12 o'clock, clockwise)
       if (onCooldown) {
-        const degrees = (cdRemaining / slot.ability.cooldown) * 360;
+        const totalCd = combat.getCooldownTotal(slot.ability.id);
+        const degrees = totalCd > 0 ? (cdRemaining / totalCd) * 360 : 0;
         overlay.style.background =
           `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`;
-        cdText.textContent = String(Math.ceil(cdRemaining));
+        cdText.textContent = cdRemaining < 10
+          ? cdRemaining.toFixed(1)
+          : String(Math.ceil(cdRemaining));
       } else {
         overlay.style.background = 'transparent';
         cdText.textContent = '';
@@ -322,42 +325,37 @@ export class ActionBar {
   }
 
   private showTooltip(ability: Ability, anchor: HTMLElement): void {
-    let rangeSpan = '';
-    if (ability.range !== undefined) {
-      const rangeYards = Math.round(ability.range / YARDS_TO_UNITS);
+    const hasRange = ability.range !== undefined;
+    const hasCooldown = ability.cooldown > 0;
+
+    let statsHtml = '';
+    if (hasRange) {
+      const rangeYards = Math.round(ability.range! / YARDS_TO_UNITS);
       const label = rangeYards <= 5 ? 'Melee Range' : `${rangeYards} yd range`;
-      rangeSpan = `<span>${label}</span>`;
+      statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${label}</div>`;
+    }
+    if (hasCooldown) {
+      statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${ability.cooldown}s cooldown</div>`;
     }
 
     this.tooltipEl.innerHTML = `
       <div style="
-        color: #ffd100;
-        font-size: 14px;
-        font-weight: bold;
-        margin-bottom: 4px;
-      ">${ability.name}</div>
-
-      <div style="
         display: flex;
         justify-content: space-between;
-        color: #aaa;
-        font-size: 11px;
-        margin-bottom: 2px;
+        align-items: baseline;
+        margin-bottom: 4px;
       ">
-        ${rangeSpan}
-        <span>${ability.manaCost} Mana</span>
+        <span style="color:#ffd100;font-size:14px;font-weight:bold;">${ability.name}</span>
+        <span style="color:#aaa;font-size:11px;margin-left:12px;">${ability.manaCost} Mana</span>
       </div>
 
-      <div style="
-        color: #aaa;
-        font-size: 11px;
-        margin-bottom: 6px;
-      ">${ability.cooldown}s cooldown</div>
+      ${statsHtml}
 
       <div style="
         color: #eee;
         font-size: 12px;
         line-height: 1.4;
+        margin-top: 4px;
       ">${ability.description}</div>
     `;
 

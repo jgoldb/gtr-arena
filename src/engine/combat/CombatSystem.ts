@@ -16,7 +16,7 @@ export interface CombatResult {
 export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge';
 
 export class CombatSystem {
-  private cooldowns = new Map<string, number>(); // ability id → remaining seconds
+  private cooldowns = new Map<string, { remaining: number; total: number }>(); // ability id → cooldown state
   private static readonly COMBAT_DURATION = 5; // seconds before leaving combat
   private static readonly MISS_CHANCE = 0.03; // 3% flat miss chance
   private combatTimers = new Map<Targetable, number>(); // entity → seconds remaining
@@ -90,12 +90,12 @@ export class CombatSystem {
   }
 
   update(dt: number): void {
-    for (const [id, remaining] of this.cooldowns) {
-      const next = remaining - dt;
+    for (const [id, cd] of this.cooldowns) {
+      const next = cd.remaining - dt;
       if (next <= 0) {
         this.cooldowns.delete(id);
       } else {
-        this.cooldowns.set(id, next);
+        cd.remaining = next;
       }
     }
 
@@ -115,7 +115,11 @@ export class CombatSystem {
   }
 
   getCooldownRemaining(abilityId: string): number {
-    return this.cooldowns.get(abilityId) ?? 0;
+    return this.cooldowns.get(abilityId)?.remaining ?? 0;
+  }
+
+  getCooldownTotal(abilityId: string): number {
+    return this.cooldowns.get(abilityId)?.total ?? 0;
   }
 
   clearCooldowns(): void {
@@ -259,7 +263,7 @@ export class CombatSystem {
       this.buffSystem.apply(attacker, ability.appliesSelfBuff);
     }
 
-    this.cooldowns.set(ability.id, ability.cooldown);
+    this.setCooldown(ability.id, ability.cooldown);
 
     return { success: true };
   }
@@ -300,8 +304,12 @@ export class CombatSystem {
 
   setCooldown(abilityId: string, duration: number): void {
     if (duration > 0) {
-      this.cooldowns.set(abilityId, duration);
+      this.cooldowns.set(abilityId, { remaining: duration, total: duration });
     }
+  }
+
+  clearCooldown(abilityId: string): void {
+    this.cooldowns.delete(abilityId);
   }
 
   /** Channel ticks cannot miss or be dodged; each tick rolls crit independently. */
