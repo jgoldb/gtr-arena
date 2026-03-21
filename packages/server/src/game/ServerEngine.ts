@@ -201,6 +201,12 @@ export class ServerEngine {
 
   setTarget(entityId: string, targetEntityId: string | null): void {
     this.targets.set(entityId, targetEntityId);
+
+    // Stop auto-attack if the player de-targets or switches to a different target
+    const aa = this.autoAttacks.get(entityId);
+    if (aa && (!targetEntityId || aa.target.id !== targetEntityId)) {
+      this.stopAutoAttack(entityId);
+    }
   }
 
   getTarget(entityId: string): ServerEntity | null {
@@ -625,6 +631,8 @@ export class ServerEngine {
 
   // ── Ability success effects ─────────────────────────────────────────
 
+  private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot'];
+
   private onAbilitySuccess(entity: ServerEntity, ability: Ability): void {
     this.pendingEvents.push({
       type: 'ability_effect',
@@ -650,6 +658,14 @@ export class ServerEngine {
     }
     if (ability.id === 'chemical-spill') {
       this.spawnChemicalPool(entity, yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 40, 60, 2, 6, 2);
+    }
+
+    // Melee abilities automatically engage auto-attack on the target
+    if (ServerEngine.MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {
+      const target = this.getTarget(entity.id);
+      if (target && target.isHostileTo(entity) && !target.dead) {
+        this.requestAutoAttack(entity.id, target.id);
+      }
     }
   }
 

@@ -25,6 +25,8 @@ export class CombatSystem {
   private collisionSystem: CollisionSystem;
   onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: Targetable) => void;
+  onEnterCombat?: (entity: Targetable) => void;
+  onLeaveCombat?: (entity: Targetable) => void;
 
   constructor(regenSystem: RegenSystem, buffSystem: BuffSystem, collisionSystem: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -34,8 +36,12 @@ export class CombatSystem {
 
   enterCombat(entity: Targetable): void {
     if (entity.dead) return;
+    const wasInCombat = entity.inCombat;
     entity.inCombat = true;
     this.combatTimers.set(entity, CombatSystem.COMBAT_DURATION);
+    if (!wasInCombat) {
+      this.onEnterCombat?.(entity);
+    }
   }
 
   isInCombat(entity: Targetable): boolean {
@@ -108,6 +114,7 @@ export class CombatSystem {
       if (next <= 0) {
         this.combatTimers.delete(entity);
         entity.inCombat = false;
+        this.onLeaveCombat?.(entity);
       } else {
         this.combatTimers.set(entity, next);
       }
@@ -127,8 +134,12 @@ export class CombatSystem {
   }
 
   leaveCombat(entity: Targetable): void {
+    const wasInCombat = entity.inCombat;
     entity.inCombat = false;
     this.combatTimers.delete(entity);
+    if (wasInCombat) {
+      this.onLeaveCombat?.(entity);
+    }
   }
 
   validateAbility(

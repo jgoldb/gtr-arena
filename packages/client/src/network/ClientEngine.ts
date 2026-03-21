@@ -107,6 +107,10 @@ export class ClientEngine {
   onCooldownUpdate?: (abilityId: string, remaining: number, total: number) => void;
   onError?: (message: string) => void;
   onTargetChanged?: (entityId: string | null) => void;
+  onEnterCombat?: (entityId: string) => void;
+  onLeaveCombat?: (entityId: string) => void;
+  onBuffApplied?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
+  onBuffExpired?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
 
   constructor(canvas: HTMLCanvasElement, network: NetworkManager, mapId: string, localEntityId: string, initialEntities: EntitySnapshot[]) {
     this.network = network;
@@ -351,7 +355,11 @@ export class ClientEngine {
         if (delta.mana !== undefined) pc.mana = delta.mana;
         if (delta.maxMana !== undefined) pc.maxMana = delta.maxMana;
         if (delta.dead !== undefined) pc.dead = delta.dead;
-        if (delta.inCombat !== undefined) pc.inCombat = delta.inCombat;
+        if (delta.inCombat !== undefined) {
+          if (delta.inCombat && !pc.inCombat) this.onEnterCombat?.(delta.id);
+          else if (!delta.inCombat && pc.inCombat) this.onLeaveCombat?.(delta.id);
+          pc.inCombat = delta.inCombat;
+        }
         if (delta.stunned !== undefined) { pc.stunned = delta.stunned; pc.setStunned(delta.stunned); }
         if (delta.charging !== undefined) pc.charging = delta.charging;
         if (delta.isAutoAttacking !== undefined) pc.setAutoAttacking(delta.isAutoAttacking);
@@ -424,6 +432,16 @@ export class ClientEngine {
   private applyBuffUpdates(buffSnapshots: EntityBuffSnapshot[]): void {
     for (const buffSnap of buffSnapshots) {
       if (buffSnap.entityId === this.localEntityId) {
+        // Detect buff transitions for combat text
+        const oldIds = new Set(this.localBuffs.map(b => b.id));
+        const newIds = new Set(buffSnap.buffs.map(b => b.id));
+        for (const b of buffSnap.buffs) {
+          if (!oldIds.has(b.id)) this.onBuffApplied?.(buffSnap.entityId, b);
+        }
+        for (const b of this.localBuffs) {
+          if (!newIds.has(b.id)) this.onBuffExpired?.(buffSnap.entityId, b);
+        }
+
         this.localBuffs = buffSnap.buffs;
         const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
         this.playerController.setAbilityBuffActive('crash-out', hasBuff('crash-out'));

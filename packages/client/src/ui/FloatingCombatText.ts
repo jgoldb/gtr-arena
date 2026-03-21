@@ -12,6 +12,8 @@ interface CombatTextEntry {
 const DURATION = 1.5; // seconds
 const RISE_SPEED = 60; // pixels per second
 const FONT_SIZE = 22;
+const STAGGER_SPACING = 26; // px between stacked entries
+const STAGGER_WINDOW = 0.4; // seconds — entries within this age count as overlapping
 
 export class FloatingCombatText {
   readonly element: HTMLElement;
@@ -28,6 +30,54 @@ export class FloatingCombatText {
       pointer-events: none;
       overflow: hidden;
     `;
+  }
+
+  /** Count recent entries on the same target to compute a vertical stagger offset. */
+  private getStaggerOffset(target: THREE.Object3D): number {
+    let count = 0;
+    for (const entry of this.entries) {
+      if (entry.target === target && entry.elapsed < STAGGER_WINDOW) count++;
+    }
+    return -(count * STAGGER_SPACING);
+  }
+
+  /** Spawn arbitrary text (buff/debuff names, combat state, etc.) */
+  spawnText(target: THREE.Object3D, text: string, color: string): void {
+    const el = document.createElement('div');
+    el.textContent = text;
+
+    const jitterX = (Math.random() - 0.5) * 30;
+    const fontSize = FONT_SIZE * 0.8;
+
+    el.style.cssText = `
+      position: absolute;
+      left: -9999px;
+      top: -9999px;
+      color: ${color};
+      font-size: ${fontSize}px;
+      font-weight: bold;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      text-shadow:
+        -1px -1px 0 #000,
+         1px -1px 0 #000,
+        -1px  1px 0 #000,
+         1px  1px 0 #000,
+         0 0 6px rgba(0,0,0,0.8);
+      white-space: nowrap;
+      pointer-events: none;
+      transform: translate(${jitterX}px, 0);
+      will-change: transform, opacity;
+    `;
+    this.element.appendChild(el);
+
+    this.entries.push({
+      element: el,
+      target,
+      offsetY: this.getStaggerOffset(target),
+      elapsed: 0,
+      jitterX,
+      isCrit: false,
+    });
   }
 
   spawn(target: THREE.Object3D, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge'): void {
@@ -92,7 +142,7 @@ export class FloatingCombatText {
     this.entries.push({
       element: el,
       target,
-      offsetY: 0,
+      offsetY: this.getStaggerOffset(target),
       elapsed: 0,
       jitterX,
       isCrit: type === 'crit',

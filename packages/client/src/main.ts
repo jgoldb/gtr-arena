@@ -240,6 +240,37 @@ function startMultiplayer(msg: S2C_GameStart): void {
     }
   };
 
+  clientEngine.onEnterCombat = (entityId) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '+Combat', '#cc3333');
+    }
+  };
+  clientEngine.onLeaveCombat = (entityId) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '-Combat', '#33cc33');
+    }
+  };
+
+  clientEngine.onBuffApplied = (entityId, buff) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) {
+        const color = buff.type === 'buff' ? '#3388ff' : '#ff6644';
+        mpCombatText.spawnText(mesh, `+${buff.name}`, color);
+      }
+    }
+  };
+  clientEngine.onBuffExpired = (entityId, buff) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawnText(mesh, `-${buff.name}`, '#888888');
+      }
+    }
+  };
+
   // Create UI elements for MP game
   setupMultiplayerUI(msg);
 
@@ -395,6 +426,17 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     onEscapeWhilePlaying: () => {
       if (clientEngine?.getLocalCastingState()) {
         clientEngine.sendCancelCast();
+        return true;
+      }
+      if (mpSelectedTargetId) {
+        mpSelectedTargetId = null;
+        if (clientEngine) {
+          clientEngine.selectedTargetId = null;
+          clientEngine.targetingSystem.currentTarget = null;
+          clientEngine.sendSetTarget(null);
+          clientEngine.sendStopAutoAttack();
+          clientEngine.onTargetChanged?.(null);
+        }
         return true;
       }
       return false;
@@ -726,6 +768,29 @@ async function startPlayground(): Promise<void> {
     else if (target === engine.targetingSystem.currentTarget) targetFrame.showCombatText(amount, type);
   };
 
+  engine.combatSystem.onEnterCombat = (entity) => {
+    if (entity === engine.playerController) {
+      combatText.spawnText(entity.mesh, '+Combat', '#cc3333');
+    }
+  };
+  engine.combatSystem.onLeaveCombat = (entity) => {
+    if (entity === engine.playerController) {
+      combatText.spawnText(entity.mesh, '-Combat', '#33cc33');
+    }
+  };
+
+  engine.buffSystem.onBuffApplied = (target, definition) => {
+    if (target === engine.playerController) {
+      const color = definition.type === 'buff' ? '#3388ff' : '#ff6644';
+      combatText.spawnText(target.mesh, `+${definition.name}`, color);
+    }
+  };
+  engine.buffSystem.onBuffExpired = (target, definition) => {
+    if (target === engine.playerController) {
+      combatText.spawnText(target.mesh, `-${definition.name}`, '#888888');
+    }
+  };
+
   // Death screen
   const deathScreen = document.createElement('div');
   pgDeathScreen = deathScreen;
@@ -761,11 +826,21 @@ async function startPlayground(): Promise<void> {
   document.body.appendChild(castBarContainer);
 
   // Helper: apply post-cast effects
+  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot'];
+
   function onAbilitySuccess(ability: Ability): void {
     engine.playerController.triggerAbilityAnimation(ability.id, engine.targetingSystem.currentTarget?.mesh.position.clone());
     if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 96, 2, engine.playerController);
     if (ability.id === 'sweep') engine.startSweepCharge();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 40, 60, 2, 6, engine.playerController, 2);
+
+    // Melee abilities automatically engage auto-attack on the target
+    if (MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && target.isHostileTo(engine.playerController) && !target.dead) {
+        engine.startAutoAttack(target);
+      }
+    }
   }
 
   engine.onCastComplete = (ability) => onAbilitySuccess(ability);
@@ -823,6 +898,11 @@ async function startPlayground(): Promise<void> {
     onEscapeWhilePlaying: () => {
       if (engine.isCasting()) {
         engine.cancelCasting();
+        return true;
+      }
+      if (engine.targetingSystem.currentTarget) {
+        engine.targetingSystem.currentTarget = null;
+        engine.stopAutoAttack();
         return true;
       }
       return false;
