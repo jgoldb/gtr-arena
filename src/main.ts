@@ -304,12 +304,17 @@ const actionBar = new ActionBar({
     if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) {
       engine.cancelCasting();
     }
+    // Auto self-cast: if ability can target friendlies and no target selected, use self
+    let target: import('./engine/types').Targetable | null = engine.targetingSystem.currentTarget;
+    if (!target && ability.requiresTarget && !ability.requiresHostileTarget) {
+      target = engine.playerController;
+    }
     if (ability.castTime) {
       // Start casting instead of instant use
       const result = engine.startCasting(
         ability,
         engine.playerController.mesh.rotation.y,
-        engine.targetingSystem.currentTarget
+        target
       );
       if (!result.success && result.errorMessage) {
         errorText.show(result.errorMessage);
@@ -320,7 +325,7 @@ const actionBar = new ActionBar({
         ability,
         engine.playerController,
         engine.playerController.mesh.rotation.y,
-        engine.targetingSystem.currentTarget
+        target
       );
       if (result.success) {
         onAbilitySuccess(ability);
@@ -344,9 +349,10 @@ const actionBar = new ActionBar({
       if (dist > ability.range!) return 'out-of-range';
     }
     if (ability.requiresTarget && !ability.requiresHostileTarget) {
-      const target = engine.targetingSystem.currentTarget;
-      if (!target || target.dead) return 'no-target';
-      if (ability.range) {
+      // Auto self-cast: no target → will cast on self, so skip no-target check
+      const target = engine.targetingSystem.currentTarget ?? player;
+      if (target.dead) return 'no-target';
+      if (ability.range && target !== player) {
         const dx = player.mesh.position.x - target.mesh.position.x;
         const dz = player.mesh.position.z - target.mesh.position.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
