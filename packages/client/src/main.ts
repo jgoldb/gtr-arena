@@ -531,10 +531,19 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     // Nameplates: local player + remote entities
     if (mpNameplates) {
       const remotes = clientEngine.getAllRemoteEntities();
-      const npcsTargetable = remotes
-        .map(e => makeTargetable(e.id))
-        .filter((t): t is Targetable => t !== null);
-      mpNameplates.update(player, npcsTargetable);
+      const debuffMap = new Map<Targetable, { icon: string; remaining: number; duration: number }[]>();
+      const npcsTargetable: Targetable[] = [];
+      for (const e of remotes) {
+        const t = e.targetable;
+        if (t) {
+          npcsTargetable.push(t);
+          const debuffs = e.buffs.filter(b => b.type === 'debuff');
+          if (debuffs.length > 0) {
+            debuffMap.set(t, debuffs.map(b => ({ icon: b.icon, remaining: b.remaining, duration: b.duration })));
+          }
+        }
+      }
+      mpNameplates.update(player, npcsTargetable, (target) => debuffMap.get(target) ?? []);
     }
 
     // Cast bar
@@ -997,7 +1006,9 @@ async function startPlayground(): Promise<void> {
     }
 
     combatText.update(dt);
-    nameplates.update(engine.playerController, engine.getNpcs());
+    nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
+      return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
+    });
     pgDebugHUD?.update(dt);
 
     if (engine.playerController.dead && !deathScreenShown) { deathScreenShown = true; deathScreen.style.display = 'block'; }
