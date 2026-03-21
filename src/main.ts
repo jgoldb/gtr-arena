@@ -8,7 +8,7 @@ import { renderPortraits } from './ui/PortraitRenderer';
 import { ActionBar } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
-import type { Ability } from './engine/combat/Ability';
+import { DebugStun, FartBombDebuff, yardsToUnits, type Ability } from './engine/combat/Ability';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas element not found');
@@ -77,6 +77,36 @@ gatesBtn.addEventListener('click', () => {
   }
 });
 npcContainer.appendChild(gatesBtn);
+
+// UI — Toggle Stun test button (in NPC panel)
+const stunBtn = document.createElement('button');
+stunBtn.textContent = 'Stun Target';
+stunBtn.style.cssText = `
+  padding: 6px 10px;
+  font-size: 13px;
+  background: rgba(160, 130, 40, 0.85);
+  color: #ddd;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+  width: 100%;
+  margin-top: 4px;
+`;
+stunBtn.addEventListener('click', () => {
+  const target = engine.targetingSystem.currentTarget;
+  if (!target || target.dead) return;
+  if (engine.buffSystem.isStunned(target)) {
+    engine.buffSystem.remove(target, 'debug-stun');
+    stunBtn.textContent = 'Stun Target';
+    stunBtn.style.background = 'rgba(160, 130, 40, 0.85)';
+  } else {
+    engine.buffSystem.apply(target, DebugStun);
+    stunBtn.textContent = 'Unstun Target';
+    stunBtn.style.background = 'rgba(40, 130, 160, 0.85)';
+  }
+});
+npcContainer.appendChild(stunBtn);
 
 // UI — unit frames (top-left)
 const playerFrame = new UnitFrame({ getPortrait });
@@ -163,6 +193,17 @@ const actionBar = new ActionBar({
     );
     if (result.success) {
       engine.playerController.triggerAbilityAnimation(ability.id);
+      if (ability.id === 'fart-bomb') {
+        engine.spawnGasCloud(
+          engine.playerController.mesh.position.clone(),
+          yardsToUnits(5),
+          8,
+          FartBombDebuff,
+          96,
+          2,
+          engine.playerController
+        );
+      }
     } else if (result.errorMessage) {
       errorText.show(result.errorMessage);
     }
@@ -184,7 +225,7 @@ const actionBar = new ActionBar({
     return 'usable';
   },
   getCombatSystem: () => engine.combatSystem,
-  isDisabled: () => engine.playerController.dead,
+  isDisabled: () => engine.playerController.dead || engine.playerController.stunned,
 });
 document.body.appendChild(actionBar.element);
 

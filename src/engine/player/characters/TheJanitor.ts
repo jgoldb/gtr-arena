@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from './CharacterModel';
-import { BucketSplash, Mop, CrashOut } from '../../combat/Ability';
+import { BucketSplash, Mop, BigBoot, FartBomb, CrashOut } from '../../combat/Ability';
 
 const SKIN = 0xb8896e;
 const OVERALLS = 0x4a5568;
@@ -25,7 +25,7 @@ export class TheJanitor extends CharacterModel {
   readonly autoAttackRange = 1.8;
   readonly critChance = 0.22;
   readonly dodgeChance = 0.17;
-  readonly abilities = [BucketSplash, Mop, CrashOut] as const;
+  readonly abilities = [BucketSplash, Mop, BigBoot, FartBomb, CrashOut] as const;
 
   private declare mopHead: THREE.Mesh;
   private declare bucketWater: THREE.Mesh;
@@ -434,6 +434,8 @@ export class TheJanitor extends CharacterModel {
 
   protected override getAbilityAnimDuration(abilityId: string): number {
     if (abilityId === 'mop') return 0.5;
+    if (abilityId === 'big-boot') return 0.55;
+    if (abilityId === 'fart-bomb') return 0.6;
     return 0.6; // bucket-splash default
   }
 
@@ -442,6 +444,10 @@ export class TheJanitor extends CharacterModel {
       this.animateBucketSplash(t);
     } else if (abilityId === 'mop') {
       this.animateMopStrike(t);
+    } else if (abilityId === 'big-boot') {
+      this.animateBigBoot(t);
+    } else if (abilityId === 'fart-bomb') {
+      this.animateFartBomb(t);
     } else if (abilityId === 'crash-out') {
       this.animateCrashOut(t);
     }
@@ -542,6 +548,90 @@ export class TheJanitor extends CharacterModel {
     this.bodyGroup.rotation.x += bodyRotX;
     this.bodyGroup.rotation.y += bodyRotY;
     this.bodyGroup.position.y += bodyY;
+  }
+
+  private animateBigBoot(t: number): void {
+    let rightLegX: number;
+    let bodyRotX: number;
+    let bodyY: number;
+    let leftLegX: number;
+    let armSpread: number;
+
+    if (t < 0.25) {
+      // Wind up: shift weight back, raise right leg
+      const p = t / 0.25;
+      const ease = p * p;
+      rightLegX = -0.6 * ease;
+      leftLegX = 0.15 * ease;
+      bodyRotX = -0.12 * ease;
+      bodyY = -0.03 * ease;
+      armSpread = 0.2 * ease;
+    } else if (t < 0.50) {
+      // Kick: thrust right leg forward hard
+      const p = (t - 0.25) / 0.25;
+      const ease = 1 - Math.pow(1 - p, 3);
+      rightLegX = -0.6 + 2.2 * ease;
+      leftLegX = 0.15 + 0.05 * ease;
+      bodyRotX = -0.12 + 0.30 * ease;
+      bodyY = -0.03 - 0.02 * ease;
+      armSpread = 0.2 + 0.3 * ease;
+    } else {
+      // Recovery: return to standing
+      const p = (t - 0.50) / 0.50;
+      const ease = p * p * (3 - 2 * p);
+      rightLegX = 1.6 * (1 - ease);
+      leftLegX = 0.2 * (1 - ease);
+      bodyRotX = 0.18 * (1 - ease);
+      bodyY = -0.05 * (1 - ease);
+      armSpread = 0.5 * (1 - ease);
+    }
+
+    this.rightLegGroup.rotation.x += rightLegX;
+    this.leftLegGroup.rotation.x += leftLegX;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.bodyGroup.position.y += bodyY;
+    this.leftArmGroup.rotation.z -= armSpread;
+    this.rightArmGroup.rotation.z += armSpread;
+  }
+
+  private animateFartBomb(t: number): void {
+    let bodyY: number;
+    let bodyRotX: number;
+    let legBend: number;
+    let armTense: number;
+
+    if (t < 0.30) {
+      // Crouch down — tense up
+      const p = t / 0.30;
+      const ease = p * p;
+      bodyY = -0.10 * ease;
+      bodyRotX = 0.15 * ease;
+      legBend = 0.3 * ease;
+      armTense = -0.15 * ease;
+    } else if (t < 0.50) {
+      // Hold / release — slight jolt
+      const p = (t - 0.30) / 0.20;
+      const ease = 1 - Math.pow(1 - p, 3);
+      bodyY = -0.10 + 0.04 * ease;
+      bodyRotX = 0.15 - 0.08 * ease;
+      legBend = 0.3 + 0.05 * ease;
+      armTense = -0.15 - 0.1 * ease;
+    } else {
+      // Spring back up
+      const p = (t - 0.50) / 0.50;
+      const ease = p * p * (3 - 2 * p);
+      bodyY = -0.06 * (1 - ease);
+      bodyRotX = 0.07 * (1 - ease);
+      legBend = 0.35 * (1 - ease);
+      armTense = -0.25 * (1 - ease);
+    }
+
+    this.bodyGroup.position.y += bodyY;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.leftLegGroup.rotation.x += legBend;
+    this.rightLegGroup.rotation.x += legBend;
+    this.leftArmGroup.rotation.z += armTense;
+    this.rightArmGroup.rotation.z -= armTense;
   }
 
   private animateCrashOut(t: number): void {
@@ -650,6 +740,16 @@ export class TheJanitor extends CharacterModel {
         (child.material as THREE.MeshStandardMaterial).emissive.setRGB(0, 0, 0);
       }
     });
+  }
+
+  protected override animateStun(time: number, weight: number): void {
+    super.animateStun(time, weight);
+
+    // Mop droops and sways limply
+    if (this.mopHead) {
+      this.mopHead.rotation.z = Math.sin(time * 1.8) * 0.3 * weight;
+      this.mopHead.rotation.x = 0.2 * weight;
+    }
   }
 
   protected override animateDeath(t: number): void {

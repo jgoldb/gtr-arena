@@ -27,6 +27,8 @@ export class NpcController implements Targetable {
   private deathTimer = 0;
   private characterModel: CharacterModel;
 
+  stunned = false;
+
   // NPC auto-attack
   autoAttackTarget: Targetable | null = null;
   onAutoAttackHit?: (attacker: Targetable, target: Targetable, damage: number) => void;
@@ -67,6 +69,11 @@ export class NpcController implements Targetable {
     return this.characterModel.dodgeChance;
   }
 
+  setStunned(active: boolean): void {
+    this.stunned = active;
+    this.characterModel.setStunned(active);
+  }
+
   die(): void {
     if (this.dead) return;
     this.dead = true;
@@ -99,9 +106,9 @@ export class NpcController implements Targetable {
     }
     this.wasInCombat = this.inCombat;
 
-    // Auto-attack logic
+    // Auto-attack logic (stunned NPCs cannot attack)
     const target = this.autoAttackTarget;
-    if (this.inCombat && target && !target.dead) {
+    if (this.inCombat && target && !target.dead && !this.stunned) {
       const dx = target.mesh.position.x - this.mesh.position.x;
       const dz = target.mesh.position.z - this.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);

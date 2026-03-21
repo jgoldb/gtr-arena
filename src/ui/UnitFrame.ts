@@ -27,6 +27,8 @@ export class UnitFrame {
   private lastModelName = '';
   private combatTextEl: HTMLElement;
   private combatTextTimer = -1; // -1 = inactive
+  private tooltipEl: HTMLElement;
+  private tooltipHoveredEl: HTMLElement | null = null;
 
   constructor(options?: UnitFrameOptions) {
     this.localPlayer = options?.localPlayer;
@@ -41,6 +43,8 @@ export class UnitFrame {
       width: 260px;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       display: none;
+      cursor: default;
+      user-select: none;
     `;
 
     // Outer flex: portrait | info column
@@ -153,6 +157,24 @@ export class UnitFrame {
     this.debuffTray = document.createElement('div');
     this.debuffTray.style.cssText = 'display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px;';
     this.element.appendChild(this.debuffTray);
+
+    // Shared tooltip for buff/debuff icons
+    this.tooltipEl = document.createElement('div');
+    this.tooltipEl.style.cssText = `
+      position: fixed;
+      z-index: 400;
+      pointer-events: none;
+      display: none;
+      min-width: 160px;
+      max-width: 240px;
+      background: linear-gradient(to bottom, rgba(20, 12, 28, 0.97), rgba(10, 6, 16, 0.97));
+      border: 1px solid #5535aa;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
+    `;
+    document.body.appendChild(this.tooltipEl);
   }
 
   private createBar(
@@ -208,6 +230,7 @@ export class UnitFrame {
       background: rgba(80, 80, 100, 0.8);
       border-radius: 2px;
       overflow: hidden;
+      cursor: default;
       ${isDebuff ? 'border: 1.5px solid #cc2222;' : 'border: 1px solid rgba(255,255,255,0.2);'}
     `;
 
@@ -239,7 +262,59 @@ export class UnitFrame {
     `;
     icon.appendChild(timer);
 
+    // Tooltip hover
+    icon.addEventListener('mouseenter', () => {
+      this.tooltipHoveredEl = icon;
+      this.refreshTooltip(icon);
+    });
+    icon.addEventListener('mouseleave', () => {
+      if (this.tooltipHoveredEl === icon) {
+        this.tooltipHoveredEl = null;
+        this.tooltipEl.style.display = 'none';
+      }
+    });
+
     return icon;
+  }
+
+  private refreshTooltip(icon: HTMLElement): void {
+    const aura = (icon as any)._aura as ActiveBuff | undefined;
+    if (!aura) {
+      this.tooltipEl.style.display = 'none';
+      return;
+    }
+
+    const remaining = Math.ceil(aura.remaining);
+    const durationLabel = remaining > 99990 ? '' : `<div style="
+      color: #aaa;
+      font-size: 11px;
+      margin-top: 4px;
+    ">${remaining} second${remaining !== 1 ? 's' : ''} remaining</div>`;
+
+    this.tooltipEl.innerHTML = `
+      <div style="
+        color: #ffd100;
+        font-size: 14px;
+        font-weight: bold;
+        margin-bottom: 4px;
+      ">${aura.definition.name}</div>
+      <div style="
+        color: #eee;
+        font-size: 12px;
+        line-height: 1.4;
+      ">${aura.definition.description}</div>
+      ${durationLabel}
+    `;
+
+    // Position below the icon
+    const rect = icon.getBoundingClientRect();
+    this.tooltipEl.style.display = 'block';
+    const tipW = this.tooltipEl.offsetWidth;
+    let left = rect.left + rect.width / 2 - tipW / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - tipW - 8));
+    this.tooltipEl.style.left = `${left}px`;
+    this.tooltipEl.style.top = `${rect.bottom + 6}px`;
+    this.tooltipEl.style.bottom = '';
   }
 
   private updateAuraTray(
@@ -259,6 +334,7 @@ export class UnitFrame {
       if (i < auras.length) {
         const el = pool[i];
         const aura = auras[i];
+        (el as any)._aura = aura;
         el.style.display = 'flex';
         (el.children[0] as HTMLElement).textContent = aura.definition.icon;
         // Duration sweep: fills up as time elapses (opposite of cooldown drain)
@@ -271,9 +347,17 @@ export class UnitFrame {
             ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
             : 'transparent';
         (el.children[2] as HTMLElement).textContent = Math.ceil(aura.remaining).toString();
-        el.title = `${aura.definition.name}\n${aura.definition.description}`;
+        // Refresh tooltip if this icon is hovered
+        if (this.tooltipHoveredEl === el) {
+          this.refreshTooltip(el);
+        }
       } else {
         pool[i].style.display = 'none';
+        (pool[i] as any)._aura = undefined;
+        if (this.tooltipHoveredEl === pool[i]) {
+          this.tooltipHoveredEl = null;
+          this.tooltipEl.style.display = 'none';
+        }
       }
     }
   }

@@ -118,7 +118,13 @@ export class PlayerController implements Targetable {
     this.characterModel.setAbilityBuffActive(buffId, active);
   }
 
+  setStunned(active: boolean): void {
+    this.stunned = active;
+    this.characterModel.setStunned(active);
+  }
+
   movementSpeedModifier = 1;
+  stunned = false;
 
   die(): void {
     if (this.dead) return;
@@ -151,6 +157,32 @@ export class PlayerController implements Targetable {
         isMoving: false,
         isGrounded: this.grounded,
         velocityY: 0,
+        turnSpeed: 0,
+        speedMultiplier: 1,
+        strafeDirection: 0,
+      });
+      return;
+    }
+
+    if (this.stunned) {
+      // No movement or input, just animate the stun
+      this.velocityY -= this.gravity * deltaTime;
+      this.mesh.position.y += this.velocityY * deltaTime;
+      const resolved = this.mapManager.collision.resolve(
+        this.mesh.position.x, this.mesh.position.z,
+        this.mesh.position.y, this.collisionRadius
+      );
+      this.mesh.position.x = resolved.x;
+      this.mesh.position.z = resolved.z;
+      if (this.mesh.position.y <= resolved.groundY) {
+        this.mesh.position.y = resolved.groundY;
+        this.velocityY = 0;
+        this.grounded = true;
+      }
+      this.characterModel.update(deltaTime, {
+        isMoving: false,
+        isGrounded: this.grounded,
+        velocityY: this.velocityY,
         turnSpeed: 0,
         speedMultiplier: 1,
         strafeDirection: 0,

@@ -514,6 +514,26 @@ export class DrRetardo extends CharacterModel {
     }
   }
 
+  protected override animateStun(time: number, weight: number): void {
+    super.animateStun(time, weight);
+
+    // Hair flops around wildly
+    for (let i = 0; i < this.hairMeshes.length; i++) {
+      const hair = this.hairMeshes[i];
+      hair.position.y = hair.userData.baseY +
+        Math.sin(time * 2.5 + i * 1.2) * 0.03 * weight;
+    }
+
+    // Flask swings erratically — liquid sloshes
+    if (this.flaskLiquid) {
+      (this.flaskLiquid.material as THREE.MeshStandardMaterial).emissiveIntensity =
+        0.6 + Math.sin(time * 7) * 0.6 * weight;
+    }
+    if (this.flaskLight) {
+      this.flaskLight.intensity = 0.3 + Math.sin(time * 7) * 0.4 * weight;
+    }
+  }
+
   protected override getSwingDuration(): number {
     return 0.35;
   }

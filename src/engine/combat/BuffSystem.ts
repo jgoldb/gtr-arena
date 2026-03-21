@@ -1,7 +1,7 @@
 import type { Targetable } from '../types';
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent';
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
 }
 
@@ -97,6 +97,12 @@ export class BuffSystem {
       }
     }
     return mult;
+  }
+
+  isStunned(target: Targetable): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'stun'));
   }
 
   getAutoAttackDamageTakenMultiplier(target: Targetable): number {

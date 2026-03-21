@@ -67,6 +67,62 @@ export const Mop: Ability = {
   bonusDamageRequiresDebuff: 'covered-in-piss',
 };
 
+export const DebugStun: BuffDefinition = {
+  id: 'debug-stun',
+  name: 'Stunned',
+  icon: '⭐',
+  duration: 99999,
+  type: 'debuff',
+  description: 'Stunned.',
+  effects: [{ type: 'stun', value: 0 }],
+};
+
+export const BigBootStun: BuffDefinition = {
+  id: 'big-boot',
+  name: 'Big Boot',
+  icon: '🥾',
+  duration: 3,
+  type: 'debuff',
+  description: 'Stunned.',
+  effects: [{ type: 'stun', value: 0 }],
+};
+
+export const BigBoot: Ability = {
+  id: 'big-boot',
+  name: 'Big Boot',
+  icon: '🥾',
+  range: yardsToUnits(5),
+  manaCost: 10,
+  cooldown: 18,
+  damage: 0,
+  requiresHostileTarget: true,
+  description:
+    'Kick the target right in the neck, stunning them for 3 seconds.',
+  appliesDebuff: BigBootStun,
+};
+
+export const FartBombDebuff: BuffDefinition = {
+  id: 'fart-bomb',
+  name: 'Fart Bomb',
+  icon: '💨',
+  duration: 8,
+  type: 'debuff',
+  description: 'Slowed by 30%, taking damage over time.',
+  effects: [{ type: 'movementSpeedPercent', value: -30 }],
+};
+
+export const FartBomb: Ability = {
+  id: 'fart-bomb',
+  name: 'Fart Bomb',
+  icon: '💨',
+  manaCost: 10,
+  cooldown: 8,
+  damage: 0,
+  requiresHostileTarget: false,
+  description:
+    'Emit a cloud of toxic gas that poisons and slows enemies by 30%. Deals 96 damage over 8 seconds.',
+};
+
 export const CrashOutBuff: BuffDefinition = {
   id: 'crash-out',
   name: 'Crash Out',

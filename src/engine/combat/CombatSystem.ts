@@ -5,7 +5,7 @@ import type { RegenSystem } from './RegenSystem';
 import type { BuffSystem } from './BuffSystem';
 import type { CollisionSystem } from '../physics/CollisionSystem';
 
-export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los';
+export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned';
 
 export interface CombatResult {
   success: boolean;
@@ -69,7 +69,8 @@ export class CombatSystem {
     const targetFacingAttacker = this.isFacing(
       target.mesh.position, target.mesh.rotation.y, attacker.mesh.position
     );
-    if (targetFacingAttacker && roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
+    const targetStunned = this.buffSystem.isStunned(target);
+    if (targetFacingAttacker && !targetStunned && roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
     if (Math.random() < attacker.critChance) return 'crit';
     return 'normal';
   }
@@ -130,6 +131,11 @@ export class CombatSystem {
     }
     if (target?.dead) {
       return { success: false, error: 'dead', errorMessage: 'Target is dead' };
+    }
+
+    // Stun check
+    if (this.buffSystem.isStunned(attacker)) {
+      return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     }
 
     // Check cooldown

@@ -60,6 +60,11 @@ export abstract class CharacterModel {
   protected abilityAnimTime = -1; // -1 = not playing
   protected abilityAnimId = '';
 
+  // Stun animation state
+  protected stunActive = false;
+  protected stunWeight = 0;
+  protected stunTime = 0;
+
   // Death animation
   private static readonly DEATH_DURATION = 1.5;
   protected deathTime = -1; // -1 = alive, >= 0 = seconds since death
@@ -152,6 +157,27 @@ export abstract class CharacterModel {
       this.deathTime += dt;
       const t = Math.min(1, this.deathTime / CharacterModel.DEATH_DURATION);
       this.animateDeath(t);
+      return;
+    }
+
+    // Stun animation blend
+    const wantStun = this.stunActive ? 1 : 0;
+    this.stunWeight += (wantStun - this.stunWeight) * Math.min(1, 8 * dt);
+    if (this.stunActive) this.stunTime += dt;
+
+    // When fully stunned, override normal animation
+    if (this.stunWeight > 0.01) {
+      // Reset all bone transforms
+      this.leftArmGroup.rotation.set(0, 0, 0);
+      this.rightArmGroup.rotation.set(0, 0, 0);
+      this.leftLegGroup.rotation.set(0, 0, 0);
+      this.rightLegGroup.rotation.set(0, 0, 0);
+      this.bodyGroup.rotation.set(0, 0, 0);
+      this.bodyGroup.position.y = 0;
+      this.headGroup.rotation.set(0, 0, 0);
+
+      this.animateStun(this.stunTime, this.stunWeight);
+      this.onAnimate(dt, input);
       return;
     }
 
@@ -275,6 +301,13 @@ export abstract class CharacterModel {
 
   protected onAnimate(_dt: number, _input: AnimationInput): void {}
 
+  setStunned(active: boolean): void {
+    this.stunActive = active;
+    if (!active) {
+      this.stunTime = 0;
+    }
+  }
+
   setAbilityBuffActive(_buffId: string, _active: boolean): void {}
 
   protected getSwingDuration(): number {
@@ -285,6 +318,34 @@ export abstract class CharacterModel {
   protected animateAttackSwing(_t: number, _alternateArm: boolean): void {}
   protected getAbilityAnimDuration(_abilityId: string): number { return 0.6; }
   protected animateAbilityUse(_abilityId: string, _t: number): void {}
+
+  protected animateStun(time: number, weight: number): void {
+    const w = weight;
+
+    // Body sways in a wobbly circular pattern — barely keeping balance
+    const swayX = Math.sin(time * 2.3) * 0.18 + Math.sin(time * 5.1) * 0.06;
+    const swayZ = Math.cos(time * 1.9) * 0.15 + Math.cos(time * 4.3) * 0.05;
+    this.bodyGroup.rotation.x += swayX * w;
+    this.bodyGroup.rotation.z += swayZ * w;
+    this.bodyGroup.position.y -= 0.06 * w; // slight crouch
+
+    // Head lolls around loosely
+    this.headGroup.rotation.x += (Math.sin(time * 3.1 + 1.0) * 0.25 + Math.sin(time * 6.7) * 0.08) * w;
+    this.headGroup.rotation.z += (Math.cos(time * 2.7 + 0.5) * 0.3 + Math.cos(time * 5.9) * 0.1) * w;
+    this.headGroup.rotation.y += Math.sin(time * 2.0) * 0.15 * w;
+
+    // Arms hang limp and swing with body momentum
+    this.leftArmGroup.rotation.x += Math.sin(time * 2.3 + 0.8) * 0.2 * w;
+    this.leftArmGroup.rotation.z -= (0.25 + Math.sin(time * 1.7) * 0.15) * w;
+    this.rightArmGroup.rotation.x += Math.sin(time * 2.3 - 0.8) * 0.2 * w;
+    this.rightArmGroup.rotation.z += (0.25 + Math.cos(time * 1.7) * 0.15) * w;
+
+    // Knees buckle — legs slightly bent and wobbly
+    this.leftLegGroup.rotation.x += (0.15 + Math.sin(time * 3.5) * 0.08) * w;
+    this.rightLegGroup.rotation.x += (0.15 + Math.cos(time * 3.5) * 0.08) * w;
+    this.leftLegGroup.rotation.z -= 0.08 * w;
+    this.rightLegGroup.rotation.z += 0.08 * w;
+  }
 
   protected animateDeath(t: number): void {
     // Reset all bones

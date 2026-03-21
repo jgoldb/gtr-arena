@@ -4,6 +4,7 @@ import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
 import type { Ability } from './combat/Ability';
+import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
@@ -12,6 +13,21 @@ import { CombatSystem } from './combat/CombatSystem';
 import { RegenSystem } from './combat/RegenSystem';
 import { BuffSystem } from './combat/BuffSystem';
 import type { Targetable } from './types';
+
+interface ActiveGasCloud {
+  group: THREE.Group;
+  puffs: THREE.Mesh[];
+  center: THREE.Vector3;
+  radius: number;
+  duration: number;
+  elapsed: number;
+  debuff: BuffDefinition;
+  damagePerTick: number;
+  tickInterval: number;
+  nextTickAt: number;
+  owner: Targetable;
+  affectedTargets: Set<Targetable>;
+}
 
 export class Engine {
   readonly scene: THREE.Scene;
@@ -27,6 +43,7 @@ export class Engine {
   readonly buffSystem: BuffSystem;
   readonly combatSystem: CombatSystem;
   private readonly npcs: NpcController[] = [];
+  private readonly gasClouds: ActiveGasCloud[] = [];
   private autoAttacking = false;
   private autoAttackTimer = 0;
   private autoAttackTarget: Targetable | null = null;
@@ -96,6 +113,7 @@ export class Engine {
   }
 
   loadMap(id: string): void {
+    this.clearGasClouds();
     this.clearNpcs();
     this.mapManager.loadMap(id);
     this.playerController.respawn();
@@ -131,6 +149,10 @@ export class Engine {
       }
       if (this.autoAttackTarget === npc) {
         this.stopAutoAttack();
+      }
+      // Remove from any active gas clouds
+      for (const cloud of this.gasClouds) {
+        cloud.affectedTargets.delete(npc);
       }
       this.buffSystem.clearEntity(npc);
       this.npcs.splice(idx, 1);
@@ -173,6 +195,195 @@ export class Engine {
 
   resetAutoAttackTimer(): void {
     this.autoAttackTimer = 0;
+  }
+
+  spawnGasCloud(
+    position: THREE.Vector3,
+    radius: number,
+    duration: number,
+    debuff: BuffDefinition,
+    totalDamage: number,
+    tickInterval: number,
+    owner: Targetable
+  ): void {
+    const tickCount = Math.floor(duration / tickInterval);
+    const damagePerTick = Math.round(totalDamage / tickCount);
+
+    const group = new THREE.Group();
+    group.position.set(position.x, 0.02, position.z);
+
+    // Base disc
+    const baseMat = new THREE.MeshStandardMaterial({
+      color: 0x556b2f,
+      transparent: true,
+      opacity: 0.2,
+      roughness: 1.0,
+      depthWrite: false,
+    });
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, 0.04, 24),
+      baseMat
+    );
+    base.position.y = 0.02;
+    base.renderOrder = 1;
+    group.add(base);
+
+    // Gas puff spheres
+    const puffs: THREE.Mesh[] = [];
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const r = radius * (0.25 + Math.random() * 0.6);
+      const size = 0.3 + Math.random() * 0.5;
+      const puffMat = new THREE.MeshStandardMaterial({
+        color: 0x7a8b3a,
+        transparent: true,
+        opacity: 0.18 + Math.random() * 0.12,
+        roughness: 1.0,
+        depthWrite: false,
+        emissive: 0x2a3b0a,
+        emissiveIntensity: 0.3,
+      });
+      const puff = new THREE.Mesh(
+        new THREE.SphereGeometry(size, 8, 6),
+        puffMat
+      );
+      puff.position.set(
+        Math.cos(angle) * r,
+        0.15 + Math.random() * 0.35,
+        Math.sin(angle) * r
+      );
+      puff.renderOrder = 2;
+      // Store animation data
+      puff.userData.orbitAngle = angle;
+      puff.userData.orbitRadius = r;
+      puff.userData.orbitSpeed = 0.3 + Math.random() * 0.4;
+      puff.userData.baseY = puff.position.y;
+      puff.userData.baseOpacity = (puff.material as THREE.MeshStandardMaterial).opacity;
+      puff.userData.baseScale = 0.8 + Math.random() * 0.4;
+      puff.scale.setScalar(puff.userData.baseScale);
+      group.add(puff);
+      puffs.push(puff);
+    }
+
+    this.scene.add(group);
+
+    this.gasClouds.push({
+      group,
+      puffs,
+      center: new THREE.Vector3(position.x, 0, position.z),
+      radius,
+      duration,
+      elapsed: 0,
+      debuff,
+      damagePerTick,
+      tickInterval,
+      nextTickAt: tickInterval,
+      owner,
+      affectedTargets: new Set(),
+    });
+  }
+
+  private updateGasClouds(dt: number): void {
+    for (let i = this.gasClouds.length - 1; i >= 0; i--) {
+      const cloud = this.gasClouds[i];
+      cloud.elapsed += dt;
+
+      // Collect all hostile targets
+      const targets: Targetable[] = [];
+      if (cloud.owner === this.playerController) {
+        for (const npc of this.npcs) targets.push(npc);
+      } else {
+        targets.push(this.playerController);
+      }
+
+      // Determine who is currently in the cloud
+      const inCloud = new Set<Targetable>();
+      for (const target of targets) {
+        if (target.dead) continue;
+        const dx = target.mesh.position.x - cloud.center.x;
+        const dz = target.mesh.position.z - cloud.center.z;
+        if (dx * dx + dz * dz <= cloud.radius * cloud.radius) {
+          inCloud.add(target);
+          this.buffSystem.apply(target, cloud.debuff);
+          cloud.affectedTargets.add(target);
+        }
+      }
+
+      // Remove debuff from targets that left
+      for (const target of cloud.affectedTargets) {
+        if (!inCloud.has(target) || target.dead) {
+          this.buffSystem.remove(target, cloud.debuff.id);
+          cloud.affectedTargets.delete(target);
+        }
+      }
+
+      // Damage ticks
+      while (cloud.elapsed >= cloud.nextTickAt && cloud.nextTickAt <= cloud.duration) {
+        for (const target of cloud.affectedTargets) {
+          if (target.dead) continue;
+          target.hp = Math.max(0, target.hp - cloud.damagePerTick);
+          this.combatSystem.onCombatText?.(target, cloud.damagePerTick, 'damage');
+          this.combatSystem.enterCombat(cloud.owner);
+          this.combatSystem.enterCombat(target);
+          if (target.hp <= 0 && !target.dead) {
+            target.die();
+          }
+        }
+        cloud.nextTickAt += cloud.tickInterval;
+      }
+
+      // Animate visuals
+      cloud.group.rotation.y += dt * 0.3;
+      const fadeStart = cloud.duration - 1.5;
+      const fade = cloud.elapsed > fadeStart
+        ? Math.max(0, 1 - (cloud.elapsed - fadeStart) / 1.5)
+        : Math.min(1, cloud.elapsed / 0.5); // fade in over 0.5s
+      for (const puff of cloud.puffs) {
+        const a = puff.userData.orbitAngle + cloud.elapsed * puff.userData.orbitSpeed;
+        const r = puff.userData.orbitRadius;
+        puff.position.x = Math.cos(a) * r;
+        puff.position.z = Math.sin(a) * r;
+        puff.position.y = puff.userData.baseY + Math.sin(cloud.elapsed * 1.5 + a) * 0.1;
+        const pulse = 1 + Math.sin(cloud.elapsed * 1.8 + a * 2) * 0.15;
+        puff.scale.setScalar(puff.userData.baseScale * pulse);
+        (puff.material as THREE.MeshStandardMaterial).opacity =
+          puff.userData.baseOpacity * fade;
+      }
+      // Fade base disc too
+      const baseMesh = cloud.group.children[0] as THREE.Mesh;
+      (baseMesh.material as THREE.MeshStandardMaterial).opacity = 0.2 * fade;
+
+      // Expire
+      if (cloud.elapsed >= cloud.duration) {
+        for (const target of cloud.affectedTargets) {
+          this.buffSystem.remove(target, cloud.debuff.id);
+        }
+        cloud.group.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+        this.scene.remove(cloud.group);
+        this.gasClouds.splice(i, 1);
+      }
+    }
+  }
+
+  private clearGasClouds(): void {
+    for (const cloud of this.gasClouds) {
+      for (const target of cloud.affectedTargets) {
+        this.buffSystem.remove(target, cloud.debuff.id);
+      }
+      cloud.group.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      this.scene.remove(cloud.group);
+    }
+    this.gasClouds.length = 0;
   }
 
   private updateAutoAttack(dt: number): void {
@@ -257,6 +468,18 @@ export class Engine {
     this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController);
     this.playerController.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(this.playerController, 'crash-out'));
 
+    // Stun state — player
+    const playerStunned = this.buffSystem.isStunned(this.playerController);
+    this.playerController.setStunned(playerStunned);
+    if (playerStunned && this.autoAttacking) {
+      this.stopAutoAttack();
+    }
+
+    // Stun state — NPCs
+    for (const npc of this.npcs) {
+      npc.setStunned(this.buffSystem.isStunned(npc));
+    }
+
     this.mapManager.update(deltaTime);
     this.playerController.update(deltaTime);
     for (const npc of this.npcs) npc.update(deltaTime);
@@ -266,6 +489,7 @@ export class Engine {
         this.removeNpc(this.npcs[i]);
       }
     }
+    this.updateGasClouds(deltaTime);
     this.combatSystem.update(deltaTime);
     this.buffSystem.update(deltaTime);
     this.regenSystem.update(deltaTime);
@@ -277,6 +501,7 @@ export class Engine {
 
   dispose(): void {
     this.stop();
+    this.clearGasClouds();
     this.clearNpcs();
     this.playerController.dispose();
     this.renderer.dispose();
