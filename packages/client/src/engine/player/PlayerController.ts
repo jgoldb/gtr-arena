@@ -280,15 +280,13 @@ export class PlayerController implements Targetable {
 
     const moveDir = new THREE.Vector3(0, 0, 0);
 
-    // Both mouse buttons held = auto-forward
-    if (leftHeld && rightHeld) {
-      moveDir.add(forward);
-    }
+    // Both mouse buttons held = virtual W key press (scrambled by discombobulate)
+    const bothMouseHeld = leftHeld && rightHeld;
 
-    const wDown = this.input.isKeyDown(this.getMovementKey('KeyW'));
-    const sDown = this.input.isKeyDown(this.getMovementKey('KeyS'));
-    const dDown = this.input.isKeyDown(this.getMovementKey('KeyD'));
-    const aDown = this.input.isKeyDown(this.getMovementKey('KeyA'));
+    const wDown = this.input.isKeyDown(this.getMovementKey('KeyW')) || (bothMouseHeld && this.getMovementKey('KeyW') === 'KeyW');
+    const sDown = this.input.isKeyDown(this.getMovementKey('KeyS')) || (bothMouseHeld && this.getMovementKey('KeyS') === 'KeyW');
+    const dDown = this.input.isKeyDown(this.getMovementKey('KeyD')) || (bothMouseHeld && this.getMovementKey('KeyD') === 'KeyW');
+    const aDown = this.input.isKeyDown(this.getMovementKey('KeyA')) || (bothMouseHeld && this.getMovementKey('KeyA') === 'KeyW');
     if (wDown) moveDir.add(forward);
     if (sDown) moveDir.sub(forward);
     if (dDown) moveDir.add(right);

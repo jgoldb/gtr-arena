@@ -115,6 +115,7 @@ export class ServerEngine {
   // Tick
   private tick = 0;
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private lastTickTime = 0;
   private static readonly TICK_RATE = 20;
   private static readonly TICK_MS = 1000 / ServerEngine.TICK_RATE;
   private static readonly CAST_PUSHBACK = 0.5;
@@ -266,6 +267,7 @@ export class ServerEngine {
 
   start(): void {
     if (this.intervalId) return;
+    this.lastTickTime = performance.now();
     this.intervalId = setInterval(() => this.update(), ServerEngine.TICK_MS);
   }
 
@@ -279,7 +281,9 @@ export class ServerEngine {
   // ── Main tick ───────────────────────────────────────────────────────────
 
   private update(): void {
-    const dt = ServerEngine.TICK_MS / 1000;
+    const now = performance.now();
+    const dt = Math.min((now - this.lastTickTime) / 1000, 0.1);
+    this.lastTickTime = now;
     this.tick++;
 
     // Update buff-driven modifiers

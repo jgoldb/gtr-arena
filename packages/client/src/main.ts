@@ -532,6 +532,7 @@ function showGameOver(winningTeam: number): void {
   btn.addEventListener('click', () => {
     window.removeEventListener('resize', onMpResize);
     showLobby();
+    network?.send({ type: 'return_to_lobby' });
   });
 
   box.appendChild(title);

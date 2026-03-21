@@ -94,6 +94,11 @@ export class LobbyManager {
           session?.handleMessage(userId, msg);
         }
         break;
+      case 'return_to_lobby':
+        user.status = 'online';
+        user.gameSessionId = null;
+        this.broadcastLobbyState();
+        break;
     }
   }
 
@@ -169,17 +174,33 @@ export class LobbyManager {
       return;
     }
 
-    lobby.removePlayer(userId);
-    user.gameLobbyId = null;
+    const isHost = lobby.hostUserId === userId;
 
-    if (lobby.isEmpty()) {
+    if (isHost) {
+      // Host leaving cancels the entire lobby — notify and eject all other players
+      for (const p of lobby.getPlayers()) {
+        const u = this.users.get(p.userId);
+        if (u) {
+          u.gameLobbyId = null;
+          this.send(u.socket, { type: 'game_cancelled', reason: isHost && p.userId !== userId
+            ? 'The host left the game lobby'
+            : 'You left the game lobby' } as S2C_GameCancelled);
+        }
+      }
       this.gameLobbies.delete(lobby.gameId);
     } else {
-      this.broadcastGameLobbyState(lobby);
+      lobby.removePlayer(userId);
+      user.gameLobbyId = null;
+
+      if (lobby.isEmpty()) {
+        this.gameLobbies.delete(lobby.gameId);
+      } else {
+        this.broadcastGameLobbyState(lobby);
+      }
+
+      this.send(user.socket, { type: 'game_cancelled', reason: 'You left the game lobby' } as S2C_GameCancelled);
     }
 
-    // Send cancelled notification to the leaving player
-    this.send(user.socket, { type: 'game_cancelled', reason: 'You left the game lobby' } as S2C_GameCancelled);
     this.broadcastLobbyState();
   }
 
@@ -247,21 +268,10 @@ export class LobbyManager {
       lobby.format,
       players,
       playerSockets,
-      // onGameOver callback
+      // onGameOver callback — just stop the session engine.
+      // Players remain in 'in-game' status until they individually send 'return_to_lobby'.
       (gameId: string) => {
-        const sess = this.gameSessions.get(gameId);
-        if (sess) {
-          // Return players to lobby
-          for (const p of sess.getPlayerIds()) {
-            const u = this.users.get(p);
-            if (u) {
-              u.status = 'online';
-              u.gameSessionId = null;
-            }
-          }
-          this.gameSessions.delete(gameId);
-          this.broadcastLobbyState();
-        }
+        this.gameSessions.delete(gameId);
       }
     );
 
@@ -305,6 +315,24 @@ export class LobbyManager {
         this.send(u.socket, msg);
       }
     }
+  }
+
+  private sendLobbyState(user: ConnectedUser): void {
+    const users: LobbyUser[] = [];
+    for (const u of this.users.values()) {
+      users.push({
+        userId: u.userId,
+        username: u.username,
+        status: u.gameSessionId ? 'in-game' : 'online',
+      });
+    }
+
+    const games: LobbyGameInfo[] = [];
+    for (const lobby of this.gameLobbies.values()) {
+      games.push(lobby.getInfo());
+    }
+
+    this.send(user.socket, { type: 'lobby_state', users, games });
   }
 
   private send(socket: WebSocket, msg: ServerMessage): void {

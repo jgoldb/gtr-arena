@@ -874,6 +874,7 @@ export class ClientEngine {
 
   destroy(): void {
     this.stop();
+    this.input.dispose();
     this.targetingSystem.dispose();
     for (const cloud of this.gasClouds.values()) disposeGroup(this.scene, cloud.group);
     this.gasClouds.clear();

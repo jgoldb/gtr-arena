@@ -77,6 +77,10 @@ export interface C2S_CancelCast {
   type: 'cancel_cast';
 }
 
+export interface C2S_ReturnToLobby {
+  type: 'return_to_lobby';
+}
+
 // ── Server -> Client Messages ───────────────────────────────────────────
 
 export interface S2C_AuthResult {
@@ -275,7 +279,8 @@ export type ClientMessage =
   | C2S_SetTarget
   | C2S_AutoAttack
   | C2S_StopAutoAttack
-  | C2S_CancelCast;
+  | C2S_CancelCast
+  | C2S_ReturnToLobby;
 
 export type ServerMessage =
   | S2C_AuthResult
