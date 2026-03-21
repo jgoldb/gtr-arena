@@ -6,7 +6,7 @@ import type {
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits } from '@gtr/shared';
+import { yardsToUnits, getCharacterStats } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -213,6 +213,19 @@ export class ClientEngine {
       mesh,
       isHostileTo(other: Targetable) { return entity.team !== other.team; },
       die() { /* server-authoritative */ },
+      get castingAbilityName() {
+        if (!entity.castingAbilityId) return null;
+        const stats = getCharacterStats(entity.characterId as CharacterId);
+        const ability = stats.abilities.find(a => a.id === entity.castingAbilityId);
+        return ability?.name ?? entity.castingAbilityId;
+      },
+      set castingAbilityName(_v) { /* read-only */ },
+      get castingElapsed() { return entity.castingElapsed; },
+      set castingElapsed(_v) { /* read-only */ },
+      get castingTotalTime() { return entity.castingTotalTime; },
+      set castingTotalTime(_v) { /* read-only */ },
+      get castingIsChannel() { return entity.castingIsChannel; },
+      set castingIsChannel(_v) { /* read-only */ },
     };
     entity.targetable = targetable;
     mesh.userData.targetRef = targetable;

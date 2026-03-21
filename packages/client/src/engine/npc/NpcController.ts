@@ -23,6 +23,10 @@ export class NpcController implements Targetable {
   maxMana: number;
   inCombat = false;
   dead = false;
+  castingAbilityName: string | null = null;
+  castingElapsed = 0;
+  castingTotalTime = 0;
+  castingIsChannel = false;
   private static readonly DESPAWN_DELAY = 10;
   private deathTimer = 0;
   private characterModel: CharacterModel;

@@ -6,6 +6,9 @@ const MAX_RANGE = yardsToUnits(30);
 const BAR_WIDTH = 100;
 const BAR_HEIGHT = 8;
 
+const CAST_BAR_WIDTH = 100;
+const CAST_BAR_HEIGHT = 12;
+
 interface NameplateEntry {
   /** Full nameplate (name + model + health bar) — shown within 30 yd */
   plate: HTMLElement;
@@ -13,6 +16,10 @@ interface NameplateEntry {
   modelEl: HTMLElement;
   barBg: HTMLElement;
   barFill: HTMLElement;
+  /** Cast bar elements */
+  castBarBg: HTMLElement;
+  castBarFill: HTMLElement;
+  castBarText: HTMLElement;
   /** Name-only label — shown beyond 30 yd */
   label: HTMLElement;
   labelName: HTMLElement;
@@ -106,6 +113,23 @@ export class Nameplates {
         entry.barFill.style.width = `${hpPct}%`;
         entry.barFill.style.background = hostile ? '#cc2222' : '#22aa22';
 
+        // Update cast bar
+        if (target.castingAbilityName && target.castingTotalTime > 0) {
+          entry.castBarBg.style.display = '';
+          let progress: number;
+          if (target.castingIsChannel) {
+            progress = Math.max(0, 1 - target.castingElapsed / target.castingTotalTime);
+            entry.castBarFill.style.background = 'linear-gradient(to right, #cc8833, #eebb55)';
+          } else {
+            progress = Math.min(1, target.castingElapsed / target.castingTotalTime);
+            entry.castBarFill.style.background = 'linear-gradient(to right, #cc8833, #eebb55)';
+          }
+          entry.castBarFill.style.width = `${progress * 100}%`;
+          entry.castBarText.textContent = target.castingAbilityName;
+        } else {
+          entry.castBarBg.style.display = 'none';
+        }
+
         // Update name color
         entry.nameEl.style.color = hostile ? '#ff4444' : '#44ff44';
       } else {
@@ -162,7 +186,7 @@ export class Nameplates {
     const nameEl = document.createElement('div');
     nameEl.textContent = target.name;
     nameEl.style.cssText = `
-      font-size: 11px;
+      font-size: 13px;
       font-weight: bold;
       color: ${hostile ? '#ff4444' : '#44ff44'};
       text-shadow:
@@ -177,7 +201,7 @@ export class Nameplates {
     const modelEl = document.createElement('div');
     modelEl.textContent = target.modelName;
     modelEl.style.cssText = `
-      font-size: 9px;
+      font-size: 11px;
       color: #cccccc;
       text-shadow:
         -1px -1px 0 #000,
@@ -207,10 +231,53 @@ export class Nameplates {
       transition: width 0.15s ease-out;
     `;
 
+    // --- Cast bar (below health bar) ---
+    const castBarBg = document.createElement('div');
+    castBarBg.style.cssText = `
+      width: ${CAST_BAR_WIDTH}px;
+      height: ${CAST_BAR_HEIGHT}px;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 2px;
+      overflow: hidden;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: -${CAST_BAR_HEIGHT + 4}px;
+      display: none;
+    `;
+
+    const castBarFill = document.createElement('div');
+    castBarFill.style.cssText = `
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(to right, #cc8833, #eebb55);
+      transition: width 0.05s linear;
+    `;
+
+    const castBarText = document.createElement('div');
+    castBarText.style.cssText = `
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: bold;
+      color: #fff;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+      white-space: nowrap;
+      overflow: hidden;
+    `;
+
+    castBarBg.appendChild(castBarFill);
+    castBarBg.appendChild(castBarText);
+
     barBg.appendChild(barFill);
     plate.appendChild(nameEl);
     plate.appendChild(modelEl);
     plate.appendChild(barBg);
+    plate.appendChild(castBarBg);
     this.element.appendChild(plate);
 
     // --- Name-only label (shown when out of nameplate range) ---
@@ -242,7 +309,7 @@ export class Nameplates {
     label.appendChild(labelName);
     this.element.appendChild(label);
 
-    return { plate, nameEl, modelEl, barBg, barFill, label, labelName, target };
+    return { plate, nameEl, modelEl, barBg, barFill, castBarBg, castBarFill, castBarText, label, labelName, target };
   }
 
   dispose(): void {

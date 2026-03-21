@@ -28,4 +28,9 @@ export interface Targetable {
   readonly dodgeChance: number;
   readonly mesh: THREE.Group;
   die(): void;
+  // Casting state (for nameplate cast bars)
+  castingAbilityName: string | null;
+  castingElapsed: number;
+  castingTotalTime: number;
+  castingIsChannel: boolean;
 }

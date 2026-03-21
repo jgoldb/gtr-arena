@@ -16,6 +16,10 @@ export class PlayerController implements Targetable {
   maxMana = 0;
   inCombat = false;
   dead = false;
+  castingAbilityName: string | null = null;
+  castingElapsed = 0;
+  castingTotalTime = 0;
+  castingIsChannel = false;
   speed = 5.6;
   jumpForce = 7;
   gravity = 20;
