@@ -127,6 +127,7 @@ export class Engine {
   private arenaPreparationActive = false;
   private resting = false;
   private rKeyWasDown = false;
+  private tabKeyWasDown = false;
   onRestError?: (message: string) => void;
   onCharacterChange?: (abilities: readonly Ability[]) => void;
   onAutoAttackError?: (message: string) => void;
@@ -1105,6 +1106,13 @@ export class Engine {
       }
     }
     this.rKeyWasDown = rKeyDown;
+
+    // Tab targeting — nearest hostile in front within 30 yards
+    const tabDown = this.input.isKeyDown('Tab');
+    if (tabDown && !this.tabKeyWasDown) {
+      this.targetingSystem.selectNearestHostileInFront(this.npcs, yardsToUnits(30));
+    }
+    this.tabKeyWasDown = tabDown;
 
     // Cancel resting on movement
     if (this.resting) {

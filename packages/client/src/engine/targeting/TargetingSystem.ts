@@ -167,6 +167,43 @@ export class TargetingSystem {
     return null;
   }
 
+  /** Tab-target: select the nearest alive hostile in front of the player within the given range (world units). */
+  selectNearestHostileInFront(hostiles: Targetable[], maxRange: number): void {
+    const player = this.getLocalPlayer();
+    const playerPos = player.mesh.position;
+    const rotY = player.mesh.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+
+    let best: Targetable | null = null;
+    let bestDist = Infinity;
+
+    for (const entity of hostiles) {
+      if (entity.dead) continue;
+      if (!entity.isHostileTo(player)) continue;
+
+      const toEntity = new THREE.Vector3(
+        entity.mesh.position.x - playerPos.x,
+        0,
+        entity.mesh.position.z - playerPos.z,
+      );
+      const dist = toEntity.length();
+      if (dist > maxRange || dist < 0.01) continue;
+
+      // Must be in the forward hemisphere (180° cone)
+      toEntity.normalize();
+      if (forward.dot(toEntity) <= 0) continue;
+
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = entity;
+      }
+    }
+
+    if (best) {
+      this.currentTarget = best;
+    }
+  }
+
   /** Raycast to check if a targetable entity is under the given screen position. */
   checkHover(screenX: number, screenY: number): Targetable | null {
     const rect = this.canvas.getBoundingClientRect();

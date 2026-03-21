@@ -109,6 +109,7 @@ export class ClientEngine {
   // Resting state
   private resting = false;
   private rKeyWasDown = false;
+  private tabKeyWasDown = false;
   private restingSentAt = 0; // timestamp when resting was requested, to ignore stale server updates
 
   // Event callbacks for UI
@@ -881,6 +882,20 @@ export class ClientEngine {
 
     // Update map script (e.g., gate animations)
     this.mapManager.update(dt);
+
+    // Tab targeting — nearest hostile in front within 30 yards
+    const tabDown = this.input.isKeyDown('Tab');
+    if (tabDown && !this.tabKeyWasDown) {
+      const hostiles = this.getAllRemoteEntities().map(e => e.targetable);
+      this.targetingSystem.selectNearestHostileInFront(hostiles, yardsToUnits(30));
+      const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
+      if (newTargetId !== this.selectedTargetId) {
+        this.selectedTargetId = newTargetId;
+        this.sendSetTarget(newTargetId);
+        this.onTargetChanged?.(newTargetId);
+      }
+    }
+    this.tabKeyWasDown = tabDown;
 
     // Process left click for target selection (same as playground: InputManager captures on mousedown)
     const leftClick = this.input.getLeftClick();
