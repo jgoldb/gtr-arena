@@ -8,6 +8,7 @@ import { renderPortraits } from './ui/PortraitRenderer';
 import { ActionBar } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
+import { Nameplates } from './ui/Nameplates';
 import { ChemicalSpillDot, ChemicalSpillSpeedBuff, DebugStun, DiscombobulateDebuff, FartBombDebuff, yardsToUnits, type Ability } from './engine/combat/Ability';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -147,6 +148,10 @@ document.body.appendChild(errorText.element);
 // UI — floating combat text (damage/heal numbers over targets)
 const combatText = new FloatingCombatText(engine.camera);
 document.body.appendChild(combatText.element);
+// UI — nameplates (floating above characters)
+const nameplates = new Nameplates(engine.camera, engine.scene);
+document.body.appendChild(nameplates.element);
+
 engine.combatSystem.onCombatText = (target, amount, type) => {
   combatText.spawn(target.mesh, amount, type);
   // Show combat text on the appropriate unit frame portrait
@@ -418,6 +423,7 @@ function updateFrames() {
   }
 
   combatText.update(dt);
+  nameplates.update(engine.playerController, engine.getNpcs());
 
   // Show death screen when player dies
   if (engine.playerController.dead && !deathScreenShown) {
