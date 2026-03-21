@@ -5,6 +5,7 @@ import { CHARACTER_LIST, CharacterId } from '../engine/player/characters';
 export class NpcSpawner {
   private select: HTMLSelectElement;
   private spawnBtn: HTMLButtonElement;
+  private spawnFriendlyBtn: HTMLButtonElement;
   private clearBtn: HTMLButtonElement;
 
   constructor(engine: Engine, container: HTMLElement) {
@@ -29,9 +30,9 @@ export class NpcSpawner {
       this.select.appendChild(option);
     }
 
-    // Spawn button
+    // Spawn hostile button
     this.spawnBtn = document.createElement('button');
-    this.spawnBtn.textContent = 'Spawn NPC';
+    this.spawnBtn.textContent = 'Spawn Hostile NPC';
     this.spawnBtn.style.cssText = `
       padding: 6px 10px;
       font-size: 13px;
@@ -49,6 +50,28 @@ export class NpcSpawner {
       const characterId = this.select.value as CharacterId;
       const pos = this.pickSpawnPosition(engine);
       engine.spawnNpc(characterId, pos);
+    });
+
+    // Spawn friendly button
+    this.spawnFriendlyBtn = document.createElement('button');
+    this.spawnFriendlyBtn.textContent = 'Spawn Friendly NPC';
+    this.spawnFriendlyBtn.style.cssText = `
+      padding: 6px 10px;
+      font-size: 13px;
+      background: rgba(60, 140, 80, 0.85);
+      color: #ddd;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      cursor: pointer;
+      outline: none;
+      width: 100%;
+      margin-top: 4px;
+    `;
+
+    this.spawnFriendlyBtn.addEventListener('click', () => {
+      const characterId = this.select.value as CharacterId;
+      const pos = this.pickSpawnPosition(engine);
+      engine.spawnNpc(characterId, pos, 0);
     });
 
     // Clear all button
@@ -83,6 +106,7 @@ export class NpcSpawner {
     container.appendChild(label);
     container.appendChild(this.select);
     container.appendChild(this.spawnBtn);
+    container.appendChild(this.spawnFriendlyBtn);
     container.appendChild(this.clearBtn);
   }
 

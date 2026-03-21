@@ -29,6 +29,12 @@ interface ActiveGasCloud {
   affectedTargets: Set<Targetable>;
 }
 
+interface DiscombobBubbles {
+  target: Targetable;
+  group: THREE.Group;
+  bubbles: THREE.Mesh[];
+}
+
 export class Engine {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
@@ -44,6 +50,9 @@ export class Engine {
   readonly combatSystem: CombatSystem;
   private readonly npcs: NpcController[] = [];
   private readonly gasClouds: ActiveGasCloud[] = [];
+  private readonly discombobEffects: DiscombobBubbles[] = [];
+  private channelBeam: THREE.Mesh | null = null;
+  private channelBeamTarget: Targetable | null = null;
   private autoAttacking = false;
   private autoAttackTimer = 0;
   private autoAttackTarget: Targetable | null = null;
@@ -55,6 +64,21 @@ export class Engine {
     hitTargets: Set<Targetable>;
     maxDamage: number;
   } | null = null;
+
+  // Casting system (also used for channels)
+  private casting: {
+    ability: Ability;
+    target: Targetable | null;
+    elapsed: number;
+    totalTime: number;
+    originalCastTime: number;
+    isChannel: boolean;
+    tickInterval: number;
+    ticksDelivered: number;
+  } | null = null;
+  private static readonly CAST_PUSHBACK = 0.5;
+  onCastComplete?: (ability: Ability, target: Targetable | null) => void;
+  onCastFailed?: (message: string) => void;
 
   onCharacterChange?: (abilities: readonly Ability[]) => void;
   onAutoAttackError?: (message: string) => void;
@@ -100,6 +124,23 @@ export class Engine {
     this.regenSystem = new RegenSystem(() => [this.playerController, ...this.npcs]);
     this.buffSystem = new BuffSystem();
     this.combatSystem = new CombatSystem(this.regenSystem, this.buffSystem, this.mapManager.collision);
+
+    // Direct damage pushback for casting/channeling (DoT damage bypasses CombatSystem, so no pushback)
+    this.combatSystem.onDirectDamageDealt = (target) => {
+      if (target === this.playerController && this.casting) {
+        if (this.casting.isChannel) {
+          // Channel pushback: reduce remaining time (loses ticks)
+          this.casting.totalTime = Math.max(0, this.casting.totalTime - Engine.CAST_PUSHBACK);
+        } else {
+          // Cast pushback: increase cast time (capped at 2x original)
+          const maxTime = this.casting.originalCastTime * 2;
+          this.casting.totalTime = Math.min(
+            this.casting.totalTime + Engine.CAST_PUSHBACK,
+            maxTime
+          );
+        }
+      }
+    };
   }
 
   start(): void {
@@ -129,6 +170,7 @@ export class Engine {
 
   setCharacter(id: CharacterId): void {
     this.stopAutoAttack();
+    this.cancelCasting();
     this.buffSystem.clearEntity(this.playerController);
     this.combatSystem.leaveCombat(this.playerController);
     this.combatSystem.clearCooldowns();
@@ -137,8 +179,8 @@ export class Engine {
     this.onCharacterChange?.(this.playerController.abilities);
   }
 
-  spawnNpc(characterId: CharacterId, position: THREE.Vector3): NpcController {
-    const npc = new NpcController(characterId, position);
+  spawnNpc(characterId: CharacterId, position: THREE.Vector3, team?: number): NpcController {
+    const npc = new NpcController(characterId, position, team);
     npc.autoAttackTarget = this.playerController;
     npc.onAutoAttackHit = (attacker, target, damage) => {
       this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
@@ -184,6 +226,149 @@ export class Engine {
 
   getNpcs(): readonly NpcController[] {
     return this.npcs;
+  }
+
+  // ── Casting ─────────────────────────────────────────
+
+  startCasting(
+    ability: Ability,
+    attackerRotY: number,
+    target: Targetable | null
+  ): import('./combat/CombatSystem').CombatResult {
+    if (this.casting) {
+      return { success: false, error: 'casting', errorMessage: 'Already casting' };
+    }
+    const validation = this.combatSystem.validateAbility(
+      ability, this.playerController, attackerRotY, target
+    );
+    if (!validation.success) return validation;
+
+    const isChannel = ability.isChannel ?? false;
+
+    if (isChannel) {
+      // Channels consume mana and start cooldown immediately
+      this.playerController.mana -= ability.manaCost;
+      if (ability.manaCost > 0) {
+        this.regenSystem.notifyManaUsed(this.playerController);
+      }
+      this.combatSystem.setCooldown(ability.id, ability.cooldown);
+      // Enter combat for hostile channel targets
+      if (target && target.isHostileTo(this.playerController)) {
+        this.combatSystem.enterCombat(this.playerController);
+        this.combatSystem.enterCombat(target);
+        // Channel start can miss on hostile targets (entire channel fails)
+        if (this.combatSystem.rollMiss()) {
+          this.combatSystem.onCombatText?.(target, 0, 'miss');
+          return { success: true };
+        }
+      }
+    }
+
+    this.casting = {
+      ability,
+      target,
+      elapsed: 0,
+      totalTime: ability.castTime!,
+      originalCastTime: ability.castTime!,
+      isChannel,
+      tickInterval: isChannel ? ability.castTime! / ability.channelTicks! : 0,
+      ticksDelivered: 0,
+    };
+
+    // Apply channel aura to target
+    if (isChannel && target) {
+      const isFriendly = !target.isHostileTo(this.playerController);
+      this.buffSystem.apply(target, {
+        id: `channel-${ability.id}`,
+        name: ability.name,
+        icon: ability.icon,
+        duration: Infinity, // managed manually
+        type: isFriendly ? 'buff' : 'debuff',
+        description: ability.description,
+        effects: [],
+      });
+      // Set initial remaining to channel duration
+      this.updateChannelAuraRemaining();
+    }
+
+    return { success: true };
+  }
+
+  cancelCasting(): void {
+    if (!this.casting) return;
+    this.removeChannelAura();
+    this.casting = null;
+  }
+
+  private completeCasting(): void {
+    if (!this.casting) return;
+    const { ability, target } = this.casting;
+    this.casting = null;
+
+    const result = this.combatSystem.useAbility(
+      ability,
+      this.playerController,
+      this.playerController.mesh.rotation.y,
+      target
+    );
+    if (result.success) {
+      this.onCastComplete?.(ability, target);
+    } else if (result.errorMessage) {
+      this.onCastFailed?.(result.errorMessage);
+    }
+  }
+
+  private deliverChannelTick(): void {
+    if (!this.casting || !this.casting.target) return;
+    const { ability, target } = this.casting;
+    if (target.dead) return;
+
+    const isFriendly = !target.isHostileTo(this.playerController);
+
+    if (isFriendly && ability.healAmount) {
+      const healPerTick = Math.round(ability.healAmount / ability.channelTicks!);
+      this.combatSystem.applyHeal(target, healPerTick);
+      // Healing someone in combat puts the healer in combat
+      if (target.inCombat) {
+        this.combatSystem.enterCombat(this.playerController);
+      }
+    } else if (!isFriendly && ability.damage > 0) {
+      const damagePerTick = Math.round(ability.damage / ability.channelTicks!);
+      this.combatSystem.applyChannelTickDamage(this.playerController, target, damagePerTick);
+    }
+  }
+
+  private updateChannelAuraRemaining(): void {
+    if (!this.casting || !this.casting.isChannel || !this.casting.target) return;
+    const buffId = `channel-${this.casting.ability.id}`;
+    const remaining = Math.max(0, this.casting.totalTime - this.casting.elapsed);
+    this.buffSystem.setRemaining(this.casting.target, buffId, remaining);
+  }
+
+  private removeChannelAura(): void {
+    if (!this.casting || !this.casting.isChannel || !this.casting.target) return;
+    this.buffSystem.remove(this.casting.target, `channel-${this.casting.ability.id}`);
+  }
+
+  isCasting(): boolean {
+    return this.casting !== null;
+  }
+
+  getCastingState(): {
+    abilityName: string;
+    elapsed: number;
+    totalTime: number;
+    isChannel: boolean;
+    originalCastTime: number;
+  } | null {
+    if (!this.casting) return null;
+    return {
+      abilityName: this.casting.ability.name,
+      elapsed: this.casting.elapsed,
+      totalTime: this.casting.totalTime,
+      isChannel: this.casting.isChannel,
+      originalCastTime: this.casting.originalCastTime,
+    };
   }
 
   startAutoAttack(target: Targetable): void {
@@ -299,7 +484,9 @@ export class Engine {
       // Collect all hostile targets
       const targets: Targetable[] = [];
       if (cloud.owner === this.playerController) {
-        for (const npc of this.npcs) targets.push(npc);
+        for (const npc of this.npcs) {
+          if (npc.isHostileTo(this.playerController)) targets.push(npc);
+        }
       } else {
         targets.push(this.playerController);
       }
@@ -399,6 +586,161 @@ export class Engine {
     this.gasClouds.length = 0;
   }
 
+  // ── Discombobulate shadow bubbles ────────────────────
+  private updateDiscombobEffects(dt: number): void {
+    // Spawn effects for newly discombobulated targets
+    const allTargets: Targetable[] = [this.playerController, ...this.npcs];
+    for (const target of allTargets) {
+      if (target.dead) continue;
+      const hasDebuff = this.buffSystem.isDiscombobulated(target);
+      const hasEffect = this.discombobEffects.some(e => e.target === target);
+      if (hasDebuff && !hasEffect) {
+        this.spawnDiscombobEffect(target);
+      }
+    }
+
+    // Update and remove expired effects
+    for (let i = this.discombobEffects.length - 1; i >= 0; i--) {
+      const effect = this.discombobEffects[i];
+      const hasDebuff = this.buffSystem.isDiscombobulated(effect.target);
+      if (!hasDebuff || effect.target.dead) {
+        // Clean up
+        effect.group.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+        this.scene.remove(effect.group);
+        this.discombobEffects.splice(i, 1);
+        continue;
+      }
+
+      // Follow target
+      effect.group.position.set(
+        effect.target.mesh.position.x,
+        0,
+        effect.target.mesh.position.z
+      );
+
+      // Animate bubbles — rise, wobble, fade, loop
+      for (const bubble of effect.bubbles) {
+        const speed = bubble.userData.speed as number;
+        const period = 1.8 / speed;
+        const phase = bubble.userData.phase as number;
+        const t = ((this.clock.elapsedTime * speed + phase) % period) / period;
+
+        const baseY = bubble.userData.baseY as number;
+        bubble.position.y = baseY + t * 0.6;
+
+        // Wobble sideways
+        const xOff = bubble.userData.xOff as number;
+        const zOff = bubble.userData.zOff as number;
+        bubble.position.x = xOff + Math.sin(this.clock.elapsedTime * 3 + phase) * 0.08;
+        bubble.position.z = zOff + Math.cos(this.clock.elapsedTime * 2.5 + phase * 1.3) * 0.08;
+
+        // Scale pulse and fade
+        const life = Math.sin(t * Math.PI);
+        bubble.scale.setScalar(0.5 + life * 0.8);
+        (bubble.material as THREE.MeshStandardMaterial).opacity = life * 0.55;
+      }
+    }
+  }
+
+  private spawnDiscombobEffect(target: Targetable): void {
+    const group = new THREE.Group();
+    const bubbles: THREE.Mesh[] = [];
+    const bubbleCount = 10;
+
+    for (let i = 0; i < bubbleCount; i++) {
+      const size = 0.04 + Math.random() * 0.05;
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x222233,
+        emissive: 0x111122,
+        emissiveIntensity: 0.3,
+        transparent: true,
+        opacity: 0.5,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(size, 6, 5), mat);
+      const angle = (i / bubbleCount) * Math.PI * 2;
+      const radius = 0.15 + Math.random() * 0.25;
+      mesh.userData.xOff = Math.cos(angle) * radius;
+      mesh.userData.zOff = Math.sin(angle) * radius;
+      mesh.userData.baseY = 0.2 + Math.random() * 1.2;
+      mesh.userData.speed = 0.6 + Math.random() * 0.8;
+      mesh.userData.phase = Math.random() * 5;
+      mesh.position.set(mesh.userData.xOff, mesh.userData.baseY, mesh.userData.zOff);
+      mesh.renderOrder = 2;
+      group.add(mesh);
+      bubbles.push(mesh);
+    }
+
+    group.position.set(target.mesh.position.x, 0, target.mesh.position.z);
+    this.scene.add(group);
+    this.discombobEffects.push({ target, group, bubbles });
+  }
+
+  // ── Channel beam ───────────────────────────────────────
+  private updateChannelBeam(): void {
+    if (!this.casting || !this.casting.isChannel || !this.casting.target) {
+      // Remove beam if channel ended
+      if (this.channelBeam) {
+        this.channelBeam.geometry.dispose();
+        (this.channelBeam.material as THREE.Material).dispose();
+        this.scene.remove(this.channelBeam);
+        this.channelBeam = null;
+        this.channelBeamTarget = null;
+      }
+      return;
+    }
+
+    const playerPos = this.playerController.mesh.position;
+    const targetPos = this.casting.target.mesh.position;
+
+    // Beam start slightly above player center, end at target center
+    const startY = 1.6;
+    const endY = 1.0;
+    const start = new THREE.Vector3(playerPos.x, startY, playerPos.z);
+    const end = new THREE.Vector3(targetPos.x, endY, targetPos.z);
+    const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+    const direction = new THREE.Vector3().subVectors(end, start);
+    const length = direction.length();
+
+    if (length < 0.01) return;
+
+    // Create or reuse beam mesh
+    if (!this.channelBeam) {
+      const geo = new THREE.CylinderGeometry(0.04, 0.04, 1, 6, 1, true);
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0xeeeeff,
+        emissive: 0xaabbff,
+        emissiveIntensity: 1.5,
+        transparent: true,
+        opacity: 0.7,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      this.channelBeam = new THREE.Mesh(geo, mat);
+      this.channelBeam.renderOrder = 3;
+      this.scene.add(this.channelBeam);
+    }
+
+    // Position and orient beam
+    this.channelBeam.position.copy(midPoint);
+    this.channelBeam.scale.set(1, length, 1);
+    this.channelBeam.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      direction.normalize()
+    );
+
+    // Pulse opacity
+    const pulse = 0.55 + Math.sin(this.clock.elapsedTime * 6) * 0.15;
+    (this.channelBeam.material as THREE.MeshStandardMaterial).opacity = pulse;
+
+    this.channelBeamTarget = this.casting.target;
+  }
+
   startSweepCharge(): void {
     const player = this.playerController;
     const rotY = player.mesh.rotation.y;
@@ -428,7 +770,7 @@ export class Engine {
     // Hit detection: check all hostile NPCs
     const hitRadius = 1.0; // world units (~1.67 yards)
     for (const npc of this.npcs) {
-      if (npc.dead || charge.hitTargets.has(npc)) continue;
+      if (npc.dead || charge.hitTargets.has(npc) || !npc.isHostileTo(this.playerController)) continue;
       const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
       const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
@@ -448,7 +790,7 @@ export class Engine {
       // AoE burst at end: full damage to all hostiles in melee range
       const meleeRange = this.playerController.autoAttackRange;
       for (const npc of this.npcs) {
-        if (npc.dead) continue;
+        if (npc.dead || !npc.isHostileTo(this.playerController)) continue;
         const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
         const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
@@ -551,9 +893,89 @@ export class Engine {
       this.stopAutoAttack();
     }
 
+    // Discombobulate state — player
+    this.playerController.setDiscombobulated(
+      this.buffSystem.isDiscombobulated(this.playerController)
+    );
+
     // Stun state — NPCs
     for (const npc of this.npcs) {
       npc.setStunned(this.buffSystem.isStunned(npc));
+    }
+
+    // Update casting / channeling
+    if (this.casting) {
+      this.casting.elapsed += deltaTime;
+
+      // Cancel if dead, stunned, or moving
+      const castMoving =
+        this.input.isKeyDown('KeyW') || this.input.isKeyDown('KeyS') ||
+        this.input.isKeyDown('KeyA') || this.input.isKeyDown('KeyD') ||
+        (this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right'));
+
+      if (this.playerController.dead || playerStunned || castMoving) {
+        this.cancelCasting();
+      }
+
+      // Validate target mid-cast/channel
+      if (this.casting && (this.casting.ability.requiresHostileTarget || this.casting.ability.requiresTarget)) {
+        const ct = this.casting.target;
+        if (!ct || ct.dead) {
+          // Target died — always cancel
+          this.cancelCasting();
+        } else if (this.casting.isChannel) {
+          // Channels: cancel on out-of-range, but continue through LOS break
+          if (this.casting.ability.range) {
+            const dx = this.playerController.mesh.position.x - ct.mesh.position.x;
+            const dz = this.playerController.mesh.position.z - ct.mesh.position.z;
+            if (Math.sqrt(dx * dx + dz * dz) > this.casting.ability.range) {
+              this.cancelCasting();
+            }
+          }
+        }
+        // Regular casts: do NOT cancel mid-cast for range/LOS — checked at completion
+      }
+
+      // Channel tick delivery & completion
+      if (this.casting && this.casting.isChannel) {
+        const totalTicks = this.casting.ability.channelTicks!;
+        while (
+          this.casting &&
+          this.casting.ticksDelivered < totalTicks &&
+          this.casting.elapsed >= (this.casting.ticksDelivered + 1) * this.casting.tickInterval
+        ) {
+          const tickTime = (this.casting.ticksDelivered + 1) * this.casting.tickInterval;
+          if (tickTime <= this.casting.totalTime && this.casting.target && !this.casting.target.dead) {
+            this.deliverChannelTick();
+          }
+          this.casting.ticksDelivered++;
+        }
+        // Channel ends when elapsed reaches totalTime
+        if (this.casting && this.casting.elapsed >= this.casting.totalTime) {
+          this.removeChannelAura();
+          this.casting = null;
+        }
+      }
+
+      // Regular cast completion
+      if (this.casting && !this.casting.isChannel && this.casting.elapsed >= this.casting.totalTime) {
+        this.completeCasting();
+      }
+    }
+
+    // Drive cast/channel animations on the player model
+    if (this.casting) {
+      const progress = Math.min(1, this.casting.elapsed / this.casting.totalTime);
+      if (this.casting.isChannel) {
+        this.playerController.setChannelAnimation(this.casting.ability.id, progress);
+        this.playerController.setCastAnimation(null, 0);
+      } else {
+        this.playerController.setCastAnimation(this.casting.ability.id, progress);
+        this.playerController.setChannelAnimation(null, 0);
+      }
+    } else {
+      this.playerController.setCastAnimation(null, 0);
+      this.playerController.setChannelAnimation(null, 0);
     }
 
     // Sweep charge: move player before collision resolution in player update
@@ -575,8 +997,12 @@ export class Engine {
       }
     }
     this.updateGasClouds(deltaTime);
+    this.updateDiscombobEffects(deltaTime);
+    this.updateChannelBeam();
     this.combatSystem.update(deltaTime);
     this.buffSystem.update(deltaTime);
+    // Update channel aura remaining AFTER buff system tick (overrides its decrement)
+    this.updateChannelAuraRemaining();
     this.regenSystem.update(deltaTime);
     this.targetingSystem.update(deltaTime);
     this.thirdPersonCamera.update(deltaTime);
@@ -588,6 +1014,24 @@ export class Engine {
     this.stop();
     this.clearGasClouds();
     this.clearNpcs();
+    // Clean up discombob effects
+    for (const effect of this.discombobEffects) {
+      effect.group.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      this.scene.remove(effect.group);
+    }
+    this.discombobEffects.length = 0;
+    // Clean up channel beam
+    if (this.channelBeam) {
+      this.channelBeam.geometry.dispose();
+      (this.channelBeam.material as THREE.Material).dispose();
+      this.scene.remove(this.channelBeam);
+      this.channelBeam = null;
+    }
     this.playerController.dispose();
     this.renderer.dispose();
     this.input.dispose();

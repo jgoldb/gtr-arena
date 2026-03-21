@@ -110,12 +110,20 @@ export class PlayerController implements Targetable {
     this.characterModel.triggerSwing();
   }
 
-  triggerAbilityAnimation(abilityId: string): void {
-    this.characterModel.triggerAbilityAnimation(abilityId);
+  triggerAbilityAnimation(abilityId: string, targetWorldPos?: THREE.Vector3): void {
+    this.characterModel.triggerAbilityAnimation(abilityId, targetWorldPos);
   }
 
   setAbilityBuffActive(buffId: string, active: boolean): void {
     this.characterModel.setAbilityBuffActive(buffId, active);
+  }
+
+  setCastAnimation(abilityId: string | null, progress: number): void {
+    this.characterModel.setCastAnimation(abilityId, progress);
+  }
+
+  setChannelAnimation(abilityId: string | null, progress: number): void {
+    this.characterModel.setChannelAnimation(abilityId, progress);
   }
 
   setStunned(active: boolean): void {
@@ -126,6 +134,37 @@ export class PlayerController implements Targetable {
   movementSpeedModifier = 1;
   stunned = false;
   charging = false;
+  discombobulated = false;
+  private keyScramble = new Map<string, string>();
+
+  setDiscombobulated(active: boolean): void {
+    if (active && !this.discombobulated) {
+      this.generateKeyScramble();
+    }
+    this.discombobulated = active;
+  }
+
+  private generateKeyScramble(): void {
+    const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
+    let shuffled: string[];
+    do {
+      shuffled = [...keys];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+    } while (shuffled.some((k, i) => k === keys[i]));
+
+    this.keyScramble.clear();
+    for (let i = 0; i < keys.length; i++) {
+      this.keyScramble.set(keys[i], shuffled[i]);
+    }
+  }
+
+  private getMovementKey(code: string): string {
+    if (this.discombobulated) return this.keyScramble.get(code) ?? code;
+    return code;
+  }
 
   die(): void {
     if (this.dead) return;
@@ -241,10 +280,10 @@ export class PlayerController implements Targetable {
       moveDir.add(forward);
     }
 
-    const wDown = this.input.isKeyDown('KeyW');
-    const sDown = this.input.isKeyDown('KeyS');
-    const dDown = this.input.isKeyDown('KeyD');
-    const aDown = this.input.isKeyDown('KeyA');
+    const wDown = this.input.isKeyDown(this.getMovementKey('KeyW'));
+    const sDown = this.input.isKeyDown(this.getMovementKey('KeyS'));
+    const dDown = this.input.isKeyDown(this.getMovementKey('KeyD'));
+    const aDown = this.input.isKeyDown(this.getMovementKey('KeyA'));
     if (wDown) moveDir.add(forward);
     if (sDown) moveDir.sub(forward);
     if (dDown) moveDir.add(right);

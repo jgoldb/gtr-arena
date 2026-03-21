@@ -21,7 +21,7 @@ export class CageArenaScript extends ArenaScript {
   private readonly PILLAR_DOWN_TIME = 30;
   private readonly PILLAR_RISE_ANIM = 2;
   private readonly PILLAR_Y_UP = 3;
-  private readonly PILLAR_Y_DOWN = -3;
+  private readonly PILLAR_Y_DOWN = -2.7;
 
   constructor() {
     super({
@@ -408,13 +408,182 @@ export class CageArenaScript extends ArenaScript {
   // ---------------------------------------------------------------------------
   // Ring pillars (animated drop/rise)
   // ---------------------------------------------------------------------------
+
+  /** Procedural wood-plank + steel-band texture for pillars. */
+  private createPillarTextures(): { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture } {
+    const W = 512;
+    const H = 512;
+    const PLANKS = 12;           // number of vertical planks around the barrel
+    const BANDS = 3;             // number of steel bands
+    const BAND_H = 18;           // band height in pixels
+    const GAP = 2;               // dark gap between planks
+    const RIVET_R = 4;           // rivet dot radius
+
+    // --- Color map ---
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+
+    // Base wood fill
+    ctx.fillStyle = '#6b4226';
+    ctx.fillRect(0, 0, W, H);
+
+    const plankW = W / PLANKS;
+
+    // Draw each plank with slight color variation and grain
+    for (let i = 0; i < PLANKS; i++) {
+      const x = i * plankW;
+
+      // Per-plank hue/lightness shift
+      const lShift = (Math.sin(i * 3.7) * 12) | 0;
+      const r = 107 + lShift;
+      const g = 66 + ((lShift * 0.6) | 0);
+      const b = 38 + ((lShift * 0.3) | 0);
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(x + GAP, 0, plankW - GAP * 2, H);
+
+      // Wood grain lines
+      ctx.strokeStyle = `rgba(40, 22, 10, 0.25)`;
+      ctx.lineWidth = 1;
+      const grainCount = 6 + ((Math.sin(i * 5.1) * 3) | 0);
+      for (let g = 0; g < grainCount; g++) {
+        const gx = x + GAP + 2 + (plankW - GAP * 2 - 4) * (g / grainCount);
+        ctx.beginPath();
+        // Wavy grain line
+        for (let y = 0; y < H; y += 4) {
+          const wx = gx + Math.sin(y * 0.02 + i * 2 + g) * 1.5;
+          y === 0 ? ctx.moveTo(wx, y) : ctx.lineTo(wx, y);
+        }
+        ctx.stroke();
+      }
+
+      // Knots (occasional)
+      if (i % 4 === 1) {
+        const knotX = x + plankW / 2;
+        const knotY = H * (0.3 + Math.sin(i * 2.3) * 0.2);
+        const grad = ctx.createRadialGradient(knotX, knotY, 0, knotX, knotY, 8);
+        grad.addColorStop(0, 'rgba(30, 15, 5, 0.7)');
+        grad.addColorStop(0.6, 'rgba(60, 30, 15, 0.4)');
+        grad.addColorStop(1, 'rgba(60, 30, 15, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(knotX, knotY, 8, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Dark gap between planks
+      ctx.fillStyle = 'rgba(10, 5, 2, 0.9)';
+      ctx.fillRect(x, 0, GAP, H);
+      ctx.fillRect(x + plankW - GAP, 0, GAP, H);
+    }
+
+    // Steel bands
+    const bandPositions: number[] = [];
+    for (let b = 0; b < BANDS; b++) {
+      const by = ((b + 1) / (BANDS + 1)) * H;
+      bandPositions.push(by);
+
+      // Band body
+      const bandGrad = ctx.createLinearGradient(0, by - BAND_H / 2, 0, by + BAND_H / 2);
+      bandGrad.addColorStop(0, '#7a7a82');
+      bandGrad.addColorStop(0.3, '#a0a0a8');
+      bandGrad.addColorStop(0.5, '#bbbbc4');
+      bandGrad.addColorStop(0.7, '#a0a0a8');
+      bandGrad.addColorStop(1, '#606068');
+      ctx.fillStyle = bandGrad;
+      ctx.fillRect(0, by - BAND_H / 2, W, BAND_H);
+
+      // Band edge highlights
+      ctx.fillStyle = 'rgba(200, 200, 210, 0.4)';
+      ctx.fillRect(0, by - BAND_H / 2, W, 1);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.fillRect(0, by + BAND_H / 2 - 1, W, 1);
+
+      // Rivets on each plank
+      for (let i = 0; i < PLANKS; i++) {
+        const rx = i * plankW + plankW / 2;
+        const rivetGrad = ctx.createRadialGradient(rx - 1, by - 1, 0, rx, by, RIVET_R);
+        rivetGrad.addColorStop(0, '#d0d0d8');
+        rivetGrad.addColorStop(0.5, '#909098');
+        rivetGrad.addColorStop(1, '#505058');
+        ctx.fillStyle = rivetGrad;
+        ctx.beginPath();
+        ctx.arc(rx, by, RIVET_R, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    const map = new THREE.CanvasTexture(canvas);
+    map.wrapS = THREE.RepeatWrapping;
+    map.wrapT = THREE.RepeatWrapping;
+
+    // --- Bump map (grayscale heightfield) ---
+    const bCanvas = document.createElement('canvas');
+    bCanvas.width = W;
+    bCanvas.height = H;
+    const bCtx = bCanvas.getContext('2d')!;
+
+    // Base plank height (lighter = raised)
+    bCtx.fillStyle = '#808080';
+    bCtx.fillRect(0, 0, W, H);
+
+    // Plank surfaces slightly raised, gaps recessed
+    for (let i = 0; i < PLANKS; i++) {
+      const x = i * plankW;
+      // Plank body — slightly raised
+      bCtx.fillStyle = '#999999';
+      bCtx.fillRect(x + GAP, 0, plankW - GAP * 2, H);
+      // Gaps — recessed
+      bCtx.fillStyle = '#333333';
+      bCtx.fillRect(x, 0, GAP, H);
+      bCtx.fillRect(x + plankW - GAP, 0, GAP, H);
+
+      // Subtle grain bumps
+      bCtx.strokeStyle = 'rgba(60, 60, 60, 0.15)';
+      bCtx.lineWidth = 1;
+      for (let g = 0; g < 4; g++) {
+        const gx = x + GAP + 3 + (plankW - GAP * 2 - 6) * (g / 4);
+        bCtx.beginPath();
+        for (let y = 0; y < H; y += 4) {
+          const wx = gx + Math.sin(y * 0.02 + i * 2 + g) * 1.5;
+          y === 0 ? bCtx.moveTo(wx, y) : bCtx.lineTo(wx, y);
+        }
+        bCtx.stroke();
+      }
+    }
+
+    // Steel bands — raised above planks
+    for (const by of bandPositions) {
+      bCtx.fillStyle = '#cccccc';
+      bCtx.fillRect(0, by - BAND_H / 2, W, BAND_H);
+      // Rivets — even more raised
+      for (let i = 0; i < PLANKS; i++) {
+        const rx = i * plankW + plankW / 2;
+        bCtx.fillStyle = '#eeeeee';
+        bCtx.beginPath();
+        bCtx.arc(rx, by, RIVET_R, 0, Math.PI * 2);
+        bCtx.fill();
+      }
+    }
+
+    const bumpMap = new THREE.CanvasTexture(bCanvas);
+    bumpMap.wrapS = THREE.RepeatWrapping;
+    bumpMap.wrapT = THREE.RepeatWrapping;
+
+    return { map, bumpMap };
+  }
+
   private createPillars(): void {
+    const { map, bumpMap } = this.createPillarTextures();
     const pillarMat = new THREE.MeshStandardMaterial({
-      color: 0x444450,
-      metalness: 0.6,
-      roughness: 0.3,
+      map,
+      bumpMap,
+      bumpScale: 0.6,
+      metalness: 0.1,
+      roughness: 0.7,
     });
-    const pillarGeo = new THREE.CylinderGeometry(1.8, 1.8, 6, 16);
+    const pillarGeo = new THREE.CylinderGeometry(1.8, 1.8, 6, 24);
 
     // East/West pillars — start UP
     for (const px of [-11, 11]) {
@@ -1010,22 +1179,32 @@ export class CageArenaScript extends ArenaScript {
     innerMark.position.y = 0.025;
     this.group.add(innerMark);
 
-    // Pillar base decorations
+    // Pillar base rings (hollow steel collars the pillars slide through)
     const baseMat = new THREE.MeshStandardMaterial({
-      color: 0x555560,
-      metalness: 0.7,
-      roughness: 0.2,
+      color: 0x888890,
+      metalness: 0.8,
+      roughness: 0.15,
     });
-    const baseGeo = new THREE.CylinderGeometry(2.2, 2.2, 0.12, 16);
+    const innerR = 1.85; // slightly larger than pillar radius (1.8) for clearance
+    const outerR = 2.3;
+    const ringH = 0.3;
+    // Rectangular cross-section revolved around Y axis → hollow ring
+    const profile = [
+      new THREE.Vector2(innerR, 0),
+      new THREE.Vector2(outerR, 0),
+      new THREE.Vector2(outerR, ringH),
+      new THREE.Vector2(innerR, ringH),
+    ];
+    const baseGeo = new THREE.LatheGeometry(profile, 32);
     for (const px of [-11, 11]) {
       const base = new THREE.Mesh(baseGeo, baseMat);
-      base.position.set(px, 0.06, 0);
+      base.position.set(px, 0, 0);
       base.receiveShadow = true;
       this.group.add(base);
     }
     for (const pz of [-11, 11]) {
       const base = new THREE.Mesh(baseGeo, baseMat);
-      base.position.set(0, 0.06, pz);
+      base.position.set(0, 0, pz);
       base.receiveShadow = true;
       this.group.add(base);
     }

@@ -1,7 +1,7 @@
 import type { Targetable } from '../types';
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun';
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'discombobulate';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
 }
 
@@ -37,6 +37,13 @@ export class BuffSystem {
     } else {
       buffs.push({ definition, remaining: definition.duration });
     }
+  }
+
+  setRemaining(target: Targetable, buffId: string, remaining: number): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const buff = buffs.find(b => b.definition.id === buffId);
+    if (buff) buff.remaining = remaining;
   }
 
   remove(target: Targetable, buffId: string): void {
@@ -103,6 +110,12 @@ export class BuffSystem {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
     return buffs.some(b => b.definition.effects.some(e => e.type === 'stun'));
+  }
+
+  isDiscombobulated(target: Targetable): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'discombobulate'));
   }
 
   getAutoAttackDamageTakenMultiplier(target: Targetable): number {

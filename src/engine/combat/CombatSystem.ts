@@ -5,7 +5,7 @@ import type { RegenSystem } from './RegenSystem';
 import type { BuffSystem } from './BuffSystem';
 import type { CollisionSystem } from '../physics/CollisionSystem';
 
-export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned';
+export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned' | 'casting';
 
 export interface CombatResult {
   success: boolean;
@@ -24,6 +24,7 @@ export class CombatSystem {
   private buffSystem: BuffSystem;
   private collisionSystem: CollisionSystem;
   onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
+  onDirectDamageDealt?: (target: Targetable) => void;
 
   constructor(regenSystem: RegenSystem, buffSystem: BuffSystem, collisionSystem: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -62,17 +63,24 @@ export class CombatSystem {
   }
 
   /** Roll hit outcome: miss → dodge → crit → normal */
-  private rollOutcome(attacker: Targetable, target: Targetable): 'miss' | 'dodge' | 'crit' | 'normal' {
+  private rollOutcome(attacker: Targetable, target: Targetable, canDodge = true): 'miss' | 'dodge' | 'crit' | 'normal' {
     const roll = Math.random();
     if (roll < CombatSystem.MISS_CHANCE) return 'miss';
-    // Can only dodge if facing the attacker
-    const targetFacingAttacker = this.isFacing(
-      target.mesh.position, target.mesh.rotation.y, attacker.mesh.position
-    );
-    const targetStunned = this.buffSystem.isStunned(target);
-    if (targetFacingAttacker && !targetStunned && roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
+    // Can only dodge if facing the attacker (and dodge is allowed — abilities disable this)
+    if (canDodge) {
+      const targetFacingAttacker = this.isFacing(
+        target.mesh.position, target.mesh.rotation.y, attacker.mesh.position
+      );
+      const targetStunned = this.buffSystem.isStunned(target);
+      if (targetFacingAttacker && !targetStunned && roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
+    }
     if (Math.random() < attacker.critChance) return 'crit';
     return 'normal';
+  }
+
+  /** Roll miss check only (for channel start). Returns true if the attack misses. */
+  rollMiss(): boolean {
+    return Math.random() < CombatSystem.MISS_CHANCE;
   }
 
   private getDistance(a: THREE.Vector3, b: THREE.Vector3): number {
@@ -119,60 +127,75 @@ export class CombatSystem {
     this.combatTimers.delete(entity);
   }
 
-  useAbility(
+  validateAbility(
     ability: Ability,
     attacker: Targetable,
     attackerRotY: number,
     target: Targetable | null
   ): CombatResult {
-    // Dead checks
     if (attacker.dead) {
       return { success: false, error: 'dead', errorMessage: 'You are dead' };
     }
     if (target?.dead) {
       return { success: false, error: 'dead', errorMessage: 'Target is dead' };
     }
-
-    // Stun check
     if (this.buffSystem.isStunned(attacker)) {
       return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     }
-
-    // Check cooldown
     if (this.cooldowns.has(ability.id)) {
       return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
     }
-
-    // Check target requirement
     if (ability.requiresHostileTarget) {
       if (!target || !target.isHostileTo(attacker)) {
         return { success: false, error: 'no-target', errorMessage: 'No hostile target' };
       }
     }
-
-    // Check mana
     if (attacker.mana < ability.manaCost) {
       return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
     }
-
-    // Check range and facing (only for targeted abilities)
     if (ability.requiresHostileTarget && target) {
       const dist = this.getDistance(attacker.mesh.position, target.mesh.position);
       if (dist > ability.range!) {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
       }
-
       if (!this.collisionSystem.hasLineOfSight(
         attacker.mesh.position.x, attacker.mesh.position.z,
         target.mesh.position.x, target.mesh.position.z
       )) {
         return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
       }
-
       if (!this.isFacing(attacker.mesh.position, attackerRotY, target.mesh.position)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
       }
     }
+    if (ability.requiresTarget && !ability.requiresHostileTarget) {
+      if (!target) {
+        return { success: false, error: 'no-target', errorMessage: 'No target' };
+      }
+      if (ability.range) {
+        const dist = this.getDistance(attacker.mesh.position, target.mesh.position);
+        if (dist > ability.range) {
+          return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
+        }
+        if (!this.collisionSystem.hasLineOfSight(
+          attacker.mesh.position.x, attacker.mesh.position.z,
+          target.mesh.position.x, target.mesh.position.z
+        )) {
+          return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
+        }
+      }
+    }
+    return { success: true };
+  }
+
+  useAbility(
+    ability: Ability,
+    attacker: Targetable,
+    attackerRotY: number,
+    target: Targetable | null
+  ): CombatResult {
+    const validation = this.validateAbility(ability, attacker, attackerRotY, target);
+    if (!validation.success) return validation;
 
     // Success — apply effects
     attacker.mana -= ability.manaCost;
@@ -180,12 +203,11 @@ export class CombatSystem {
       this.regenSystem.notifyManaUsed(attacker);
     }
     if (ability.requiresHostileTarget && target) {
-      const outcome = this.rollOutcome(attacker, target);
+      // Abilities cannot be dodged (only auto-attacks can)
+      const outcome = this.rollOutcome(attacker, target, false);
 
       if (outcome === 'miss') {
         this.onCombatText?.(target, 0, 'miss');
-      } else if (outcome === 'dodge') {
-        this.onCombatText?.(target, 0, 'dodge');
       } else {
         // Calculate base damage (variable or flat)
         let baseDamage: number;
@@ -209,6 +231,7 @@ export class CombatSystem {
         target.hp = Math.max(0, target.hp - damage);
         if (damage > 0) {
           this.onCombatText?.(target, damage, outcome === 'crit' ? 'crit' : 'damage');
+          this.onDirectDamageDealt?.(target);
         }
 
         // Apply debuff only on hit
@@ -263,6 +286,7 @@ export class CombatSystem {
     target.hp = Math.max(0, target.hp - damage);
     if (damage > 0) {
       this.onCombatText?.(target, damage, isCrit ? 'crit' : 'damage');
+      this.onDirectDamageDealt?.(target);
     }
 
     this.enterCombat(attacker);
@@ -272,6 +296,39 @@ export class CombatSystem {
       target.die();
       this.combatTimers.delete(target);
     }
+  }
+
+  setCooldown(abilityId: string, duration: number): void {
+    if (duration > 0) {
+      this.cooldowns.set(abilityId, duration);
+    }
+  }
+
+  /** Channel ticks cannot miss or be dodged; each tick rolls crit independently. */
+  applyChannelTickDamage(attacker: Targetable, target: Targetable, tickDamage: number): void {
+    if (attacker.dead || target.dead) return;
+
+    const isCrit = Math.random() < attacker.critChance;
+    const mult = isCrit ? 2 : 1;
+    const damage = Math.round(tickDamage * mult);
+    target.hp = Math.max(0, target.hp - damage);
+    if (damage > 0) {
+      this.onCombatText?.(target, damage, isCrit ? 'crit' : 'damage');
+      this.onDirectDamageDealt?.(target);
+    }
+    if (target.hp <= 0 && !target.dead) {
+      target.die();
+      this.combatTimers.delete(target);
+    }
+
+    this.enterCombat(attacker);
+    this.enterCombat(target);
+  }
+
+  applyHeal(target: Targetable, healAmount: number): void {
+    if (target.dead) return;
+    target.hp = Math.min(target.maxHp, target.hp + healAmount);
+    this.onCombatText?.(target, healAmount, 'heal');
   }
 
   applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {
@@ -289,6 +346,7 @@ export class CombatSystem {
       const damage = Math.round(baseDamage * buffMult * critMult);
       target.hp = Math.max(0, target.hp - damage);
       this.onCombatText?.(target, damage, outcome === 'crit' ? 'crit' : 'damage');
+      if (damage > 0) this.onDirectDamageDealt?.(target);
       if (target.hp <= 0 && !target.dead) {
         target.die();
         this.combatTimers.delete(target);

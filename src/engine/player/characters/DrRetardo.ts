@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CharacterModel, AnimationInput } from './CharacterModel';
-import type { Ability } from '../../combat/Ability';
+import { BottleChuck, Chudmax, Discombobulate, type Ability } from '../../combat/Ability';
 
 const SKIN = 0xf0d6b8;
 const LABCOAT = 0xf0f0f0;
@@ -25,7 +25,7 @@ export class DrRetardo extends CharacterModel {
   readonly autoAttackRange = 1.8;
   readonly critChance = 0.07;
   readonly dodgeChance = 0.05;
-  readonly abilities: readonly Ability[] = [];
+  readonly abilities: readonly Ability[] = [BottleChuck, Discombobulate, Chudmax];
 
   // Declared via declare to avoid useDefineForClassFields overwriting
   // values set during the parent constructor's buildModel() call.
@@ -34,6 +34,26 @@ export class DrRetardo extends CharacterModel {
   private declare hairMeshes: THREE.Mesh[];
   private declare bubbles: THREE.Mesh[];
   private declare gasWisps: THREE.Mesh[];
+
+  // ── Bottle Chuck projectile ──────────────────────────
+  private static readonly FLIGHT_DURATION = 0.55;
+  private static readonly SPLASH_COUNT = 10;
+  private static readonly SPLASH_DURATION = 0.4;
+  private static readonly REGEN_DURATION = 0.3;
+
+  private declare tubeGroup: THREE.Group;
+  private declare projectileTube: THREE.Group;
+  private declare projectileVelocity: THREE.Vector3;
+  private declare projectileActive: boolean;
+  private declare projectileTime: number;
+  private declare projectileLaunched: boolean;
+  private declare splashDroplets: THREE.Mesh[];
+  private declare splashVelocities: THREE.Vector3[];
+  private declare splashMaterial: THREE.MeshStandardMaterial;
+  private declare splashActive: boolean;
+  private declare splashTime: number;
+  private declare tubeRegenTime: number;
+  private chudmaxChannelActive = false;
 
   protected buildModel(): void {
     this.hairMeshes = [];
@@ -49,6 +69,7 @@ export class DrRetardo extends CharacterModel {
     this.buildLegs();
     this.buildFlask();
     this.buildTestTube();
+    this.buildProjectile();
   }
 
   // ── Head ───────────────────────────────────────────────
@@ -452,12 +473,164 @@ export class DrRetardo extends CharacterModel {
     tubeGroup.position.set(0, -0.50, 0);
     tubeGroup.rotation.z = -0.4;
     tubeGroup.rotation.x = -1.4;
+    this.tubeGroup = tubeGroup;
     this.rightArmGroup.add(tubeGroup);
+  }
+
+  // ── Bottle Chuck projectile ──────────────────────────
+
+  private buildProjectile(): void {
+    this.projectileActive = false;
+    this.projectileLaunched = false;
+    this.projectileTime = 0;
+    this.splashActive = false;
+    this.splashTime = 0;
+    this.tubeRegenTime = -1;
+    this.projectileVelocity = new THREE.Vector3();
+
+    // Projectile tube (simplified version of the hand-held tube)
+    this.projectileTube = new THREE.Group();
+
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: TUBE_GLASS,
+      transparent: true,
+      opacity: 0.4,
+      roughness: 0.1,
+    });
+    const liquidMat = new THREE.MeshStandardMaterial({
+      color: TUBE_LIQUID,
+      emissive: 0x6633aa,
+      emissiveIntensity: 0.5,
+      transparent: true,
+      opacity: 0.7,
+    });
+
+    const glass = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.025, 0.025, 0.18, 6),
+      glassMat,
+    );
+    this.projectileTube.add(glass);
+
+    const bottom = new THREE.Mesh(
+      new THREE.SphereGeometry(0.025, 6, 4),
+      glassMat,
+    );
+    bottom.position.y = -0.09;
+    this.projectileTube.add(bottom);
+
+    const liquid = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.02, 0.13, 6),
+      liquidMat,
+    );
+    this.projectileTube.add(liquid);
+
+    this.projectileTube.visible = false;
+
+    // Splash droplets for impact
+    this.splashDroplets = [];
+    this.splashVelocities = [];
+    const splashGeo = new THREE.SphereGeometry(0.025, 4, 4);
+    this.splashMaterial = new THREE.MeshStandardMaterial({
+      color: TUBE_LIQUID,
+      emissive: 0x6633aa,
+      emissiveIntensity: 0.3,
+      roughness: 0.3,
+      transparent: true,
+      opacity: 0.8,
+    });
+
+    for (let i = 0; i < DrRetardo.SPLASH_COUNT; i++) {
+      const droplet = new THREE.Mesh(splashGeo, this.splashMaterial);
+      droplet.castShadow = false;
+      droplet.visible = false;
+      this.splashDroplets.push(droplet);
+      this.splashVelocities.push(new THREE.Vector3());
+    }
+  }
+
+  private launchProjectile(): void {
+    this.projectileLaunched = true;
+    this.projectileActive = true;
+    this.projectileTime = 0;
+
+    // Hide the tube in hand
+    this.tubeGroup.visible = false;
+
+    // Lazy-add projectile & splash to the scene so they fly in world space
+    // (not affected by player movement). Hierarchy: group → mesh → scene.
+    if (!this.projectileTube.parent) {
+      const scene = this.group.parent!.parent!;
+      scene.add(this.projectileTube);
+      for (const d of this.splashDroplets) scene.add(d);
+    }
+
+    // Get tube world position as the launch origin
+    this.tubeGroup.updateWorldMatrix(true, false);
+    const startPos = new THREE.Vector3();
+    this.tubeGroup.getWorldPosition(startPos);
+
+    this.projectileTube.position.copy(startPos);
+    this.projectileTube.rotation.set(0, 0, 0);
+    this.projectileTube.visible = true;
+    this.projectileTube.scale.setScalar(1);
+
+    // Calculate velocity to arc toward the target position (world space)
+    const dur = DrRetardo.FLIGHT_DURATION;
+    const gravity = 16;
+
+    if (this.abilityTargetPos) {
+      this.projectileVelocity.set(
+        (this.abilityTargetPos.x - startPos.x) / dur,
+        (this.abilityTargetPos.y - startPos.y) / dur + 0.5 * gravity * dur,
+        (this.abilityTargetPos.z - startPos.z) / dur,
+      );
+    } else {
+      // Fallback: throw in the character's forward direction
+      const quat = new THREE.Quaternion();
+      this.group.getWorldQuaternion(quat);
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+      this.projectileVelocity.set(forward.x * 10, 3.5, forward.z * 10);
+    }
+  }
+
+  private triggerSplash(): void {
+    this.splashActive = true;
+    this.splashTime = 0;
+
+    const impactPos = this.projectileTube.position.clone();
+
+    for (let i = 0; i < DrRetardo.SPLASH_COUNT; i++) {
+      const d = this.splashDroplets[i];
+      d.visible = true;
+      d.scale.setScalar(0.5 + Math.random() * 0.8);
+      d.position.copy(impactPos);
+
+      // Scatter outward in a ring
+      const angle =
+        (i / DrRetardo.SPLASH_COUNT) * Math.PI * 2 + Math.random() * 0.5;
+      const speed = 2 + Math.random() * 3;
+      const upSpeed = 1 + Math.random() * 2.5;
+      this.splashVelocities[i].set(
+        Math.cos(angle) * speed,
+        upSpeed,
+        Math.sin(angle) * speed,
+      );
+    }
+
+    this.splashMaterial.opacity = 0.8;
   }
 
   // ── Character-specific animation ──────────────────────
 
-  protected onAnimate(_dt: number, _input: AnimationInput): void {
+  protected onAnimate(dt: number, _input: AnimationInput): void {
+    // Restore tube visibility when not channeling Chudmax
+    if (this.tubeGroup && !this.tubeGroup.visible &&
+        !this.chudmaxChannelActive && this.tubeRegenTime < 0 && !this.projectileActive) {
+      this.tubeGroup.visible = true;
+      this.tubeGroup.scale.setScalar(1);
+    }
+    this.chudmaxChannelActive = false; // reset per-frame flag
+
     // Angle arms outward slightly to clear the bulky coat
     this.leftArmGroup.rotation.z -= 0.2;
     this.rightArmGroup.rotation.z += 0.2;
@@ -512,6 +685,52 @@ export class DrRetardo extends CharacterModel {
         hair.userData.baseY +
         Math.sin(this.runPhase * 1.2 + i * 0.8) * 0.012 * this.runWeight;
     }
+
+    // ── Bottle Chuck projectile update ────────────────────
+    if (this.projectileActive) {
+      this.projectileTime += dt;
+      this.projectileTube.position.addScaledVector(this.projectileVelocity, dt);
+      this.projectileVelocity.y -= 16 * dt;
+      this.projectileTube.rotation.x += 8 * dt;
+      this.projectileTube.rotation.z += 3 * dt;
+
+      if (this.projectileTime >= DrRetardo.FLIGHT_DURATION) {
+        this.projectileActive = false;
+        this.projectileTube.visible = false;
+        this.triggerSplash();
+        this.tubeRegenTime = 0;
+      }
+    }
+
+    if (this.splashActive) {
+      this.splashTime += dt;
+      const splashLife = this.splashTime / DrRetardo.SPLASH_DURATION;
+
+      for (let i = 0; i < this.splashDroplets.length; i++) {
+        const d = this.splashDroplets[i];
+        if (!d.visible) continue;
+        d.position.addScaledVector(this.splashVelocities[i], dt);
+        this.splashVelocities[i].y -= 10 * dt;
+      }
+
+      this.splashMaterial.opacity = 0.8 * Math.max(0, 1 - splashLife);
+
+      if (splashLife >= 1) {
+        this.splashActive = false;
+        for (const d of this.splashDroplets) d.visible = false;
+      }
+    }
+
+    if (this.tubeRegenTime >= 0) {
+      this.tubeRegenTime += dt;
+      const regenP = Math.min(1, this.tubeRegenTime / DrRetardo.REGEN_DURATION);
+      if (!this.tubeGroup.visible) this.tubeGroup.visible = true;
+      this.tubeGroup.scale.setScalar(1 - Math.pow(1 - regenP, 3));
+      if (regenP >= 1) {
+        this.tubeGroup.scale.setScalar(1);
+        this.tubeRegenTime = -1;
+      }
+    }
   }
 
   protected override animateStun(time: number, weight: number): void {
@@ -536,6 +755,168 @@ export class DrRetardo extends CharacterModel {
 
   protected override getSwingDuration(): number {
     return 0.35;
+  }
+
+  protected override getAbilityAnimDuration(abilityId: string): number {
+    if (abilityId === 'bottle-chuck') return 0.7;
+    if (abilityId === 'discombobulate') return 0.6;
+    return 0.6;
+  }
+
+  protected override animateAbilityUse(abilityId: string, t: number): void {
+    if (abilityId === 'bottle-chuck') {
+      this.animateBottleChuck(t);
+    } else if (abilityId === 'discombobulate') {
+      this.animateDiscombobCelebration(t);
+    }
+  }
+
+  // ── Discombobulate cast animation (mixing flask & tube) ────
+  protected override animateCasting(abilityId: string, t: number): void {
+    if (abilityId === 'discombobulate') {
+      this.animateDiscombobCast(t);
+    }
+  }
+
+  private animateDiscombobCast(t: number): void {
+    // Quick blend-in over first 15% of cast
+    const blend = Math.min(1, t / 0.15);
+
+    // Bring both arms forward and inward — hands meet in front of chest
+    // Positive X = forward in model space (model faces -Z, rotated 180°)
+    this.leftArmGroup.rotation.x += 1.3 * blend;
+    this.leftArmGroup.rotation.z += 0.7 * blend;
+    this.rightArmGroup.rotation.x += 1.3 * blend;
+    this.rightArmGroup.rotation.z -= 0.7 * blend;
+
+    // Rubbing / mixing motion — rapid back-and-forth
+    const rubSpeed = 18;
+    const rub = Math.sin(t * rubSpeed) * 0.12 * blend;
+    this.leftArmGroup.rotation.x += rub;
+    this.rightArmGroup.rotation.x -= rub;
+
+    // Slight cross-arm rocking
+    const rock = Math.sin(t * rubSpeed * 0.5) * 0.06 * blend;
+    this.leftArmGroup.rotation.z += rock;
+    this.rightArmGroup.rotation.z -= rock;
+
+    // Body leans forward, peering at concoction
+    this.bodyGroup.rotation.x -= 0.12 * blend;
+    // Head looks down at hands
+    this.headGroup.rotation.x -= 0.25 * blend;
+  }
+
+  private animateDiscombobCelebration(t: number): void {
+    if (t < 0.45) {
+      // Jump up with arms raised
+      const p = t / 0.45;
+      const arc = Math.sin(p * Math.PI);
+      this.group.position.y = arc * 0.35;
+
+      // Arms throw up in victory
+      this.leftArmGroup.rotation.x -= 2.8 * arc;
+      this.rightArmGroup.rotation.x -= 2.8 * arc;
+      this.leftArmGroup.rotation.z -= 0.4 * arc;
+      this.rightArmGroup.rotation.z += 0.4 * arc;
+
+      // Legs tuck slightly
+      this.leftLegGroup.rotation.x += 0.25 * arc;
+      this.rightLegGroup.rotation.x += 0.25 * arc;
+    } else {
+      // Land and settle
+      const p = (t - 0.45) / 0.55;
+      const ease = p * p * (3 - 2 * p);
+      this.group.position.y = 0;
+
+      // Arms return smoothly
+      const armFade = 1 - ease;
+      this.leftArmGroup.rotation.x -= 0.3 * armFade;
+      this.rightArmGroup.rotation.x -= 0.3 * armFade;
+    }
+  }
+
+  // ── Chudmax channel animation (concentration pose, rocking) ────
+  protected override animateChanneling(abilityId: string, t: number): void {
+    if (abilityId === 'chudmax') {
+      this.animateChudmaxChannel(t);
+    }
+  }
+
+  private animateChudmaxChannel(t: number): void {
+    // Quick blend in
+    const blend = Math.min(1, t / 0.08);
+
+    // Hide flask and test tube (sheathed) — flag prevents onAnimate from restoring
+    this.chudmaxChannelActive = true;
+    if (this.tubeGroup) this.tubeGroup.visible = false;
+
+    // Bring hands up to head — concentration pose
+    // Arms up alongside head, elbows bent
+    this.leftArmGroup.rotation.x -= 2.6 * blend;
+    this.leftArmGroup.rotation.z -= 0.15 * blend;
+    this.rightArmGroup.rotation.x -= 2.6 * blend;
+    this.rightArmGroup.rotation.z += 0.15 * blend;
+
+    // Rock back and forth
+    const rockSpeed = 3.5;
+    const rockAmount = 0.12 * blend;
+    this.bodyGroup.rotation.x += Math.sin(t * rockSpeed * Math.PI * 2) * rockAmount;
+
+    // Slight head sway
+    this.headGroup.rotation.z += Math.sin(t * rockSpeed * Math.PI * 2 + 0.5) * 0.08 * blend;
+
+    // Legs slightly spread for stability
+    this.leftLegGroup.rotation.z -= 0.08 * blend;
+    this.rightLegGroup.rotation.z += 0.08 * blend;
+  }
+
+  private animateBottleChuck(t: number): void {
+    let rightArmX: number;
+    let rightArmZ: number;
+    let bodyRotY: number;
+    let bodyRotX: number;
+    let bodyY: number;
+
+    if (t < 0.15) {
+      // Wind-up: pull right arm back, coil body
+      this.projectileLaunched = false;
+      const p = t / 0.15;
+      const ease = p * p;
+      rightArmX = -0.5 * ease;
+      rightArmZ = -0.15 * ease;
+      bodyRotY = -0.15 * ease;
+      bodyRotX = -0.05 * ease;
+      bodyY = 0;
+    } else if (t < 0.40) {
+      // Throw: swing right arm forward overhead
+      const p = (t - 0.15) / 0.25;
+      const ease = 1 - Math.pow(1 - p, 3);
+      rightArmX = -0.5 + 2.5 * ease;
+      rightArmZ = -0.15 + 0.25 * ease;
+      bodyRotY = -0.15 + 0.35 * ease;
+      bodyRotX = -0.05 + 0.20 * ease;
+      bodyY = -0.03 * ease;
+
+      // Launch projectile at peak
+      if (!this.projectileLaunched && p > 0.5) {
+        this.launchProjectile();
+      }
+    } else {
+      // Recovery: return to neutral
+      const p = (t - 0.40) / 0.60;
+      const ease = p * p * (3 - 2 * p);
+      rightArmX = 2.0 * (1 - ease);
+      rightArmZ = 0.1 * (1 - ease);
+      bodyRotY = 0.2 * (1 - ease);
+      bodyRotX = 0.15 * (1 - ease);
+      bodyY = -0.03 * (1 - ease);
+    }
+
+    this.rightArmGroup.rotation.x += rightArmX;
+    this.rightArmGroup.rotation.z += rightArmZ;
+    this.bodyGroup.rotation.y += bodyRotY;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.bodyGroup.position.y += bodyY;
   }
 
   protected override animateCombatStance(weight: number): void {

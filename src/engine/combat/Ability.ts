@@ -19,6 +19,11 @@ export interface Ability {
   readonly damageMin?: number; // if present with damageMax, roll random damage in range
   readonly damageMax?: number;
   readonly requiresHostileTarget: boolean;
+  readonly requiresTarget?: boolean; // needs any target (hostile or friendly)
+  readonly castTime?: number; // seconds; omit for instant-cast abilities
+  readonly isChannel?: boolean; // true = channeled ability (bar drains, ticks periodically)
+  readonly channelTicks?: number; // number of ticks during channel
+  readonly healAmount?: number; // total healing over channel (for friendly targets)
   readonly description: string;
   readonly appliesDebuff?: BuffDefinition;
   readonly appliesSelfBuff?: BuffDefinition;
@@ -105,7 +110,7 @@ export const FartBombDebuff: BuffDefinition = {
   id: 'fart-bomb',
   name: 'Fart Bomb',
   icon: '💨',
-  duration: 8,
+  duration: Infinity,
   type: 'debuff',
   description: 'Slowed by 30%, taking damage over time.',
   effects: [{ type: 'movementSpeedPercent', value: -30 }],
@@ -159,4 +164,60 @@ export const Sweep: Ability = {
   requiresHostileTarget: false,
   description:
     'Thrust forward with incredible ferocity, dealing damage to anyone in your way. Damage increases with distance. At the end, deals extra damage to targets within melee range.',
+};
+
+export const BottleChuck: Ability = {
+  id: 'bottle-chuck',
+  name: 'Bottle Chuck',
+  icon: '🧪',
+  range: yardsToUnits(20),
+  manaCost: 8,
+  cooldown: 4,
+  damage: 45,
+  requiresHostileTarget: true,
+  description:
+    'Toss a bottle of volatile chemicals at an enemy dealing 45 damage.',
+};
+
+export const DiscombobulateDebuff: BuffDefinition = {
+  id: 'discombobulate',
+  name: 'Discombobulate',
+  icon: '🌀',
+  duration: 5,
+  type: 'debuff',
+  description: 'Randomized character movement.',
+  effects: [{ type: 'discombobulate', value: 0 }],
+};
+
+export const Discombobulate: Ability = {
+  id: 'discombobulate',
+  name: 'Discombobulate',
+  icon: '🌀',
+  range: yardsToUnits(20),
+  manaCost: 15,
+  cooldown: 0,
+  castTime: 1.5,
+  damage: 0,
+  requiresHostileTarget: true,
+  description:
+    'Confuse the enemy target, causing them to lose control of their character\'s movement for 5 seconds.',
+  appliesDebuff: DiscombobulateDebuff,
+};
+
+export const Chudmax: Ability = {
+  id: 'chudmax',
+  name: 'Chudmax',
+  icon: '🧬',
+  range: yardsToUnits(15),
+  manaCost: 15,
+  cooldown: 0,
+  castTime: 3,
+  damage: 80,
+  healAmount: 120,
+  requiresHostileTarget: false,
+  requiresTarget: true,
+  isChannel: true,
+  channelTicks: 3,
+  description:
+    'Channel the chud at your target for 3 seconds. Heals friendly targets for 120 or damages hostile targets for 80 over the duration.',
 };

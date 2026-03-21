@@ -60,6 +60,14 @@ export abstract class CharacterModel {
   protected abilityAnimTime = -1; // -1 = not playing
   protected abilityAnimId = '';
 
+  // Cast / channel animation state (driven externally by Engine)
+  private castAnimId = '';
+  private castAnimProgress = 0;
+  private castAnimActive = false;
+  private channelAnimId = '';
+  private channelAnimProgress = 0;
+  private channelAnimActive = false;
+
   // Stun animation state
   protected stunActive = false;
   protected stunWeight = 0;
@@ -142,9 +150,12 @@ export abstract class CharacterModel {
     this.attackAnimTime = 0;
   }
 
-  triggerAbilityAnimation(abilityId: string): void {
+  protected abilityTargetPos: THREE.Vector3 | null = null;
+
+  triggerAbilityAnimation(abilityId: string, targetWorldPos?: THREE.Vector3): void {
     this.abilityAnimTime = 0;
     this.abilityAnimId = abilityId;
+    this.abilityTargetPos = targetWorldPos ?? null;
   }
 
   get isSwinging(): boolean {
@@ -295,6 +306,16 @@ export abstract class CharacterModel {
       }
     }
 
+    // --- Cast animation layer (driven by Engine during cast bar) ---
+    if (this.castAnimActive) {
+      this.animateCasting(this.castAnimId, this.castAnimProgress);
+    }
+
+    // --- Channel animation layer (driven by Engine during channel) ---
+    if (this.channelAnimActive) {
+      this.animateChanneling(this.channelAnimId, this.channelAnimProgress);
+    }
+
     // Character-specific animation
     this.onAnimate(dt, input);
   }
@@ -314,10 +335,32 @@ export abstract class CharacterModel {
     return 0.4;
   }
 
+  setCastAnimation(abilityId: string | null, progress: number): void {
+    if (abilityId) {
+      this.castAnimId = abilityId;
+      this.castAnimProgress = progress;
+      this.castAnimActive = true;
+    } else {
+      this.castAnimActive = false;
+    }
+  }
+
+  setChannelAnimation(abilityId: string | null, progress: number): void {
+    if (abilityId) {
+      this.channelAnimId = abilityId;
+      this.channelAnimProgress = progress;
+      this.channelAnimActive = true;
+    } else {
+      this.channelAnimActive = false;
+    }
+  }
+
   protected animateCombatStance(_weight: number): void {}
   protected animateAttackSwing(_t: number, _alternateArm: boolean): void {}
   protected getAbilityAnimDuration(_abilityId: string): number { return 0.6; }
   protected animateAbilityUse(_abilityId: string, _t: number): void {}
+  protected animateCasting(_abilityId: string, _t: number): void {}
+  protected animateChanneling(_abilityId: string, _t: number): void {}
 
   protected animateStun(time: number, weight: number): void {
     const w = weight;

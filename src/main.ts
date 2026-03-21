@@ -8,7 +8,7 @@ import { renderPortraits } from './ui/PortraitRenderer';
 import { ActionBar } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
-import { DebugStun, FartBombDebuff, yardsToUnits, type Ability } from './engine/combat/Ability';
+import { DebugStun, DiscombobulateDebuff, FartBombDebuff, yardsToUnits, type Ability } from './engine/combat/Ability';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas element not found');
@@ -108,6 +108,28 @@ stunBtn.addEventListener('click', () => {
 });
 npcContainer.appendChild(stunBtn);
 
+// UI — Discombobulate test button (in NPC panel)
+const discBtn = document.createElement('button');
+discBtn.textContent = 'Discombobulate';
+discBtn.style.cssText = `
+  padding: 6px 10px;
+  font-size: 13px;
+  background: rgba(100, 60, 160, 0.85);
+  color: #ddd;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  cursor: pointer;
+  outline: none;
+  width: 100%;
+  margin-top: 4px;
+`;
+discBtn.addEventListener('click', () => {
+  const target = engine.targetingSystem.currentTarget;
+  if (!target || target.dead) return;
+  engine.buffSystem.apply(target, DiscombobulateDebuff);
+});
+npcContainer.appendChild(discBtn);
+
 // UI — unit frames (top-left)
 const setTarget = (t: import('./engine/types').Targetable) => {
   engine.targetingSystem.currentTarget = t;
@@ -185,33 +207,102 @@ deathDialog.appendChild(respawnBtn);
 deathScreen.appendChild(deathDialog);
 document.body.appendChild(deathScreen);
 
+// UI — cast bar (above action bar)
+const castBarContainer = document.createElement('div');
+castBarContainer.style.cssText = `
+  position: fixed;
+  bottom: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  z-index: 100;
+  display: none;
+`;
+const castBarHeader = document.createElement('div');
+castBarHeader.style.cssText = `
+  display: flex;
+  justify-content: space-between;
+  color: #ddd;
+  font-size: 11px;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  margin-bottom: 2px;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.9);
+`;
+const castBarBg = document.createElement('div');
+castBarBg.style.cssText = `
+  height: 14px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+`;
+const castBarFill = document.createElement('div');
+castBarFill.style.cssText = `
+  height: 100%;
+  background: linear-gradient(to right, #4488ff, #66aaff);
+  width: 0%;
+`;
+castBarBg.appendChild(castBarFill);
+castBarContainer.appendChild(castBarHeader);
+castBarContainer.appendChild(castBarBg);
+document.body.appendChild(castBarContainer);
+
+// Helper: apply post-cast effects (animation, special abilities)
+function onAbilitySuccess(ability: Ability): void {
+  engine.playerController.triggerAbilityAnimation(
+    ability.id,
+    engine.targetingSystem.currentTarget?.mesh.position.clone()
+  );
+  if (ability.id === 'fart-bomb') {
+    engine.spawnGasCloud(
+      engine.playerController.mesh.position.clone(),
+      yardsToUnits(5),
+      8,
+      FartBombDebuff,
+      96,
+      2,
+      engine.playerController
+    );
+  }
+  if (ability.id === 'sweep') {
+    engine.startSweepCharge();
+  }
+}
+
+// Cast completion callback
+engine.onCastComplete = (ability) => {
+  onAbilitySuccess(ability);
+};
+engine.onCastFailed = (message) => {
+  errorText.show(message);
+};
+
 // UI — action bar (bottom center)
 const actionBar = new ActionBar({
   onActivate: (ability) => {
-    const result = engine.combatSystem.useAbility(
-      ability,
-      engine.playerController,
-      engine.playerController.mesh.rotation.y,
-      engine.targetingSystem.currentTarget
-    );
-    if (result.success) {
-      engine.playerController.triggerAbilityAnimation(ability.id);
-      if (ability.id === 'fart-bomb') {
-        engine.spawnGasCloud(
-          engine.playerController.mesh.position.clone(),
-          yardsToUnits(5),
-          8,
-          FartBombDebuff,
-          96,
-          2,
-          engine.playerController
-        );
+    if (ability.castTime) {
+      // Start casting instead of instant use
+      const result = engine.startCasting(
+        ability,
+        engine.playerController.mesh.rotation.y,
+        engine.targetingSystem.currentTarget
+      );
+      if (!result.success && result.errorMessage) {
+        errorText.show(result.errorMessage);
       }
-      if (ability.id === 'sweep') {
-        engine.startSweepCharge();
+    } else {
+      // Instant-cast ability
+      const result = engine.combatSystem.useAbility(
+        ability,
+        engine.playerController,
+        engine.playerController.mesh.rotation.y,
+        engine.targetingSystem.currentTarget
+      );
+      if (result.success) {
+        onAbilitySuccess(ability);
+      } else if (result.errorMessage) {
+        errorText.show(result.errorMessage);
       }
-    } else if (result.errorMessage) {
-      errorText.show(result.errorMessage);
     }
   },
   getAbilityStatus: (ability) => {
@@ -228,10 +319,20 @@ const actionBar = new ActionBar({
       const dist = Math.sqrt(dx * dx + dz * dz);
       if (dist > ability.range!) return 'out-of-range';
     }
+    if (ability.requiresTarget && !ability.requiresHostileTarget) {
+      const target = engine.targetingSystem.currentTarget;
+      if (!target || target.dead) return 'no-target';
+      if (ability.range) {
+        const dx = player.mesh.position.x - target.mesh.position.x;
+        const dz = player.mesh.position.z - target.mesh.position.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > ability.range) return 'out-of-range';
+      }
+    }
     return 'usable';
   },
   getCombatSystem: () => engine.combatSystem,
-  isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging,
+  isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || engine.isCasting(),
 });
 document.body.appendChild(actionBar.element);
 
@@ -274,6 +375,29 @@ function updateFrames() {
   playerFrame.updateCombatText(dt);
   targetFrame.updateCombatText(dt);
   actionBar.update();
+
+  // Update cast bar
+  const castState = engine.getCastingState();
+  if (castState) {
+    castBarContainer.style.display = 'block';
+    let progress: number;
+    if (castState.isChannel) {
+      // Channel: bar drains from full to empty
+      progress = Math.max(0, (castState.totalTime - castState.elapsed) / castState.originalCastTime);
+      castBarFill.style.background = 'linear-gradient(to right, #cc8833, #eebb55)';
+    } else {
+      // Regular cast: bar fills from empty to full
+      progress = Math.min(1, castState.elapsed / castState.totalTime);
+      castBarFill.style.background = 'linear-gradient(to right, #4488ff, #66aaff)';
+    }
+    castBarFill.style.width = `${progress * 100}%`;
+    const remaining = Math.max(0, castState.totalTime - castState.elapsed);
+    castBarHeader.innerHTML =
+      `<span>${castState.abilityName}</span><span>${remaining.toFixed(1)}s</span>`;
+  } else {
+    castBarContainer.style.display = 'none';
+  }
+
   combatText.update(dt);
 
   // Show death screen when player dies
