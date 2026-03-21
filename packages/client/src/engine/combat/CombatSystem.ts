@@ -80,6 +80,8 @@ export class CombatSystem {
       const targetStunned = this.buffSystem.isStunned(target);
       if (targetFacingAttacker && !targetStunned && roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
     }
+    // Resting targets are always crit
+    if (this.buffSystem.hasBuff(target, 'resting')) return 'crit';
     if (Math.random() < attacker.critChance) return 'crit';
     return 'normal';
   }

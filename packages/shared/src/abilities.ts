@@ -158,6 +158,16 @@ export const FullRetardBuff: BuffDefinition = {
   effects: [],
 };
 
+export const RestingBuff: BuffDefinition = {
+  id: 'resting',
+  name: 'Resting',
+  icon: '💤',
+  duration: Infinity,
+  type: 'buff',
+  description: 'Recovering mana at an increased rate. Any movement or damage taken will cancel this effect.',
+  effects: [],
+};
+
 export const ArenaPreparationBuff: BuffDefinition = {
   id: 'arena-preparation',
   name: 'Arena Preparation',

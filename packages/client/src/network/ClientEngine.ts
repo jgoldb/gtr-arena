@@ -106,6 +106,11 @@ export class ClientEngine {
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
 
+  // Resting state
+  private resting = false;
+  private rKeyWasDown = false;
+  private restingSentAt = 0; // timestamp when resting was requested, to ignore stale server updates
+
   // Event callbacks for UI
   onCombatText?: (sourceEntityId: string, targetEntityId: string, amount: number, type: string) => void;
   onCooldownUpdate?: (abilityId: string, remaining: number, total: number) => void;
@@ -474,11 +479,18 @@ export class ClientEngine {
         }
 
         this.localBuffs = buffSnap.buffs;
-        const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
+        // Sync resting state from server — but ignore stale updates that arrive
+        // before the server has processed our resting request (grace period 500ms)
+        const restingGraceExpired = performance.now() - this.restingSentAt > 500;
+        if (this.resting && restingGraceExpired && !this.localBuffs.some(b => b.id === 'resting')) {
+          this.resting = false;
+          this.playerController.setResting(false);
+        }
+        const hasBuff = (id: string) => this.localBuffs.some(b => b.id === id);
         this.playerController.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
         this.playerController.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
         this.playerController.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
-        this.playerController.setDiscombobulated(buffSnap.buffs.some(b => b.id === 'discombobulate'));
+        this.playerController.setDiscombobulated(this.localBuffs.some(b => b.id === 'discombobulate'));
         continue;
       }
       const entity = this.remoteEntities.get(buffSnap.entityId);
@@ -488,6 +500,7 @@ export class ClientEngine {
         entity.model.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
         entity.model.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
         entity.model.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
+        entity.model.setResting(hasBuff('resting'));
       }
     }
   }
@@ -648,6 +661,37 @@ export class ClientEngine {
     this.network.send({ type: 'cancel_cast' });
   }
 
+  // ── Resting ─────────────────────────────────────────────────────────
+
+  startResting(): boolean {
+    if (this.playerController.dead) return false;
+    if (this.playerController.inCombat) {
+      this.onError?.('You are in combat');
+      return false;
+    }
+    if (this.playerController.isMoving) return false;
+    if (this.playerController.stunned) return false;
+    if (this.localCastingAbilityId) return false;
+
+    this.resting = true;
+    this.restingSentAt = performance.now();
+    this.sendStopAutoAttack();
+    this.playerController.setResting(true);
+    this.network.send({ type: 'set_resting', resting: true });
+    return true;
+  }
+
+  stopResting(): void {
+    if (!this.resting) return;
+    this.resting = false;
+    this.playerController.setResting(false);
+    this.network.send({ type: 'set_resting', resting: false });
+  }
+
+  isResting(): boolean {
+    return this.resting;
+  }
+
   // ── Main loop ────────────────────────────────────────────────────────
 
   private lastFrameTime = performance.now();
@@ -694,6 +738,40 @@ export class ClientEngine {
     } else {
       this.playerController.setCastAnimation(null, 0);
       this.playerController.setChannelAnimation(null, 0);
+    }
+
+    // Resting toggle — "R" key
+    const rKeyDown = this.input.isKeyDown('KeyR');
+    if (rKeyDown && !this.rKeyWasDown) {
+      if (this.resting) {
+        this.stopResting();
+      } else {
+        this.startResting();
+      }
+    }
+    this.rKeyWasDown = rKeyDown;
+
+    // Cancel resting on movement or jump
+    if (this.resting) {
+      const wDown = this.input.isKeyDown('KeyW');
+      const sDown = this.input.isKeyDown('KeyS');
+      const aDown = this.input.isKeyDown('KeyA');
+      const dDown = this.input.isKeyDown('KeyD');
+      const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
+      const jumping = this.input.isKeyDown('Space');
+      if (wDown || sDown || aDown || dDown || bothMouse || jumping) {
+        this.stopResting();
+      }
+    }
+
+    // Cancel resting on entering combat or taking damage
+    if (this.resting && this.playerController.inCombat) {
+      this.stopResting();
+    }
+
+    // Cancel resting on stun or death
+    if (this.resting && (this.playerController.stunned || this.playerController.dead)) {
+      this.stopResting();
     }
 
     // Update camera (same as playground)
@@ -828,6 +906,7 @@ export class ClientEngine {
           this.onTargetChanged?.(targetId);
         }
         if (targetId && target.isHostileTo(this.playerController) && !target.dead) {
+          if (this.resting) this.stopResting();
           this.sendAutoAttack(targetId);
         }
       }

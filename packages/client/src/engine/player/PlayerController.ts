@@ -135,6 +135,10 @@ export class PlayerController implements Targetable {
     this.characterModel.setStunned(active);
   }
 
+  setResting(active: boolean): void {
+    this.characterModel.setResting(active);
+  }
+
   movementSpeedModifier = 1;
   stunned = false;
   charging = false;

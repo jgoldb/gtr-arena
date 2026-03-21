@@ -25,6 +25,7 @@ export {
   FullRetardBuff,
   FullRetard,
   ArenaPreparationBuff,
+  RestingBuff,
 } from '@gtr/shared';
 
 export type { Ability, BuffDefinition, BuffEffect } from '@gtr/shared';

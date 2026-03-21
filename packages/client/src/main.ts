@@ -357,6 +357,7 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
 
   mpActionBar = new ActionBar({
     onActivate: (ability) => {
+      if (clientEngine!.isResting()) clientEngine!.stopResting();
       // Cancel current channel if starting new ability (same as playground)
       const castState = clientEngine!.getLocalCastingState();
       if (castState?.isChannel && clientEngine!.getCooldownRemaining(ability.id) <= 0) {
@@ -889,6 +890,7 @@ async function startPlayground(): Promise<void> {
   // Action bar
   const actionBar = new ActionBar({
     onActivate: (ability) => {
+      if (engine.isResting()) engine.stopResting();
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
       let target: Targetable | null = engine.targetingSystem.currentTarget;
       if (!target && ability.requiresTarget && !ability.requiresHostileTarget) target = engine.playerController;
@@ -932,10 +934,14 @@ async function startPlayground(): Promise<void> {
   loadAbilities(engine.playerController.abilities);
   engine.onCharacterChange = (abilities) => loadAbilities(abilities);
   engine.onAutoAttackError = (message) => errorText.show(message);
+  engine.onRestError = (message) => errorText.show(message);
 
   // Escape menu
   const escapeMenu = new EscapeMenu({
-    onReturnToLobby: () => showLobby(),
+    onReturnToLobby: () => {
+      showLobby();
+      network?.send({ type: 'return_to_lobby' });
+    },
     onEscapeWhilePlaying: () => {
       if (engine.isCasting()) {
         engine.cancelCasting();

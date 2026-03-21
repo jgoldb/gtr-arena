@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { yardsToUnits, ArenaPreparationBuff, type Ability } from './combat/Ability';
+import { yardsToUnits, ArenaPreparationBuff, RestingBuff, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
@@ -125,6 +125,9 @@ export class Engine {
   onCastFailed?: (message: string) => void;
 
   private arenaPreparationActive = false;
+  private resting = false;
+  private rKeyWasDown = false;
+  onRestError?: (message: string) => void;
   onCharacterChange?: (abilities: readonly Ability[]) => void;
   onAutoAttackError?: (message: string) => void;
   private animationFrameId: number | null = null;
@@ -168,10 +171,15 @@ export class Engine {
     );
     this.regenSystem = new RegenSystem(() => [this.playerController, ...this.npcs]);
     this.buffSystem = new BuffSystem();
+    this.regenSystem.setBuffSystem(this.buffSystem);
     this.combatSystem = new CombatSystem(this.regenSystem, this.buffSystem, this.mapManager.collision);
 
     // Direct damage pushback for casting/channeling (DoT damage bypasses CombatSystem, so no pushback)
+    // Also cancels resting on the first hit taken
     this.combatSystem.onDirectDamageDealt = (target) => {
+      if (target === this.playerController && this.resting) {
+        this.stopResting();
+      }
       if (target === this.playerController && this.casting) {
         if (this.casting.isChannel) {
           // Channel pushback: reduce remaining time (loses ticks)
@@ -230,6 +238,7 @@ export class Engine {
   }
 
   setCharacter(id: CharacterId): void {
+    this.stopResting();
     this.stopAutoAttack();
     this.cancelCasting();
     this.buffSystem.clearEntity(this.playerController);
@@ -460,8 +469,39 @@ export class Engine {
     };
   }
 
+  // ── Resting ──────────────────────────────────────────
+
+  startResting(): boolean {
+    if (this.playerController.dead) return false;
+    if (this.playerController.inCombat) {
+      this.onRestError?.('You are in combat');
+      return false;
+    }
+    if (this.playerController.isMoving) return false;
+    if (this.casting) return false;
+    if (this.buffSystem.isStunned(this.playerController)) return false;
+
+    this.resting = true;
+    this.stopAutoAttack();
+    this.buffSystem.apply(this.playerController, RestingBuff);
+    this.playerController.setResting(true);
+    return true;
+  }
+
+  stopResting(): void {
+    if (!this.resting) return;
+    this.resting = false;
+    this.buffSystem.remove(this.playerController, RestingBuff.id);
+    this.playerController.setResting(false);
+  }
+
+  isResting(): boolean {
+    return this.resting;
+  }
+
   startAutoAttack(target: Targetable): void {
     if (target === this.autoAttackTarget && this.autoAttacking) return;
+    if (this.resting) this.stopResting();
     this.autoAttacking = true;
     this.autoAttackTarget = target;
     this.autoAttackTimer = this.playerController.autoAttackSpeed; // immediate first swing
@@ -1055,11 +1095,45 @@ export class Engine {
     this.playerController.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(this.playerController, 'retard-strength'));
     this.playerController.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(this.playerController, 'full-retard'));
 
+    // Resting toggle — "R" key
+    const rKeyDown = this.input.isKeyDown('KeyR');
+    if (rKeyDown && !this.rKeyWasDown) {
+      if (this.resting) {
+        this.stopResting();
+      } else {
+        this.startResting();
+      }
+    }
+    this.rKeyWasDown = rKeyDown;
+
+    // Cancel resting on movement
+    if (this.resting) {
+      const wDown = this.input.isKeyDown('KeyW');
+      const sDown = this.input.isKeyDown('KeyS');
+      const aDown = this.input.isKeyDown('KeyA');
+      const dDown = this.input.isKeyDown('KeyD');
+      const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
+      const jumping = this.input.isKeyDown('Space');
+      if (wDown || sDown || aDown || dDown || bothMouse || jumping) {
+        this.stopResting();
+      }
+    }
+
+    // Cancel resting on entering combat
+    if (this.resting && this.playerController.inCombat) {
+      this.stopResting();
+    }
+
     // Stun state — player
     const playerStunned = this.buffSystem.isStunned(this.playerController);
     this.playerController.setStunned(playerStunned);
     if (playerStunned && this.autoAttacking) {
       this.stopAutoAttack();
+    }
+
+    // Cancel resting on stun
+    if (playerStunned && this.resting) {
+      this.stopResting();
     }
 
     // Discombobulate state — player

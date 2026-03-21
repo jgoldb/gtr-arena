@@ -73,6 +73,11 @@ export abstract class CharacterModel {
   protected stunWeight = 0;
   protected stunTime = 0;
 
+  // Resting animation state
+  protected restingActive = false;
+  protected restingWeight = 0;
+  protected restingTime = 0;
+
   // Death animation
   private static readonly DEATH_DURATION = 1.5;
   protected deathTime = -1; // -1 = alive, >= 0 = seconds since death
@@ -188,6 +193,29 @@ export abstract class CharacterModel {
       this.headGroup.rotation.set(0, 0, 0);
 
       this.animateStun(this.stunTime, this.stunWeight);
+      this.onAnimate(dt, input);
+      return;
+    }
+
+    // Resting animation blend
+    const wantRest = this.restingActive ? 1 : 0;
+    this.restingWeight += (wantRest - this.restingWeight) * Math.min(1, 6 * dt);
+    if (this.restingActive) this.restingTime += dt;
+
+    // When resting, override normal animation with sitting pose
+    if (this.restingWeight > 0.01) {
+      this.leftArmGroup.rotation.set(0, 0, 0);
+      this.rightArmGroup.rotation.set(0, 0, 0);
+      this.leftLegGroup.rotation.set(0, 0, 0);
+      this.rightLegGroup.rotation.set(0, 0, 0);
+      this.bodyGroup.rotation.set(0, 0, 0);
+      this.bodyGroup.position.y = 0;
+      this.headGroup.rotation.set(0, 0, 0);
+      // Reset leg pivot positions (modified by animateResting)
+      this.leftLegGroup.position.y = 0.78;
+      this.rightLegGroup.position.y = 0.78;
+
+      this.animateResting(this.restingTime, this.restingWeight);
       this.onAnimate(dt, input);
       return;
     }
@@ -329,6 +357,13 @@ export abstract class CharacterModel {
     }
   }
 
+  setResting(active: boolean): void {
+    this.restingActive = active;
+    if (!active) {
+      this.restingTime = 0;
+    }
+  }
+
   setAbilityBuffActive(_buffId: string, _active: boolean): void {}
 
   protected getSwingDuration(): number {
@@ -361,6 +396,40 @@ export abstract class CharacterModel {
   protected animateAbilityUse(_abilityId: string, _t: number): void {}
   protected animateCasting(_abilityId: string, _t: number): void {}
   protected animateChanneling(_abilityId: string, _t: number): void {}
+
+  protected animateResting(time: number, weight: number): void {
+    const w = weight;
+    const sitDrop = 0.55; // how far the whole character drops to sit
+
+    // Lower body and leg pivots together so hips sit near ground
+    this.bodyGroup.position.y -= sitDrop * w;
+    this.leftLegGroup.position.y -= sitDrop * w;
+    this.rightLegGroup.position.y -= sitDrop * w;
+
+    // Lean back slightly
+    this.bodyGroup.rotation.x -= 0.15 * w;
+
+    // Legs extended forward from the lowered hip pivot
+    this.leftLegGroup.rotation.x += 1.4 * w;
+    this.rightLegGroup.rotation.x += 1.4 * w;
+    // Slight splay
+    this.leftLegGroup.rotation.z -= 0.08 * w;
+    this.rightLegGroup.rotation.z += 0.08 * w;
+
+    // Arms resting on knees
+    this.leftArmGroup.rotation.x += 0.5 * w;
+    this.rightArmGroup.rotation.x += 0.5 * w;
+    this.leftArmGroup.rotation.z -= 0.15 * w;
+    this.rightArmGroup.rotation.z += 0.15 * w;
+
+    // Gentle idle breathing
+    const breathe = Math.sin(time * 1.5) * 0.02;
+    this.bodyGroup.position.y += breathe * w;
+
+    // Slight head look-around
+    this.headGroup.rotation.y += Math.sin(time * 0.6) * 0.08 * w;
+    this.headGroup.rotation.x -= 0.1 * w; // look slightly down
+  }
 
   protected animateStun(time: number, weight: number): void {
     const w = weight;

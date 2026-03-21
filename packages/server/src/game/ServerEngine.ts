@@ -7,7 +7,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, ArenaPreparationBuff } from '@gtr/shared';
+import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, ArenaPreparationBuff, RestingBuff } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -159,6 +159,7 @@ export class ServerEngine {
 
     this.buffSystem = new ServerBuffSystem();
     this.regenSystem = new ServerRegenSystem(() => this.entities);
+    this.regenSystem.setBuffSystem(this.buffSystem);
     this.combatSystem = new ServerCombatSystem(this.regenSystem, this.buffSystem, this.collision);
 
     this.combatSystem.onCombatText = (source, target, amount, type) => {
@@ -172,6 +173,7 @@ export class ServerEngine {
     };
 
     this.combatSystem.onDirectDamageDealt = (target) => {
+      this.cancelResting(target.id);
       const casting = this.castingStates.get(target.id);
       if (casting) {
         if (casting.isChannel) {
@@ -220,6 +222,7 @@ export class ServerEngine {
     entity.z = z;
     entity.rotationY = rotationY;
     entity.isMoving = isMoving;
+    if (isMoving) this.cancelResting(entityId);
   }
 
   setTarget(entityId: string, targetEntityId: string | null): void {
@@ -294,6 +297,30 @@ export class ServerEngine {
     this.cancelCasting(entityId);
   }
 
+  setResting(entityId: string, resting: boolean): void {
+    const entity = this.getEntity(entityId);
+    if (!entity || entity.dead) return;
+
+    if (resting) {
+      if (entity.inCombat) return;
+      if (entity.isMoving) return;
+      if (this.buffSystem.isStunned(entity)) return;
+      if (this.castingStates.has(entityId)) return;
+      this.stopAutoAttack(entityId);
+      this.buffSystem.apply(entity, RestingBuff);
+    } else {
+      this.buffSystem.remove(entity, RestingBuff.id);
+    }
+  }
+
+  private cancelResting(entityId: string): void {
+    const entity = this.getEntity(entityId);
+    if (!entity) return;
+    if (this.buffSystem.hasBuff(entity, RestingBuff.id)) {
+      this.buffSystem.remove(entity, RestingBuff.id);
+    }
+  }
+
   start(): void {
     if (this.intervalId) return;
     this.lastTickTime = performance.now();
@@ -323,10 +350,16 @@ export class ServerEngine {
 
       if (entity.stunned) {
         this.stopAutoAttack(entity.id);
+        this.cancelResting(entity.id);
         if (this.sweepCharges.has(entity.id)) {
           entity.charging = false;
           this.sweepCharges.delete(entity.id);
         }
+      }
+
+      // Cancel resting if entity entered combat
+      if (entity.inCombat) {
+        this.cancelResting(entity.id);
       }
     }
 

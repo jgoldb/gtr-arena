@@ -81,6 +81,11 @@ export interface C2S_ClientReady {
   type: 'client_ready';
 }
 
+export interface C2S_SetResting {
+  type: 'set_resting';
+  resting: boolean;
+}
+
 export interface C2S_ReturnToLobby {
   type: 'return_to_lobby';
 }
@@ -302,6 +307,7 @@ export type ClientMessage =
   | C2S_AutoAttack
   | C2S_StopAutoAttack
   | C2S_CancelCast
+  | C2S_SetResting
   | C2S_ReturnToLobby;
 
 export type ServerMessage =
