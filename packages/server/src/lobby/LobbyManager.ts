@@ -83,6 +83,7 @@ export class LobbyManager {
         this.handleStartGame(userId);
         break;
       // In-game messages are routed to GameSession
+      case 'client_ready':
       case 'player_state':
       case 'use_ability':
       case 'set_target':

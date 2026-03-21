@@ -1,4 +1,5 @@
 import type { Ability } from '@gtr/shared';
+import { yardsToUnits } from '@gtr/shared';
 import type { ServerEntity } from './ServerEntity.js';
 import type { ServerBuffSystem } from './ServerBuffSystem.js';
 import type { ServerRegenSystem } from './ServerRegenSystem.js';
@@ -18,6 +19,10 @@ export class ServerCombatSystem {
   private cooldowns = new Map<string, Map<string, { remaining: number; total: number }>>(); // entityId -> (abilityId -> cooldown)
   private static readonly COMBAT_DURATION = 5;
   private static readonly MISS_CHANCE = 0.03;
+  // Generous range tolerance to compensate for client-server latency.
+  // Without this, high-latency players get abilities rejected at range boundaries
+  // because the target has moved by the time the server processes the request.
+  private static readonly RANGE_TOLERANCE = yardsToUnits(2);
   private combatTimers = new Map<ServerEntity, number>();
   private regenSystem: ServerRegenSystem;
   private buffSystem: ServerBuffSystem;
@@ -161,7 +166,7 @@ export class ServerCombatSystem {
     }
     if (ability.requiresHostileTarget && target) {
       const dist = this.getDistance(attacker.x, attacker.z, target.x, target.z);
-      if (dist > ability.range!) {
+      if (dist > ability.range! + ServerCombatSystem.RANGE_TOLERANCE) {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
       }
       if (!this.collision.hasLineOfSight(attacker.x, attacker.z, target.x, target.z)) {
@@ -177,7 +182,7 @@ export class ServerCombatSystem {
       }
       if (ability.range) {
         const dist = this.getDistance(attacker.x, attacker.z, target.x, target.z);
-        if (dist > ability.range) {
+        if (dist > ability.range + ServerCombatSystem.RANGE_TOLERANCE) {
           return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
         }
         if (!this.collision.hasLineOfSight(attacker.x, attacker.z, target.x, target.z)) {

@@ -77,6 +77,10 @@ export interface C2S_CancelCast {
   type: 'cancel_cast';
 }
 
+export interface C2S_ClientReady {
+  type: 'client_ready';
+}
+
 export interface C2S_ReturnToLobby {
   type: 'return_to_lobby';
 }
@@ -195,6 +199,11 @@ export interface S2C_ErrorMessage {
   message: string;
 }
 
+export interface S2C_CountdownStart {
+  type: 'countdown_start';
+  countdown: number;
+}
+
 export interface S2C_GameCancelled {
   type: 'game_cancelled';
   reason: string;
@@ -238,6 +247,16 @@ export interface EntityStateDelta {
  * - buffs: only entities whose buff list changed
  * - gasClouds/chemicalPools: only when non-empty
  */
+/** Discrete event bundled into the tick update to reduce WebSocket frames. */
+export type GameTickEvent =
+  | S2C_CombatEvent
+  | S2C_AbilityEffect
+  | S2C_CooldownUpdate
+  | S2C_AutoAttackSwing
+  | S2C_GasCloudSpawn
+  | S2C_ChemPoolSpawn
+  | S2C_EntityDied;
+
 export interface S2C_GameStateUpdate {
   type: 'game_state_update';
   tick: number;
@@ -247,6 +266,8 @@ export interface S2C_GameStateUpdate {
   buffs?: EntityBuffSnapshot[];
   gasClouds?: GasCloudSnapshot[];
   chemicalPools?: ChemicalPoolSnapshot[];
+  /** Discrete events bundled into this tick (reduces separate WebSocket frames). */
+  events?: GameTickEvent[];
 }
 
 /**
@@ -274,6 +295,7 @@ export type ClientMessage =
   | C2S_SelectCharacter
   | C2S_LockIn
   | C2S_StartGame
+  | C2S_ClientReady
   | C2S_PlayerState
   | C2S_UseAbility
   | C2S_SetTarget
@@ -300,4 +322,5 @@ export type ServerMessage =
   | S2C_EntityDied
   | S2C_GameOver
   | S2C_ErrorMessage
+  | S2C_CountdownStart
   | S2C_GameCancelled;

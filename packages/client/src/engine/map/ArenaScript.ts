@@ -32,8 +32,8 @@ export abstract class ArenaScript implements MapScript {
   private countdownEl: HTMLElement | null = null;
   private fightEl: HTMLElement | null = null;
 
-  protected readonly OPEN_TIME = 30;
-  protected readonly OPEN_ANIM_DURATION = 2.5;
+  protected readonly OPEN_TIME: number = 30;
+  protected readonly OPEN_ANIM_DURATION: number = 2.5;
 
   constructor(protected readonly theme: ArenaTheme) {}
 
@@ -49,6 +49,10 @@ export abstract class ArenaScript implements MapScript {
 
     this.initArena(scene);
     this.createCountdownUI();
+  }
+
+  resetTimer(): void {
+    this.elapsed = 0;
   }
 
   update(dt: number): void {

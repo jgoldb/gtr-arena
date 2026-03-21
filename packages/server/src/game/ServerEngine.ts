@@ -121,9 +121,19 @@ export class ServerEngine {
   private static readonly CAST_PUSHBACK = 0.5;
   private static readonly INTERRUPT_COOLDOWN = 1;
   private static readonly KEYFRAME_INTERVAL = 100; // full snapshot every 5 seconds
+  // Latency tolerance for range checks — prevents high-ping players from having
+  // abilities rejected when target was in range on their screen
+  private static readonly RANGE_TOLERANCE = yardsToUnits(2);
 
   // Event queue (flushed each tick)
   private pendingEvents: ServerMessage[] = [];
+
+  // Position tracking — only send when entity actually moved
+  private lastBroadcastPosition = new Map<string, {
+    x: number; y: number; z: number; rotationY: number; isMoving: boolean;
+  }>();
+  private static readonly POSITION_EPSILON = 0.001;
+  private static readonly ROTATION_EPSILON = 0.001;
 
   // Delta tracking — previous broadcast state per entity
   private lastBroadcastState = new Map<string, {
@@ -134,9 +144,10 @@ export class ServerEngine {
     castingTotalTime: number; castingIsChannel: boolean;
     targetEntityId: string | null;
   }>();
-  private lastBroadcastBuffs = new Map<string, string>(); // entityId -> JSON of buff array
-  private lastGasCloudCount = 0;
-  private lastChemPoolCount = 0;
+  private lastBroadcastBuffs = new Map<string, string>(); // entityId -> buff signature
+  // Track world effect IDs + consumed state to only send when actually changed
+  private lastBroadcastGasCloudIds = '';
+  private lastBroadcastChemPoolSig = '';
 
   onBroadcast?: (msg: ServerMessage) => void;
   onSendToPlayer?: (entityId: string, msg: ServerMessage) => void;
@@ -333,14 +344,8 @@ export class ServerEngine {
     this.buffSystem.update(dt);
     this.regenSystem.update(dt);
 
-    // Build and broadcast state
+    // Build and broadcast state (events are bundled into delta updates)
     this.broadcastGameState();
-
-    // Flush pending events
-    for (const event of this.pendingEvents) {
-      this.onBroadcast?.(event);
-    }
-    this.pendingEvents = [];
 
     // Check for deaths
     for (const entity of this.entities) {
@@ -471,7 +476,7 @@ export class ServerEngine {
       if (casting.isChannel && casting.ability.range) {
         const dx = entity.x - ct.x;
         const dz = entity.z - ct.z;
-        if (Math.sqrt(dx * dx + dz * dz) > casting.ability.range) {
+        if (Math.sqrt(dx * dx + dz * dz) > casting.ability.range + ServerEngine.RANGE_TOLERANCE) {
           this.cancelCasting(entity.id);
           return;
         }
@@ -556,7 +561,7 @@ export class ServerEngine {
       const dx = entity.x - state.target.x;
       const dz = entity.z - state.target.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
-      if (dist > entity.autoAttackRange) {
+      if (dist > entity.autoAttackRange + ServerEngine.RANGE_TOLERANCE) {
         state.timer = entity.autoAttackSpeed;
         return;
       }
@@ -924,9 +929,15 @@ export class ServerEngine {
 
     if (isKeyframe) {
       this.broadcastKeyframe();
+      // On keyframe ticks, flush events separately (keyframe msg type has no events field)
+      for (const event of this.pendingEvents) {
+        this.onBroadcast?.(event);
+      }
     } else {
+      // On delta ticks, bundle events into the update message to reduce WebSocket frames
       this.broadcastDelta();
     }
+    this.pendingEvents = [];
   }
 
   /** Full keyframe — sent periodically and used by clients to reset state. */
@@ -972,21 +983,35 @@ export class ServerEngine {
       });
     }
     for (const b of buffs) {
-      this.lastBroadcastBuffs.set(b.entityId, JSON.stringify(b.buffs));
+      this.lastBroadcastBuffs.set(b.entityId, b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}`).join(','));
     }
-    this.lastGasCloudCount = gasClouds.length;
-    this.lastChemPoolCount = chemicalPools.length;
+    this.lastBroadcastGasCloudIds = gasClouds.map(gc => gc.id).join(',');
+    this.lastBroadcastChemPoolSig = chemicalPools.map(cp => `${cp.id}:${cp.consumed}`).join(',');
   }
 
   /** Delta update — positions always, state/buffs only when changed. */
   private broadcastDelta(): void {
-    // Positions: always sent for all entities
-    const positions: EntityPositionData[] = this.entities.map(e => ({
-      id: e.id,
-      x: e.x, y: e.y, z: e.z,
-      rotationY: e.rotationY,
-      isMoving: e.isMoving,
-    }));
+    // Positions: only include entities whose position/rotation actually changed
+    const positions: EntityPositionData[] = [];
+    for (const e of this.entities) {
+      const prev = this.lastBroadcastPosition.get(e.id);
+      if (!prev
+        || Math.abs(prev.x - e.x) > ServerEngine.POSITION_EPSILON
+        || Math.abs(prev.y - e.y) > ServerEngine.POSITION_EPSILON
+        || Math.abs(prev.z - e.z) > ServerEngine.POSITION_EPSILON
+        || Math.abs(prev.rotationY - e.rotationY) > ServerEngine.ROTATION_EPSILON
+        || prev.isMoving !== e.isMoving
+      ) {
+        positions.push({
+          id: e.id, x: e.x, y: e.y, z: e.z,
+          rotationY: e.rotationY, isMoving: e.isMoving,
+        });
+        this.lastBroadcastPosition.set(e.id, {
+          x: e.x, y: e.y, z: e.z,
+          rotationY: e.rotationY, isMoving: e.isMoving,
+        });
+      }
+    }
 
     // State deltas: only entities whose combat/status state changed
     const states: EntityStateDelta[] = [];
@@ -1034,7 +1059,14 @@ export class ServerEngine {
       if (prev.charging !== e.charging) { delta.charging = e.charging; prev.charging = e.charging; hasChanges = true; }
       if (prev.isAutoAttacking !== e.isAutoAttacking) { delta.isAutoAttacking = e.isAutoAttacking; prev.isAutoAttacking = e.isAutoAttacking; hasChanges = true; }
       if (prev.castingAbilityId !== castingAbilityId) { delta.castingAbilityId = castingAbilityId; prev.castingAbilityId = castingAbilityId; hasChanges = true; }
-      if (prev.castingElapsed !== castingElapsed) { delta.castingElapsed = castingElapsed; prev.castingElapsed = castingElapsed; hasChanges = true; }
+      // Only send castingElapsed on significant events (cast start, pushback, interrupt),
+      // not every tick. Clients advance it locally at 60fps for smooth animation.
+      // Detect significant change: abilityId changed OR totalTime changed (pushback) OR elapsed reset
+      const castingEvent = prev.castingAbilityId !== castingAbilityId
+        || prev.castingTotalTime !== castingTotalTime
+        || (castingElapsed < prev.castingElapsed && castingAbilityId !== null);
+      if (castingEvent && prev.castingElapsed !== castingElapsed) { delta.castingElapsed = castingElapsed; hasChanges = true; }
+      prev.castingElapsed = castingElapsed;
       if (prev.castingTotalTime !== castingTotalTime) { delta.castingTotalTime = castingTotalTime; prev.castingTotalTime = castingTotalTime; hasChanges = true; }
       if (prev.castingIsChannel !== castingIsChannel) { delta.castingIsChannel = castingIsChannel; prev.castingIsChannel = castingIsChannel; hasChanges = true; }
       if (prev.targetEntityId !== targetEntityId) { delta.targetEntityId = targetEntityId; prev.targetEntityId = targetEntityId; hasChanges = true; }
@@ -1042,25 +1074,30 @@ export class ServerEngine {
       if (hasChanges) states.push(delta);
     }
 
-    // Buffs: only include entities whose buff list changed
+    // Buffs: only include entities whose buff list changed in a meaningful way.
+    // Use a lightweight signature (buff ids + shield values) instead of JSON.stringify,
+    // and exclude `remaining` since clients can decrement it locally.
     const allBuffs = this.buildBuffSnapshots();
     const changedBuffs: EntityBuffSnapshot[] = [];
     for (const b of allBuffs) {
-      const currentJson = JSON.stringify(b.buffs);
-      const prevJson = this.lastBroadcastBuffs.get(b.entityId);
-      if (currentJson !== prevJson) {
+      const sig = b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}`).join(',');
+      const prevSig = this.lastBroadcastBuffs.get(b.entityId);
+      if (sig !== prevSig) {
         changedBuffs.push(b);
-        this.lastBroadcastBuffs.set(b.entityId, currentJson);
+        this.lastBroadcastBuffs.set(b.entityId, sig);
       }
     }
 
-    // World effects: only include when present or count changed
+    // World effects: only include when the set of active effects actually changed
+    // (spawn/despawn/consumed state change), not every tick while they exist
     const gasClouds = this.buildGasCloudSnapshots();
     const chemPools = this.buildChemPoolSnapshots();
-    const gasChanged = gasClouds.length !== this.lastGasCloudCount || gasClouds.length > 0;
-    const chemChanged = chemPools.length !== this.lastChemPoolCount || chemPools.length > 0;
-    this.lastGasCloudCount = gasClouds.length;
-    this.lastChemPoolCount = chemPools.length;
+    const gasIdSig = gasClouds.map(gc => gc.id).join(',');
+    const chemSig = chemPools.map(cp => `${cp.id}:${cp.consumed}`).join(',');
+    const gasChanged = gasIdSig !== this.lastBroadcastGasCloudIds;
+    const chemChanged = chemSig !== this.lastBroadcastChemPoolSig;
+    if (gasChanged) this.lastBroadcastGasCloudIds = gasIdSig;
+    if (chemChanged) this.lastBroadcastChemPoolSig = chemSig;
 
     const msg: S2C_GameStateUpdate = {
       type: 'game_state_update',
@@ -1073,6 +1110,7 @@ export class ServerEngine {
     if (changedBuffs.length > 0) msg.buffs = changedBuffs;
     if (gasChanged) msg.gasClouds = gasClouds;
     if (chemChanged) msg.chemicalPools = chemPools;
+    if (this.pendingEvents.length > 0) msg.events = this.pendingEvents as S2C_GameStateUpdate['events'];
 
     this.onBroadcast?.(msg);
   }

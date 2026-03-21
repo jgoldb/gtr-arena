@@ -221,6 +221,9 @@ function startMultiplayer(msg: S2C_GameStart): void {
 
   clientEngine = new ClientEngine(canvas, network!, msg.mapId, msg.localEntityId, msg.entities);
 
+  // Tell the server we're loaded and ready
+  network!.send({ type: 'client_ready' });
+
   // Wire up server message handlers
   clientEngine.onError = (message) => mpErrorText?.show(message);
 
@@ -608,6 +611,14 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'chem_pool_spawn':
       clientEngine?.handleChemPoolSpawn(msg);
+      break;
+
+    case 'countdown_start':
+      // Server confirmed all clients are ready — reset the arena timer so
+      // everyone's countdown is synchronized regardless of load time.
+      if (clientEngine) {
+        clientEngine.mapManager.resetTimer();
+      }
       break;
 
     case 'game_over':

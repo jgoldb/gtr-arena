@@ -69,6 +69,11 @@ export class MapManager {
     this.currentScript?.update(dt);
   }
 
+  /** Reset the arena countdown timer (synchronize after all clients report ready). */
+  resetTimer(): void {
+    this.currentScript?.resetTimer?.();
+  }
+
   getScript(): MapScript | null {
     return this.currentScript;
   }

@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart } from '@gtr/shared';
 import { MAPS } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
@@ -18,8 +18,14 @@ export class GameSession {
   private players: SessionPlayer[];
   private sockets: Map<string, WebSocket>;
   private entityIdByUserId = new Map<string, string>();
+  private userIdByEntityId = new Map<string, string>();
   private onGameOver: (gameId: string) => void;
   private stopped = false;
+  private readyPlayers = new Set<string>();
+  private readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private countdownStarted = false;
+  private static readonly READY_TIMEOUT_MS = 10_000; // max wait for slow clients
+  private static readonly COUNTDOWN_SECONDS = 3;
 
   constructor(
     gameId: string,
@@ -60,6 +66,7 @@ export class GameSession {
 
       this.engine.addEntity(entity);
       this.entityIdByUserId.set(p.userId, entityId);
+      this.userIdByEntityId.set(entityId, p.userId);
     }
 
     // Wire engine callbacks
@@ -69,7 +76,9 @@ export class GameSession {
   }
 
   start(): void {
-    // Send game_start to each player with their local entity ID
+    // Send game_start to each player with their local entity ID.
+    // Clients load assets/scene, then send 'client_ready'. The countdown
+    // begins once ALL clients report ready (or after a timeout fallback).
     const allEntities = this.engine.getAllEntities();
     const snapshots = allEntities.map(e => e.toSnapshot());
 
@@ -81,23 +90,69 @@ export class GameSession {
         mapId: this.mapId,
         entities: snapshots,
         localEntityId: entityId,
-        countdown: 3,
+        countdown: GameSession.COUNTDOWN_SECONDS,
       };
       this.sendToUser(p.userId, msg);
     }
 
-    // Start the engine after a countdown delay
+    // Fallback: if not all clients report ready within the timeout, start anyway
+    this.readyTimeoutId = setTimeout(() => {
+      if (!this.stopped && !this.countdownStarted) {
+        this.beginCountdown();
+      }
+    }, GameSession.READY_TIMEOUT_MS);
+  }
+
+  /** Called when a client reports it has loaded and is ready. */
+  markReady(userId: string): void {
+    if (this.countdownStarted || this.stopped) return;
+    this.readyPlayers.add(userId);
+
+    // Check if all connected players are ready
+    const allReady = this.players.every(p =>
+      this.readyPlayers.has(p.userId) || !this.sockets.has(p.userId)
+    );
+    if (allReady) {
+      this.beginCountdown();
+    }
+  }
+
+  private beginCountdown(): void {
+    if (this.countdownStarted) return;
+    this.countdownStarted = true;
+
+    if (this.readyTimeoutId) {
+      clearTimeout(this.readyTimeoutId);
+      this.readyTimeoutId = null;
+    }
+
+    // Tell all clients the countdown is starting NOW (synchronized)
+    const countdownMsg: S2C_CountdownStart = {
+      type: 'countdown_start',
+      countdown: GameSession.COUNTDOWN_SECONDS,
+    };
+    this.broadcast(countdownMsg);
+
     setTimeout(() => {
       if (!this.stopped) this.engine.start();
-    }, 3000);
+    }, GameSession.COUNTDOWN_SECONDS * 1000);
   }
 
   stop(): void {
     this.stopped = true;
     this.engine.stop();
+    if (this.readyTimeoutId) {
+      clearTimeout(this.readyTimeoutId);
+      this.readyTimeoutId = null;
+    }
   }
 
   handleMessage(userId: string, msg: ClientMessage): void {
+    if (msg.type === 'client_ready') {
+      this.markReady(userId);
+      return;
+    }
+
     const entityId = this.entityIdByUserId.get(userId);
     if (!entityId) return;
 
@@ -181,12 +236,9 @@ export class GameSession {
   }
 
   private sendToEntity(entityId: string, msg: ServerMessage): void {
-    // Find userId for this entity
-    for (const [userId, eid] of this.entityIdByUserId) {
-      if (eid === entityId) {
-        this.sendToUser(userId, msg);
-        return;
-      }
+    const userId = this.userIdByEntityId.get(entityId);
+    if (userId) {
+      this.sendToUser(userId, msg);
     }
   }
 

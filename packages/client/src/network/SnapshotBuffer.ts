@@ -108,7 +108,9 @@ export class SnapshotBuffer {
    */
   loadKeyframe(entities: EntitySnapshot[], buffs: EntityBuffSnapshot[],
                gasClouds: GasCloudSnapshot[], chemPools: ChemicalPoolSnapshot[]): void {
-    this.snapshots.length = 0;
+    // NOTE: Do NOT clear this.snapshots here — position history is needed for
+    // smooth interpolation. Clearing it would cause a visible stutter every
+    // keyframe (every 5 seconds) while the buffer refills.
     this.entityStates.clear();
     this.entityBuffs.clear();
 

@@ -269,10 +269,12 @@ export class ClientEngine {
 
   // ── Server message handlers ──────────────────────────────────────────
 
-  /** Handle delta updates (every tick) — positions always, state/buffs only when changed. */
+  /** Handle delta updates (every tick) — positions only when changed, state/buffs only when changed. */
   handleGameStateUpdate(msg: S2C_GameStateUpdate): void {
     // Feed positions into the snapshot buffer for smooth interpolation
-    this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.positions);
+    if (msg.positions.length > 0) {
+      this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.positions);
+    }
 
     // Apply state deltas (only present for entities whose state changed)
     if (msg.states) {
@@ -297,6 +299,26 @@ export class ClientEngine {
           pool.consumed = true;
         }
       }
+    }
+
+    // Process bundled events (avoids separate WebSocket frames per event)
+    if (msg.events) {
+      for (const event of msg.events) {
+        this.handleBundledEvent(event);
+      }
+    }
+  }
+
+  /** Dispatch a bundled event from the tick update. */
+  private handleBundledEvent(event: import('@gtr/shared').GameTickEvent): void {
+    switch (event.type) {
+      case 'combat_event': this.handleCombatEvent(event); break;
+      case 'ability_effect': this.handleAbilityEffect(event); break;
+      case 'cooldown_update': this.handleCooldownUpdate(event); break;
+      case 'auto_attack_swing': this.handleAutoAttackSwing(event); break;
+      case 'gas_cloud_spawn': this.handleGasCloudSpawn(event); break;
+      case 'chem_pool_spawn': this.handleChemPoolSpawn(event); break;
+      case 'entity_died': break; // handled via game state (dead flag)
     }
   }
 
@@ -669,6 +691,17 @@ export class ClientEngine {
     for (const [id, cd] of this.cooldowns) {
       cd.remaining = Math.max(0, cd.remaining - dt);
       if (cd.remaining <= 0) this.cooldowns.delete(id);
+    }
+
+    // Locally decrement buff remaining timers so UI stays smooth between
+    // server updates (server only sends buff changes on add/remove/shield change)
+    for (const b of this.localBuffs) {
+      if (b.duration > 0) b.remaining = Math.max(0, b.remaining - dt);
+    }
+    for (const entity of this.remoteEntities.values()) {
+      for (const b of entity.buffs) {
+        if (b.duration > 0) b.remaining = Math.max(0, b.remaining - dt);
+      }
     }
 
     // Interpolate remote entity positions using snapshot buffer
