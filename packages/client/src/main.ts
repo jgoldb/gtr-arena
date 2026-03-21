@@ -77,6 +77,7 @@ function cleanupCurrentState(): void {
 }
 
 function cleanupMultiplayerUI(): void {
+  window.removeEventListener('beforeunload', onBeforeUnload);
   clientEngine?.destroy();
   clientEngine = null;
   mpActionBar?.element.remove();
@@ -146,10 +147,17 @@ function showGameLobby(): void {
 
 // ── Multiplayer Game ───────────────────────────────────────────────────
 
+function onBeforeUnload(e: BeforeUnloadEvent): void {
+  e.preventDefault();
+}
+
 function startMultiplayer(msg: S2C_GameStart): void {
   cleanupCurrentState();
   currentState = 'multiplayer';
   showGameUI();
+
+  // Warn before closing the window while in-game
+  window.addEventListener('beforeunload', onBeforeUnload);
 
   clientEngine = new ClientEngine(canvas, network!, msg.mapId, msg.localEntityId, msg.entities);
 

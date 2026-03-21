@@ -49,12 +49,13 @@ export class GameSession {
       const entityId = `entity_${p.userId}`;
       const entity = new ServerEntity(entityId, p.userId, p.characterId, p.username, p.team);
 
-      // Place at team spawn point
+      // Place at team spawn point, facing toward map center (i.e. toward the enemy)
       const spawn = mapInfo?.spawnPoints[p.team];
       if (spawn) {
         entity.x = spawn.x;
         entity.y = spawn.y;
         entity.z = spawn.z;
+        entity.rotationY = Math.atan2(-spawn.x, -spawn.z);
       }
 
       this.engine.addEntity(entity);
@@ -124,6 +125,23 @@ export class GameSession {
 
   removePlayer(userId: string): void {
     this.sockets.delete(userId);
+    if (this.stopped) return;
+
+    // Check if any team has 0 connected players — if so, the other team wins
+    const connectedUserIds = new Set(this.sockets.keys());
+    const teams = new Set(this.players.map(p => p.team));
+    for (const team of teams) {
+      const teamPlayers = this.players.filter(p => p.team === team);
+      const hasConnected = teamPlayers.some(p => connectedUserIds.has(p.userId));
+      if (!hasConnected) {
+        // This team has no connected players — other team wins
+        const winningTeam = [...teams].find(t => t !== team);
+        if (winningTeam !== undefined) {
+          this.handleGameOver(winningTeam);
+        }
+        return;
+      }
+    }
   }
 
   isEmpty(): boolean {

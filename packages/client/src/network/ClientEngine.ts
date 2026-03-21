@@ -147,7 +147,16 @@ export class ClientEngine {
       (this.playerController as any).team = localSnap.team;
       (this.playerController as any).name = localSnap.name;
       this.playerController.mesh.position.set(localSnap.x, localSnap.y, localSnap.z);
-      this.camera.position.set(localSnap.x, localSnap.y + 8, localSnap.z + 12);
+      this.playerController.mesh.rotation.y = localSnap.rotationY;
+      (this.playerController as any).targetRotation = localSnap.rotationY;
+      (this.playerController as any).movementAzimuth = localSnap.rotationY + Math.PI;
+      this.thirdPersonCamera.azimuth = localSnap.rotationY + Math.PI;
+      const camDist = this.thirdPersonCamera.distance;
+      this.camera.position.set(
+        localSnap.x - Math.sin(localSnap.rotationY) * camDist,
+        localSnap.y + 8,
+        localSnap.z - Math.cos(localSnap.rotationY) * camDist,
+      );
     }
 
     // Create remote entities for other players
