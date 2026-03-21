@@ -107,6 +107,7 @@ export class Engine {
     isChannel: boolean;
     tickInterval: number;
     ticksDelivered: number;
+    damageMultiplier: number; // snapshotted at channel start for buff consistency
   } | null = null;
   private static readonly CAST_PUSHBACK = 0.5;
   onCastComplete?: (ability: Ability, target: Targetable | null) => void;
@@ -317,6 +318,7 @@ export class Engine {
       isChannel,
       tickInterval: isChannel ? ability.castTime! / ability.channelTicks! : 0,
       ticksDelivered: 0,
+      damageMultiplier: isChannel ? this.buffSystem.getDamageDealtMultiplier(this.playerController) : 1,
     };
 
     // Apply channel aura to target
@@ -375,7 +377,7 @@ export class Engine {
     const isFriendly = !target.isHostileTo(this.playerController);
 
     if (isFriendly && ability.healAmount) {
-      const healPerTick = Math.round(ability.healAmount / ability.channelTicks!);
+      const healPerTick = Math.round(ability.healAmount / ability.channelTicks! * this.casting!.damageMultiplier);
       this.combatSystem.applyHeal(target, healPerTick);
       // Healing someone in combat puts the healer in combat
       if (target.inCombat) {
@@ -383,7 +385,7 @@ export class Engine {
       }
     } else if (!isFriendly && ability.damage > 0) {
       const damagePerTick = Math.round(ability.damage / ability.channelTicks!);
-      this.combatSystem.applyChannelTickDamage(this.playerController, target, damagePerTick);
+      this.combatSystem.applyChannelTickDamage(this.playerController, target, damagePerTick, this.casting!.damageMultiplier);
     }
   }
 
@@ -738,8 +740,9 @@ export class Engine {
         // Target stepped in — trigger effects and consume the pool
         if (target.isHostileTo(pool.owner)) {
           // Hostile: deal initial damage + apply DoT
-          target.hp = Math.max(0, target.hp - pool.initialDamage);
-          this.combatSystem.onCombatText?.(target, pool.initialDamage, 'damage');
+          const actualPoolDmg = this.combatSystem.processDamageAbsorb(target, pool.initialDamage, pool.owner);
+          target.hp = Math.max(0, target.hp - actualPoolDmg);
+          if (actualPoolDmg > 0) this.combatSystem.onCombatText?.(target, actualPoolDmg, 'damage');
           this.combatSystem.enterCombat(pool.owner);
           this.combatSystem.enterCombat(target);
           if (target.hp <= 0 && !target.dead) {
@@ -819,8 +822,9 @@ export class Engine {
       // Tick damage
       while (dot.elapsed >= dot.nextTickAt && dot.nextTickAt <= dot.totalDuration) {
         if (!dot.target.dead) {
-          dot.target.hp = Math.max(0, dot.target.hp - dot.damagePerTick);
-          this.combatSystem.onCombatText?.(dot.target, dot.damagePerTick, 'damage');
+          const actualDotDmg = this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
+          dot.target.hp = Math.max(0, dot.target.hp - actualDotDmg);
+          if (actualDotDmg > 0) this.combatSystem.onCombatText?.(dot.target, actualDotDmg, 'damage');
           this.combatSystem.enterCombat(dot.target);
           if (dot.target.hp <= 0 && !dot.target.dead) {
             dot.target.die();
@@ -896,8 +900,9 @@ export class Engine {
       while (cloud.elapsed >= cloud.nextTickAt && cloud.nextTickAt <= cloud.duration) {
         for (const target of cloud.affectedTargets) {
           if (target.dead) continue;
-          target.hp = Math.max(0, target.hp - cloud.damagePerTick);
-          this.combatSystem.onCombatText?.(target, cloud.damagePerTick, 'damage');
+          const actualCloudDmg = this.combatSystem.processDamageAbsorb(target, cloud.damagePerTick, cloud.owner);
+          target.hp = Math.max(0, target.hp - actualCloudDmg);
+          if (actualCloudDmg > 0) this.combatSystem.onCombatText?.(target, actualCloudDmg, 'damage');
           this.combatSystem.enterCombat(target);
           if (target.hp <= 0 && !target.dead) {
             target.die();
@@ -1259,6 +1264,7 @@ export class Engine {
     // Update buff-driven modifiers before player update
     this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController);
     this.playerController.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(this.playerController, 'crash-out'));
+    this.playerController.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(this.playerController, 'retard-strength'));
 
     // Stun state — player
     const playerStunned = this.buffSystem.isStunned(this.playerController);

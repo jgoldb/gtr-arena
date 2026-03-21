@@ -236,6 +236,32 @@ export const ChemicalSpill: Ability = {
     'Spill a vial of mysterious chemicals onto the ground that other players can slip on. Activates after 2 seconds. Friendly players receive a 40% movement speed increase for 4 seconds. Hostile players take 40 damage and an additional 60 damage over 6 seconds.',
 };
 
+export const RetardStrengthBuff: BuffDefinition = {
+  id: 'retard-strength',
+  name: 'Retard Strength',
+  icon: '💪',
+  duration: 3,
+  type: 'buff',
+  description: 'Damage and healing dealt increased by 50%. Absorbs up to 100 damage. Reflects 50% of damage taken.',
+  effects: [{ type: 'damageDealtPercent', value: 50 }],
+  shieldAmount: 100,
+  shieldReflectPercent: 50,
+};
+
+export const RetardStrength: Ability = {
+  id: 'retard-strength',
+  name: 'Retard Strength',
+  icon: '💪',
+  manaCost: 15,
+  cooldown: 15,
+  castTime: 2,
+  damage: 0,
+  requiresHostileTarget: false,
+  description:
+    'You are much stronger than you appear. Increase damage and healing dealt by 50% and shields you, absorbing up to 100 damage and reflecting 50% of damage taken for 3 seconds.',
+  appliesSelfBuff: RetardStrengthBuff,
+};
+
 export const Chudmax: Ability = {
   id: 'chudmax',
   name: 'Chudmax',

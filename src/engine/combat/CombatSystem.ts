@@ -230,12 +230,19 @@ export class CombatSystem {
           }
         }
 
+        // Apply attacker's damage dealt modifier (e.g. Retard Strength)
+        const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+        baseDamage = Math.round(baseDamage * damageMult);
+
         const multiplier = outcome === 'crit' ? 2 : 1;
         const damage = baseDamage * multiplier;
-        target.hp = Math.max(0, target.hp - damage);
+        const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+        target.hp = Math.max(0, target.hp - actualDamage);
         if (damage > 0) {
-          this.onCombatText?.(target, damage, outcome === 'crit' ? 'crit' : 'damage');
           this.onDirectDamageDealt?.(target);
+        }
+        if (actualDamage > 0) {
+          this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
         }
 
         // Apply debuff only on hit
@@ -284,13 +291,20 @@ export class CombatSystem {
       return;
     }
 
+    // Apply attacker's damage dealt modifier
+    const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+    const adjustedBase = Math.round(baseDamage * damageMult);
+
     const isCrit = Math.random() < attacker.critChance;
     const multiplier = isCrit ? 2 : 1;
-    const damage = Math.round(baseDamage * multiplier);
-    target.hp = Math.max(0, target.hp - damage);
+    const damage = Math.round(adjustedBase * multiplier);
+    const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+    target.hp = Math.max(0, target.hp - actualDamage);
     if (damage > 0) {
-      this.onCombatText?.(target, damage, isCrit ? 'crit' : 'damage');
       this.onDirectDamageDealt?.(target);
+    }
+    if (actualDamage > 0) {
+      this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
     }
 
     this.enterCombat(attacker);
@@ -312,17 +326,22 @@ export class CombatSystem {
     this.cooldowns.delete(abilityId);
   }
 
-  /** Channel ticks cannot miss or be dodged; each tick rolls crit independently. */
-  applyChannelTickDamage(attacker: Targetable, target: Targetable, tickDamage: number): void {
+  /** Channel ticks cannot miss or be dodged; each tick rolls crit independently.
+   *  damageMultiplier is a snapshotted multiplier from buffs at channel start. */
+  applyChannelTickDamage(attacker: Targetable, target: Targetable, tickDamage: number, damageMultiplier = 1): void {
     if (attacker.dead || target.dead) return;
 
+    const adjustedTick = Math.round(tickDamage * damageMultiplier);
     const isCrit = Math.random() < attacker.critChance;
     const mult = isCrit ? 2 : 1;
-    const damage = Math.round(tickDamage * mult);
-    target.hp = Math.max(0, target.hp - damage);
+    const damage = Math.round(adjustedTick * mult);
+    const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+    target.hp = Math.max(0, target.hp - actualDamage);
     if (damage > 0) {
-      this.onCombatText?.(target, damage, isCrit ? 'crit' : 'damage');
       this.onDirectDamageDealt?.(target);
+    }
+    if (actualDamage > 0) {
+      this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
     }
     if (target.hp <= 0 && !target.dead) {
       target.die();
@@ -331,6 +350,21 @@ export class CombatSystem {
 
     this.enterCombat(attacker);
     this.enterCombat(target);
+  }
+
+  /** Process damage through shields. Returns actual HP damage. Handles reflection. */
+  processDamageAbsorb(target: Targetable, damage: number, attacker: Targetable | null): number {
+    const { remaining, reflectDamage } = this.buffSystem.absorbDamage(target, damage);
+    if (reflectDamage > 0 && attacker && !attacker.dead) {
+      attacker.hp = Math.max(0, attacker.hp - reflectDamage);
+      this.onCombatText?.(attacker, reflectDamage, 'damage');
+      this.enterCombat(attacker);
+      if (attacker.hp <= 0 && !attacker.dead) {
+        attacker.die();
+        this.combatTimers.delete(attacker);
+      }
+    }
+    return remaining;
   }
 
   applyHeal(target: Targetable, healAmount: number): void {
@@ -351,10 +385,14 @@ export class CombatSystem {
     } else {
       const critMult = outcome === 'crit' ? 2 : 1;
       const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
-      const damage = Math.round(baseDamage * buffMult * critMult);
-      target.hp = Math.max(0, target.hp - damage);
-      this.onCombatText?.(target, damage, outcome === 'crit' ? 'crit' : 'damage');
+      const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+      const damage = Math.round(baseDamage * buffMult * damageMult * critMult);
+      const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+      target.hp = Math.max(0, target.hp - actualDamage);
       if (damage > 0) this.onDirectDamageDealt?.(target);
+      if (actualDamage > 0) {
+        this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+      }
       if (target.hp <= 0 && !target.dead) {
         target.die();
         this.combatTimers.delete(target);
