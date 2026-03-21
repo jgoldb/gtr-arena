@@ -14,6 +14,9 @@ export class InputManager {
   private rightClickEvent: { x: number; y: number } | null = null;
   private static readonly CLICK_THRESHOLD = 4;
 
+  // Skip first N mousemove events after pointer lock to discard browser transition spikes
+  private pointerLockSkip = 0;
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
 
@@ -24,6 +27,9 @@ export class InputManager {
     window.addEventListener('mousemove', this.onMouseMove);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Discard spurious mouse delta from the pointer lock transition
+    document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -80,8 +86,14 @@ export class InputManager {
   };
 
   private onMouseMove = (e: MouseEvent): void => {
-    this.mouseDelta.x += e.movementX;
-    this.mouseDelta.y += e.movementY;
+    if (document.pointerLockElement) {
+      if (this.pointerLockSkip > 0) {
+        this.pointerLockSkip--;
+      } else {
+        this.mouseDelta.x += e.movementX;
+        this.mouseDelta.y += e.movementY;
+      }
+    }
 
     if (this.leftClickPending) {
       this.leftDragDist += Math.abs(e.movementX) + Math.abs(e.movementY);
@@ -90,6 +102,14 @@ export class InputManager {
         this.leftClickPending = false;
         this.canvas.requestPointerLock();
       }
+    }
+  };
+
+  private onPointerLockChange = (): void => {
+    this.mouseDelta.x = 0;
+    this.mouseDelta.y = 0;
+    if (document.pointerLockElement) {
+      this.pointerLockSkip = 2;
     }
   };
 
@@ -136,5 +156,6 @@ export class InputManager {
     this.canvas.removeEventListener('mousedown', this.onMouseDown);
     window.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('mousemove', this.onMouseMove);
+    document.removeEventListener('pointerlockchange', this.onPointerLockChange);
   }
 }
