@@ -9,6 +9,7 @@ import { ActionBar } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
 import { Nameplates } from './ui/Nameplates';
+import { EscapeMenu } from './ui/EscapeMenu';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats } from '@gtr/shared';
 import type { Ability } from './engine/combat/Ability';
@@ -45,8 +46,24 @@ let mpCastBarContainer: HTMLDivElement | null = null;
 let mpCastBarFill: HTMLDivElement | null = null;
 let mpCastBarHeader: HTMLDivElement | null = null;
 let mpGameOverScreen: HTMLDivElement | null = null;
+let mpEscapeMenu: EscapeMenu | null = null;
 let mpFrameLoopId: number | null = null;
 let mpSelectedTargetId: string | null = null;
+
+// Playground UI elements
+let pgEngine: import('./engine/Engine').Engine | null = null;
+let pgDebugPanel: import('./ui/DebugPanel').DebugPanel | null = null;
+let pgActionBar: ActionBar | null = null;
+let pgPlayerFrame: UnitFrame | null = null;
+let pgTargetFrame: UnitFrame | null = null;
+let pgErrorText: ErrorText | null = null;
+let pgCombatText: FloatingCombatText | null = null;
+let pgNameplates: Nameplates | null = null;
+let pgDeathScreen: HTMLDivElement | null = null;
+let pgCastBarContainer: HTMLDivElement | null = null;
+let pgEscapeMenu: EscapeMenu | null = null;
+let pgFrameLoopId: number | null = null;
+let pgResizeHandler: (() => void) | null = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -74,13 +91,15 @@ function cleanupCurrentState(): void {
   gameLobbyScreen?.destroy();
   gameLobbyScreen = null;
   cleanupMultiplayerUI();
+  cleanupPlaygroundUI();
 }
 
 function cleanupMultiplayerUI(): void {
   window.removeEventListener('beforeunload', onBeforeUnload);
+  window.removeEventListener('resize', onMpResize);
   clientEngine?.destroy();
   clientEngine = null;
-  mpActionBar?.element.remove();
+  mpActionBar?.dispose();
   mpActionBar = null;
   mpPlayerFrame?.element.remove();
   mpPlayerFrame = null;
@@ -96,11 +115,52 @@ function cleanupMultiplayerUI(): void {
   mpCastBarContainer = null;
   mpGameOverScreen?.remove();
   mpGameOverScreen = null;
+  mpEscapeMenu?.dispose();
+  mpEscapeMenu = null;
   if (mpFrameLoopId !== null) {
     cancelAnimationFrame(mpFrameLoopId);
     mpFrameLoopId = null;
   }
   mpSelectedTargetId = null;
+}
+
+function cleanupPlaygroundUI(): void {
+  if (pgResizeHandler) {
+    window.removeEventListener('resize', pgResizeHandler);
+    pgResizeHandler = null;
+  }
+  if (pgFrameLoopId !== null) {
+    cancelAnimationFrame(pgFrameLoopId);
+    pgFrameLoopId = null;
+  }
+  pgEngine?.dispose();
+  pgEngine = null;
+  pgDebugPanel?.dispose();
+  pgDebugPanel = null;
+  pgActionBar?.dispose();
+  pgActionBar = null;
+  pgPlayerFrame?.element.remove();
+  pgPlayerFrame = null;
+  pgTargetFrame?.element.remove();
+  pgTargetFrame = null;
+  pgErrorText?.element.remove();
+  pgErrorText = null;
+  pgCombatText?.element.remove();
+  pgCombatText = null;
+  pgNameplates?.element.remove();
+  pgNameplates = null;
+  pgDeathScreen?.remove();
+  pgDeathScreen = null;
+  pgCastBarContainer?.remove();
+  pgCastBarContainer = null;
+  pgEscapeMenu?.dispose();
+  pgEscapeMenu = null;
+  // Clear sidebar panel containers (CharacterSelector, MapSelector, NpcSpawner, debug buttons)
+  const containers = ['map-selector-container', 'debug-panel-container', 'character-selector-container', 'npc-spawner-container'];
+  for (const id of containers) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  }
 }
 
 // ── Auth Screen ────────────────────────────────────────────────────────
@@ -326,6 +386,22 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
   mpCastBarContainer.appendChild(castBarBg);
   document.body.appendChild(mpCastBarContainer);
 
+  // Escape menu
+  mpEscapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {
+      showLobby();
+      network?.send({ type: 'return_to_lobby' });
+    },
+    onEscapeWhilePlaying: () => {
+      if (clientEngine?.getLocalCastingState()) {
+        clientEngine.sendCancelCast();
+        return true;
+      }
+      return false;
+    },
+  });
+  document.body.appendChild(mpEscapeMenu.element);
+
   // Targeting and auto-attack are handled inside ClientEngine via InputManager
   // (same polling approach as playground mode — no DOM event handlers needed)
   clientEngine.onTargetChanged = (entityId) => {
@@ -538,7 +614,6 @@ function showGameOver(winningTeam: number): void {
     cursor: pointer; outline: none;
   `;
   btn.addEventListener('click', () => {
-    window.removeEventListener('resize', onMpResize);
     showLobby();
     network?.send({ type: 'return_to_lobby' });
   });
@@ -571,6 +646,7 @@ async function startPlayground(): Promise<void> {
   const { DebugStun, DiscombobulateDebuff, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, yardsToUnits } = await import('./engine/combat/Ability');
 
   const engine = new Engine(canvas);
+  pgEngine = engine;
 
   const mapContainer = document.getElementById('map-selector-container')!;
   const debugContainer = document.getElementById('debug-panel-container')!;
@@ -580,7 +656,7 @@ async function startPlayground(): Promise<void> {
   new CharacterSelector(engine, charContainer);
   new MapSelector(engine, mapContainer);
   new NpcSpawner(engine, npcContainer);
-  new DebugPanel(engine, debugContainer);
+  pgDebugPanel = new DebugPanel(engine, debugContainer);
 
   // Debug buttons
   const makeBtn = (text: string, bg: string, onClick: () => void) => {
@@ -623,16 +699,25 @@ async function startPlayground(): Promise<void> {
 
   // Unit frames
   const setTarget = (t: Targetable) => { engine.targetingSystem.currentTarget = t; };
+  const playerFrameContainer = document.getElementById('player-frame-container')!;
+  const targetFrameContainer = document.getElementById('target-frame-container')!;
+  playerFrameContainer.innerHTML = '';
+  targetFrameContainer.innerHTML = '';
   const playerFrame = new UnitFrame({ getPortrait, onClick: setTarget });
-  document.getElementById('player-frame-container')!.appendChild(playerFrame.element);
+  pgPlayerFrame = playerFrame;
+  playerFrameContainer.appendChild(playerFrame.element);
   const targetFrame = new UnitFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
-  document.getElementById('target-frame-container')!.appendChild(targetFrame.element);
+  pgTargetFrame = targetFrame;
+  targetFrameContainer.appendChild(targetFrame.element);
 
   const errorText = new ErrorText();
+  pgErrorText = errorText;
   document.body.appendChild(errorText.element);
   const combatText = new FloatingCombatText(engine.camera);
+  pgCombatText = combatText;
   document.body.appendChild(combatText.element);
   const nameplates = new Nameplates(engine.camera, engine.scene);
+  pgNameplates = nameplates;
   document.body.appendChild(nameplates.element);
 
   engine.combatSystem.onCombatText = (target, amount, type) => {
@@ -643,6 +728,7 @@ async function startPlayground(): Promise<void> {
 
   // Death screen
   const deathScreen = document.createElement('div');
+  pgDeathScreen = deathScreen;
   deathScreen.style.cssText = 'position: fixed; top: 35%; left: 50%; transform: translate(-50%, -50%); display: none; z-index: 500; pointer-events: none;';
   const deathDialog = document.createElement('div');
   deathDialog.style.cssText = 'pointer-events: auto; background: linear-gradient(to bottom, rgba(30,10,10,0.95), rgba(10,5,5,0.95)); border: 1px solid #aa3333; border-radius: 8px; padding: 30px 40px; text-align: center; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;';
@@ -662,6 +748,7 @@ async function startPlayground(): Promise<void> {
 
   // Cast bar
   const castBarContainer = document.createElement('div');
+  pgCastBarContainer = castBarContainer;
   castBarContainer.style.cssText = 'position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); width: 240px; z-index: 100; display: none;';
   const castBarHeader = document.createElement('div');
   castBarHeader.style.cssText = 'display: flex; justify-content: space-between; color: #ddd; font-size: 11px; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; margin-bottom: 2px; text-shadow: 1px 1px 2px rgba(0,0,0,0.9);';
@@ -723,16 +810,31 @@ async function startPlayground(): Promise<void> {
     getCombatSystem: () => engine.combatSystem,
     isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || (engine.isCasting() && !engine.isChanneling()),
   });
+  pgActionBar = actionBar;
   document.body.appendChild(actionBar.element);
   const loadAbilities = (abilities: readonly Ability[]) => { actionBar.clearAllSlots(); abilities.forEach((ab, i) => actionBar.setSlotAbility(i, ab)); };
   loadAbilities(engine.playerController.abilities);
   engine.onCharacterChange = (abilities) => loadAbilities(abilities);
   engine.onAutoAttackError = (message) => errorText.show(message);
 
+  // Escape menu
+  const escapeMenu = new EscapeMenu({
+    onReturnToLobby: () => showLobby(),
+    onEscapeWhilePlaying: () => {
+      if (engine.isCasting()) {
+        engine.cancelCasting();
+        return true;
+      }
+      return false;
+    },
+  });
+  pgEscapeMenu = escapeMenu;
+  document.body.appendChild(escapeMenu.element);
+
   let deathScreenShown = false;
   let lastFrameTime = performance.now();
   function updateFrames(): void {
-    requestAnimationFrame(updateFrames);
+    pgFrameLoopId = requestAnimationFrame(updateFrames);
     const now = performance.now();
     const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
     lastFrameTime = now;
@@ -771,7 +873,8 @@ async function startPlayground(): Promise<void> {
   }
   updateFrames();
 
-  window.addEventListener('resize', () => engine.resize(window.innerWidth, window.innerHeight));
+  pgResizeHandler = () => engine.resize(window.innerWidth, window.innerHeight);
+  window.addEventListener('resize', pgResizeHandler);
   engine.start();
 }
 

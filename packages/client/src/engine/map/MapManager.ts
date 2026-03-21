@@ -95,6 +95,13 @@ export class MapManager {
     return this.currentConfig?.npcSpawnBounds ?? this.getBounds();
   }
 
+  dispose(): void {
+    if (this.currentScript) {
+      this.currentScript.dispose();
+      this.currentScript = null;
+    }
+  }
+
   getAvailableMaps(): MapConfig[] {
     return Array.from(this.maps.values());
   }

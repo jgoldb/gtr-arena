@@ -1174,6 +1174,7 @@ export class Engine {
       removeChannelBeam(this.scene, this.channelBeam);
       this.channelBeam = null;
     }
+    this.mapManager.dispose();
     this.playerController.dispose();
     this.renderer.dispose();
     this.input.dispose();

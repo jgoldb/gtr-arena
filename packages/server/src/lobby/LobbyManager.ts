@@ -95,6 +95,16 @@ export class LobbyManager {
         }
         break;
       case 'return_to_lobby':
+        if (user.gameSessionId) {
+          const session = this.gameSessions.get(user.gameSessionId);
+          if (session) {
+            session.removePlayer(userId);
+            if (session.isEmpty()) {
+              session.stop();
+              this.gameSessions.delete(user.gameSessionId);
+            }
+          }
+        }
         user.status = 'online';
         user.gameSessionId = null;
         this.broadcastLobbyState();

@@ -108,6 +108,7 @@ export class SnapshotBuffer {
    */
   loadKeyframe(entities: EntitySnapshot[], buffs: EntityBuffSnapshot[],
                gasClouds: GasCloudSnapshot[], chemPools: ChemicalPoolSnapshot[]): void {
+    this.snapshots.length = 0;
     this.entityStates.clear();
     this.entityBuffs.clear();
 

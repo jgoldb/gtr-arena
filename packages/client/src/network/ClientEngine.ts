@@ -885,6 +885,8 @@ export class ClientEngine {
     this.stop();
     this.input.dispose();
     this.targetingSystem.dispose();
+    this.mapManager.dispose();
+    this.renderer.dispose();
     for (const cloud of this.gasClouds.values()) disposeGroup(this.scene, cloud.group);
     this.gasClouds.clear();
     for (const pool of this.chemPools.values()) disposeGroup(this.scene, pool.group);
