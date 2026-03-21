@@ -1,0 +1,29 @@
+// Re-export everything from the shared package so existing client imports work unchanged.
+export {
+  YARDS_TO_UNITS,
+  yardsToUnits,
+  CoveredInPiss,
+  BucketSplash,
+  Mop,
+  DebugStun,
+  BigBootStun,
+  BigBoot,
+  FartBombDebuff,
+  FartBomb,
+  CrashOutBuff,
+  CrashOut,
+  Sweep,
+  BottleChuck,
+  DiscombobulateDebuff,
+  Discombobulate,
+  ChemicalSpillSpeedBuff,
+  ChemicalSpillDot,
+  ChemicalSpill,
+  RetardStrengthBuff,
+  RetardStrength,
+  Chudmax,
+  FullRetardBuff,
+  FullRetard,
+} from '@gtr/shared';
+
+export type { Ability, BuffDefinition, BuffEffect } from '@gtr/shared';

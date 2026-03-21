@@ -1,0 +1,876 @@
+import * as THREE from 'three';
+import type { EntitySnapshot, EntityBuffSnapshot } from '@gtr/shared';
+import type {
+  S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
+  S2C_CombatEvent, S2C_AbilityEffect, S2C_CooldownUpdate,
+  S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing,
+} from '@gtr/shared';
+import type { CharacterId } from '@gtr/shared';
+import { yardsToUnits } from '@gtr/shared';
+import type { NetworkManager } from './NetworkManager';
+import { SnapshotBuffer } from './SnapshotBuffer';
+import { Renderer } from '../engine/renderer/Renderer';
+import { InputManager } from '../engine/input/InputManager';
+import { MapManager } from '../engine/map/MapManager';
+import { ThirdPersonCamera } from '../engine/camera/ThirdPersonCamera';
+import { PlayerController } from '../engine/player/PlayerController';
+import { TargetingSystem } from '../engine/targeting/TargetingSystem';
+import { createCharacter, type CharacterModel } from '../engine/player/characters';
+import type { Targetable } from '../engine/types';
+import {
+  type GasCloudVisual, type ChemPoolVisual, type FullRetardAuraVisual,
+  POOL_CONSUME_DURATION,
+  createGasCloud, updateGasCloud,
+  createChemPool, updateChemPool,
+  createFullRetardAura, updateFullRetardAura as updateFullRetardAuraVisual,
+  createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
+  disposeGroup,
+} from '../engine/effects/VisualEffects';
+
+interface RemoteEntity {
+  id: string;
+  characterId: string;
+  team: number;
+  name: string;
+  model: CharacterModel;
+  mesh: THREE.Group;  // Wrapper group (like PlayerController.mesh) — rotation goes here
+  // Snapshot data (maintained incrementally from server deltas)
+  hp: number; maxHp: number; mana: number; maxMana: number;
+  dead: boolean; inCombat: boolean; stunned: boolean; charging: boolean;
+  isMoving: boolean; isAutoAttacking: boolean;
+  castingAbilityId: string | null;
+  castingElapsed: number; castingTotalTime: number; castingIsChannel: boolean;
+  buffs: EntityBuffSnapshot['buffs'];
+  targetable: Targetable;
+  targetEntityId: string | null;
+}
+
+export class ClientEngine {
+  readonly scene: THREE.Scene;
+  readonly camera: THREE.PerspectiveCamera;
+  private renderer: Renderer;
+  readonly input: InputManager;
+  readonly mapManager: MapManager;
+  private thirdPersonCamera: ThirdPersonCamera;
+  private network: NetworkManager;
+
+  // Local player uses the same PlayerController as playground mode
+  readonly playerController: PlayerController;
+  private localEntityId: string;
+
+  // Targeting system — same class as playground mode
+  readonly targetingSystem: TargetingSystem;
+  selectedTargetId: string | null = null;
+
+  // Remote entities (other players) — interpolated from server state
+  private remoteEntities = new Map<string, RemoteEntity>();
+
+  // Snapshot interpolation buffer — smoothly interpolates remote entity positions
+  // between two known server states instead of exponential chase lerp
+  private snapshotBuffer = new SnapshotBuffer();
+
+  private animationFrameId: number | null = null;
+  private static readonly SEND_RATE = 1000 / 20; // 20 Hz
+  private sendAccumulator = 0;
+
+  // Visual effects
+  private gasClouds = new Map<string, GasCloudVisual & { elapsed: number; duration: number }>();
+  private chemPools = new Map<string, ChemPoolVisual & {
+    elapsed: number; duration: number;
+    activationDelay: number; consumed: boolean; consumeElapsed: number;
+  }>();
+
+  // Cooldowns (local tracking from server updates)
+  private cooldowns = new Map<string, { remaining: number; total: number }>();
+
+  // Local entity casting state (from server snapshots)
+  private localCastingAbilityId: string | null = null;
+  private localCastingElapsed = 0;
+  private localCastingTotalTime = 0;
+  private localCastingIsChannel = false;
+
+  // Local entity buffs (from server snapshots)
+  private localBuffs: EntityBuffSnapshot['buffs'] = [];
+
+  // Sweep charge (local player only — client-side movement during charge)
+  private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number } | null = null;
+
+  // Channel beam visual
+  private channelBeam: THREE.Mesh | null = null;
+  private channelBeamElapsed = 0;
+
+  // Full Retard aura visual (per entity)
+  private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
+
+  // Event callbacks for UI
+  onCombatText?: (entityId: string, amount: number, type: string) => void;
+  onCooldownUpdate?: (abilityId: string, remaining: number, total: number) => void;
+  onError?: (message: string) => void;
+  onTargetChanged?: (entityId: string | null) => void;
+
+  constructor(canvas: HTMLCanvasElement, network: NetworkManager, mapId: string, localEntityId: string, initialEntities: EntitySnapshot[]) {
+    this.network = network;
+    this.localEntityId = localEntityId;
+
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 200);
+    this.renderer = new Renderer(canvas);
+    this.input = new InputManager(canvas);
+    this.mapManager = new MapManager(this.scene);
+    this.mapManager.loadMap(mapId);
+
+    // Find local entity snapshot
+    const localSnap = initialEntities.find(e => e.id === localEntityId);
+
+    // Create ThirdPersonCamera first, then PlayerController (same pattern as Engine.ts)
+    this.thirdPersonCamera = new ThirdPersonCamera(
+      this.camera, this.input,
+      () => this.playerController.getPosition(),
+      this.scene,
+    );
+
+    // Use the real PlayerController — same class as playground mode
+    this.playerController = new PlayerController(
+      this.scene, this.input, this.mapManager,
+      () => this.thirdPersonCamera.getAzimuth(),
+    );
+
+    // Targeting system — same class as playground, handles raycasting + selection ring
+    this.targetingSystem = new TargetingSystem(
+      this.camera, this.scene, canvas,
+      () => this.playerController,
+    );
+
+    // Set the correct character and team for the local player
+    if (localSnap) {
+      this.playerController.setCharacter(localSnap.characterId as CharacterId);
+      (this.playerController as any).team = localSnap.team;
+      (this.playerController as any).name = localSnap.name;
+      this.playerController.mesh.position.set(localSnap.x, localSnap.y, localSnap.z);
+      this.camera.position.set(localSnap.x, localSnap.y + 8, localSnap.z + 12);
+    }
+
+    // Create remote entities for other players
+    for (const snap of initialEntities) {
+      if (snap.id === localEntityId) continue;
+      this.createRemoteEntity(snap);
+    }
+
+    // Seed the snapshot buffer with initial entity positions
+    this.snapshotBuffer.loadKeyframe(initialEntities, [], [], []);
+    this.snapshotBuffer.pushPositions(0, Date.now(), initialEntities.map(e => ({
+      id: e.id, x: e.x, y: e.y, z: e.z, rotationY: e.rotationY, isMoving: e.isMoving,
+    })));
+  }
+
+  private createRemoteEntity(snap: EntitySnapshot): RemoteEntity {
+    const model = createCharacter(snap.characterId as CharacterId);
+    // Wrap model in a parent group (same pattern as PlayerController.mesh)
+    // so rotation on the wrapper doesn't overwrite CharacterModel's built-in π offset
+    const mesh = new THREE.Group();
+    mesh.add(model.group);
+    mesh.position.set(snap.x, snap.y, snap.z);
+    mesh.rotation.y = snap.rotationY;
+    this.scene.add(mesh);
+
+    const entity: RemoteEntity = {
+      id: snap.id,
+      characterId: snap.characterId,
+      team: snap.team,
+      name: snap.name,
+      model,
+      mesh,
+      hp: snap.hp, maxHp: snap.maxHp, mana: snap.mana, maxMana: snap.maxMana,
+      dead: snap.dead, inCombat: snap.inCombat, stunned: snap.stunned, charging: snap.charging,
+      isMoving: snap.isMoving, isAutoAttacking: snap.isAutoAttacking,
+      castingAbilityId: snap.castingAbilityId,
+      castingElapsed: snap.castingElapsed, castingTotalTime: snap.castingTotalTime,
+      castingIsChannel: snap.castingIsChannel,
+      buffs: [],
+      targetable: null!, // Set below
+      targetEntityId: snap.targetEntityId,
+    };
+
+    // Create a Targetable wrapper with live getters so it always reflects current state
+    const targetable: Targetable = {
+      get name() { return entity.name; },
+      get modelName() { return entity.model.displayName; },
+      get team() { return entity.team; },
+      get hp() { return entity.hp; },
+      set hp(v) { entity.hp = v; },
+      get maxHp() { return entity.maxHp; },
+      set maxHp(v) { entity.maxHp = v; },
+      get mana() { return entity.mana; },
+      set mana(v) { entity.mana = v; },
+      get maxMana() { return entity.maxMana; },
+      set maxMana(v) { entity.maxMana = v; },
+      get inCombat() { return entity.inCombat; },
+      set inCombat(v) { entity.inCombat = v; },
+      get dead() { return entity.dead; },
+      set dead(v) { entity.dead = v; },
+      get critChance() { return 0; },
+      get dodgeChance() { return 0; },
+      mesh,
+      isHostileTo(other: Targetable) { return entity.team !== other.team; },
+      die() { /* server-authoritative */ },
+    };
+    entity.targetable = targetable;
+    mesh.userData.targetRef = targetable;
+
+    this.remoteEntities.set(snap.id, entity);
+    return entity;
+  }
+
+  start(): void {
+    if (this.animationFrameId) return;
+    this.loop();
+  }
+
+  stop(): void {
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+  }
+
+  resize(width: number, height: number): void {
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.renderer.renderer.setSize(width, height);
+  }
+
+  // ── Server message handlers ──────────────────────────────────────────
+
+  /** Handle delta updates (every tick) — positions always, state/buffs only when changed. */
+  handleGameStateUpdate(msg: S2C_GameStateUpdate): void {
+    // Feed positions into the snapshot buffer for smooth interpolation
+    this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.positions);
+
+    // Apply state deltas (only present for entities whose state changed)
+    if (msg.states) {
+      this.snapshotBuffer.applyStateDeltas(msg.states);
+      this.applyEntityStateDeltas(msg.states);
+    }
+
+    // Apply buff updates (only present for entities whose buffs changed)
+    if (msg.buffs) {
+      this.snapshotBuffer.applyBuffUpdates(msg.buffs);
+      this.applyBuffUpdates(msg.buffs);
+    }
+
+    // Update world effects
+    if (msg.gasClouds || msg.chemicalPools) {
+      this.snapshotBuffer.updateWorldEffects(msg.gasClouds, msg.chemicalPools);
+    }
+    if (msg.chemicalPools) {
+      for (const cpSnap of msg.chemicalPools) {
+        const pool = this.chemPools.get(cpSnap.id);
+        if (pool && cpSnap.consumed && !pool.consumed) {
+          pool.consumed = true;
+        }
+      }
+    }
+  }
+
+  /** Handle full keyframe snapshot — resets all state. */
+  handleGameStateSnapshot(msg: S2C_GameStateSnapshot): void {
+    // Load full state into the snapshot buffer
+    this.snapshotBuffer.loadKeyframe(msg.entities, msg.buffs, msg.gasClouds, msg.chemicalPools);
+    this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.entities.map(e => ({
+      id: e.id, x: e.x, y: e.y, z: e.z, rotationY: e.rotationY, isMoving: e.isMoving,
+    })));
+
+    // Apply full entity state
+    for (const snap of msg.entities) {
+      if (snap.id === this.localEntityId) {
+        this.applyLocalEntityState(snap);
+        continue;
+      }
+      let entity = this.remoteEntities.get(snap.id);
+      if (!entity) {
+        entity = this.createRemoteEntity(snap);
+      }
+      this.applyRemoteEntityState(entity, snap);
+    }
+
+    // Apply all buffs
+    this.applyBuffUpdates(msg.buffs);
+
+    // Update chemical pool consumed state
+    for (const cpSnap of msg.chemicalPools) {
+      const pool = this.chemPools.get(cpSnap.id);
+      if (pool && cpSnap.consumed && !pool.consumed) {
+        pool.consumed = true;
+      }
+    }
+  }
+
+  /** Legacy handler for backward compat with old S2C_GameState messages. */
+  handleGameState(msg: S2C_GameState): void {
+    // Convert to keyframe format
+    this.handleGameStateSnapshot({
+      type: 'game_state_snapshot',
+      tick: msg.tick,
+      timestamp: msg.timestamp,
+      entities: msg.entities,
+      buffs: msg.buffs,
+      gasClouds: msg.gasClouds,
+      chemicalPools: msg.chemicalPools,
+    });
+  }
+
+  /** Apply state deltas to local player and remote entities. */
+  private applyEntityStateDeltas(deltas: import('@gtr/shared').EntityStateDelta[]): void {
+    for (const delta of deltas) {
+      if (delta.id === this.localEntityId) {
+        const pc = this.playerController;
+        if (delta.hp !== undefined) pc.hp = delta.hp;
+        if (delta.maxHp !== undefined) pc.maxHp = delta.maxHp;
+        if (delta.mana !== undefined) pc.mana = delta.mana;
+        if (delta.maxMana !== undefined) pc.maxMana = delta.maxMana;
+        if (delta.dead !== undefined) pc.dead = delta.dead;
+        if (delta.inCombat !== undefined) pc.inCombat = delta.inCombat;
+        if (delta.stunned !== undefined) { pc.stunned = delta.stunned; pc.setStunned(delta.stunned); }
+        if (delta.charging !== undefined) pc.charging = delta.charging;
+        if (delta.isAutoAttacking !== undefined) pc.setAutoAttacking(delta.isAutoAttacking);
+        if ('castingAbilityId' in delta) this.localCastingAbilityId = delta.castingAbilityId!;
+        if (delta.castingElapsed !== undefined) this.localCastingElapsed = delta.castingElapsed;
+        if (delta.castingTotalTime !== undefined) this.localCastingTotalTime = delta.castingTotalTime;
+        if (delta.castingIsChannel !== undefined) this.localCastingIsChannel = delta.castingIsChannel;
+        continue;
+      }
+
+      const entity = this.remoteEntities.get(delta.id);
+      if (!entity) continue;
+
+      if (delta.hp !== undefined) entity.hp = delta.hp;
+      if (delta.maxHp !== undefined) entity.maxHp = delta.maxHp;
+      if (delta.mana !== undefined) entity.mana = delta.mana;
+      if (delta.maxMana !== undefined) entity.maxMana = delta.maxMana;
+      if (delta.dead !== undefined) entity.dead = delta.dead;
+      if (delta.inCombat !== undefined) entity.inCombat = delta.inCombat;
+      if (delta.stunned !== undefined) entity.stunned = delta.stunned;
+      if (delta.charging !== undefined) entity.charging = delta.charging;
+      if (delta.isAutoAttacking !== undefined) entity.isAutoAttacking = delta.isAutoAttacking;
+      if ('castingAbilityId' in delta) entity.castingAbilityId = delta.castingAbilityId!;
+      if (delta.castingElapsed !== undefined) entity.castingElapsed = delta.castingElapsed;
+      if (delta.castingTotalTime !== undefined) entity.castingTotalTime = delta.castingTotalTime;
+      if (delta.castingIsChannel !== undefined) entity.castingIsChannel = delta.castingIsChannel;
+      if ('targetEntityId' in delta) entity.targetEntityId = delta.targetEntityId!;
+    }
+  }
+
+  /** Apply full state from a keyframe snapshot to the local player. */
+  private applyLocalEntityState(snap: EntitySnapshot): void {
+    const pc = this.playerController;
+    pc.hp = snap.hp;
+    pc.maxHp = snap.maxHp;
+    pc.mana = snap.mana;
+    pc.maxMana = snap.maxMana;
+    pc.dead = snap.dead;
+    pc.inCombat = snap.inCombat;
+    pc.stunned = snap.stunned;
+    pc.charging = snap.charging;
+    pc.setAutoAttacking(snap.isAutoAttacking);
+    pc.setStunned(snap.stunned);
+    this.localCastingAbilityId = snap.castingAbilityId;
+    this.localCastingElapsed = snap.castingElapsed;
+    this.localCastingTotalTime = snap.castingTotalTime;
+    this.localCastingIsChannel = snap.castingIsChannel;
+  }
+
+  /** Apply full state from a keyframe snapshot to a remote entity. */
+  private applyRemoteEntityState(entity: RemoteEntity, snap: EntitySnapshot): void {
+    entity.hp = snap.hp;
+    entity.maxHp = snap.maxHp;
+    entity.mana = snap.mana;
+    entity.maxMana = snap.maxMana;
+    entity.dead = snap.dead;
+    entity.inCombat = snap.inCombat;
+    entity.stunned = snap.stunned;
+    entity.charging = snap.charging;
+    entity.isMoving = snap.isMoving;
+    entity.isAutoAttacking = snap.isAutoAttacking;
+    entity.castingAbilityId = snap.castingAbilityId;
+    entity.castingElapsed = snap.castingElapsed;
+    entity.castingTotalTime = snap.castingTotalTime;
+    entity.castingIsChannel = snap.castingIsChannel;
+    entity.targetEntityId = snap.targetEntityId;
+  }
+
+  /** Apply buff updates to local player and remote entity visuals. */
+  private applyBuffUpdates(buffSnapshots: EntityBuffSnapshot[]): void {
+    for (const buffSnap of buffSnapshots) {
+      if (buffSnap.entityId === this.localEntityId) {
+        this.localBuffs = buffSnap.buffs;
+        const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
+        this.playerController.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
+        this.playerController.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
+        this.playerController.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
+        this.playerController.setDiscombobulated(buffSnap.buffs.some(b => b.id === 'discombobulate'));
+        continue;
+      }
+      const entity = this.remoteEntities.get(buffSnap.entityId);
+      if (entity) {
+        entity.buffs = buffSnap.buffs;
+        const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
+        entity.model.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
+        entity.model.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
+        entity.model.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
+      }
+    }
+  }
+
+  handleCombatEvent(msg: S2C_CombatEvent): void {
+    this.onCombatText?.(msg.targetEntityId, msg.amount, msg.combatType);
+  }
+
+  handleAbilityEffect(msg: S2C_AbilityEffect): void {
+    if (msg.entityId === this.localEntityId) {
+      // Pass target position for directed animations
+      const targetMesh = this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId) : undefined;
+      this.playerController.triggerAbilityAnimation(msg.abilityId, targetMesh?.position.clone());
+      // Start sweep charge for local player
+      if (msg.abilityId === 'sweep') {
+        this.startSweepCharge();
+      }
+    } else {
+      const entity = this.remoteEntities.get(msg.entityId);
+      if (entity) {
+        const targetMesh = entity.targetEntityId ? this.getEntityMesh(entity.targetEntityId) : undefined;
+        entity.model.triggerAbilityAnimation(msg.abilityId, targetMesh?.position.clone());
+      }
+    }
+  }
+
+  handleAutoAttackSwing(msg: S2C_AutoAttackSwing): void {
+    if (msg.entityId === this.localEntityId) {
+      this.playerController.triggerSwing();
+    } else {
+      const entity = this.remoteEntities.get(msg.entityId);
+      if (entity) entity.model.triggerSwing();
+    }
+  }
+
+  handleCooldownUpdate(msg: S2C_CooldownUpdate): void {
+    this.cooldowns.set(msg.abilityId, { remaining: msg.remaining, total: msg.total });
+    this.onCooldownUpdate?.(msg.abilityId, msg.remaining, msg.total);
+  }
+
+  handleGasCloudSpawn(msg: S2C_GasCloudSpawn): void {
+    const visual = createGasCloud(this.scene, msg.x, msg.z, msg.radius);
+    this.gasClouds.set(msg.id, { ...visual, elapsed: 0, duration: msg.duration });
+  }
+
+  handleChemPoolSpawn(msg: S2C_ChemPoolSpawn): void {
+    const visual = createChemPool(this.scene, msg.x, msg.z, msg.radius);
+    this.chemPools.set(msg.id, {
+      ...visual, elapsed: 0, duration: msg.duration,
+      activationDelay: msg.activationDelay, consumed: false, consumeElapsed: 0,
+    });
+  }
+
+  // ── Accessors for UI ─────────────────────────────────────────────────
+
+  getLocalEntity(): PlayerController {
+    return this.playerController;
+  }
+
+  getRemoteEntity(id: string): RemoteEntity | undefined {
+    return this.remoteEntities.get(id);
+  }
+
+  /** Get either the local player or a remote entity by ID */
+  getEntity(id: string): RemoteEntity | PlayerController | undefined {
+    if (id === this.localEntityId) return this.playerController;
+    return this.remoteEntities.get(id);
+  }
+
+  getAllRemoteEntities(): RemoteEntity[] {
+    return Array.from(this.remoteEntities.values());
+  }
+
+  getCooldownRemaining(abilityId: string): number {
+    return this.cooldowns.get(abilityId)?.remaining ?? 0;
+  }
+
+  getCooldownTotal(abilityId: string): number {
+    return this.cooldowns.get(abilityId)?.total ?? 0;
+  }
+
+  getLocalCastingState(): { abilityId: string; elapsed: number; totalTime: number; isChannel: boolean } | null {
+    if (!this.localCastingAbilityId) return null;
+    return {
+      abilityId: this.localCastingAbilityId,
+      elapsed: this.localCastingElapsed,
+      totalTime: this.localCastingTotalTime,
+      isChannel: this.localCastingIsChannel,
+    };
+  }
+
+  getLocalBuffs(): EntityBuffSnapshot['buffs'] {
+    return this.localBuffs;
+  }
+
+  /** Get the Three.js group for an entity (for raycasting/combat text positioning) */
+  getEntityMesh(entityId: string): THREE.Group | undefined {
+    if (entityId === this.localEntityId) return this.playerController.mesh;
+    return this.remoteEntities.get(entityId)?.mesh;
+  }
+
+  get localId(): string {
+    return this.localEntityId;
+  }
+
+  /** Look up entity ID from a Targetable reference */
+  private findEntityIdByTargetable(target: Targetable | null): string | null {
+    if (!target) return null;
+    if (target === (this.playerController as unknown as Targetable)) return this.localEntityId;
+    for (const [id, entity] of this.remoteEntities) {
+      if (entity.targetable === target) return id;
+    }
+    return null;
+  }
+
+  // ── Network commands ──────────────────────────────────────────────────
+
+  sendAbility(abilityId: string, targetEntityId: string | null): void {
+    this.network.send({ type: 'use_ability', abilityId, targetEntityId });
+  }
+
+  sendSetTarget(targetEntityId: string | null): void {
+    this.network.send({ type: 'set_target', targetEntityId });
+  }
+
+  sendAutoAttack(targetEntityId: string): void {
+    this.network.send({ type: 'auto_attack', targetEntityId });
+  }
+
+  sendStopAutoAttack(): void {
+    this.network.send({ type: 'stop_auto_attack' });
+  }
+
+  sendCancelCast(): void {
+    this.network.send({ type: 'cancel_cast' });
+  }
+
+  // ── Main loop ────────────────────────────────────────────────────────
+
+  private lastFrameTime = performance.now();
+
+  private loop = (): void => {
+    this.animationFrameId = requestAnimationFrame(this.loop);
+    const now = performance.now();
+    const dt = Math.min((now - this.lastFrameTime) / 1000, 0.1);
+    this.lastFrameTime = now;
+
+    this.update(dt);
+    this.renderer.renderer.render(this.scene, this.camera);
+  };
+
+  private update(dt: number): void {
+    // Update local player using the real PlayerController (same as playground)
+    this.playerController.update(dt);
+
+    // Locally advance casting elapsed so animations run at render framerate (60fps)
+    // instead of server tickrate (20fps). Server corrections (pushback, interrupt)
+    // override via applyEntityStateDeltas / applyLocalEntityState.
+    if (this.localCastingAbilityId) {
+      this.localCastingElapsed += dt;
+    }
+    for (const entity of this.remoteEntities.values()) {
+      if (entity.castingAbilityId) {
+        entity.castingElapsed += dt;
+      }
+    }
+
+    // Update local player cast/channel animations
+    if (this.localCastingAbilityId) {
+      if (this.localCastingIsChannel) {
+        const progress = this.localCastingTotalTime > 0
+          ? Math.min(1, this.localCastingElapsed / this.localCastingTotalTime) : 0;
+        this.playerController.setChannelAnimation(this.localCastingAbilityId, progress);
+        this.playerController.setCastAnimation(null, 0);
+      } else {
+        const progress = this.localCastingTotalTime > 0
+          ? Math.min(1, this.localCastingElapsed / this.localCastingTotalTime) : 0;
+        this.playerController.setCastAnimation(this.localCastingAbilityId, progress);
+        this.playerController.setChannelAnimation(null, 0);
+      }
+    } else {
+      this.playerController.setCastAnimation(null, 0);
+      this.playerController.setChannelAnimation(null, 0);
+    }
+
+    // Update camera (same as playground)
+    this.thirdPersonCamera.update(dt);
+
+    // Send local position to server at tick rate
+    this.sendAccumulator += dt * 1000;
+    if (this.sendAccumulator >= ClientEngine.SEND_RATE) {
+      this.sendAccumulator -= ClientEngine.SEND_RATE;
+      this.sendPositionUpdate();
+    }
+
+    // Update cooldowns
+    for (const [id, cd] of this.cooldowns) {
+      cd.remaining = Math.max(0, cd.remaining - dt);
+      if (cd.remaining <= 0) this.cooldowns.delete(id);
+    }
+
+    // Interpolate remote entity positions using snapshot buffer
+    // (linear interpolation between two known server states, ~100ms behind real-time)
+    for (const entity of this.remoteEntities.values()) {
+      const interp = this.snapshotBuffer.getInterpolatedPosition(entity.id);
+      if (interp) {
+        entity.isMoving = interp.isMoving;
+        entity.mesh.position.set(interp.x, interp.y, interp.z);
+        entity.mesh.rotation.y = interp.rotationY;
+      }
+
+      // Update model animation state
+      entity.model.setAutoAttacking(entity.isAutoAttacking);
+      entity.model.setStunned(entity.stunned);
+
+      if (entity.castingAbilityId) {
+        if (entity.castingIsChannel) {
+          const progress = entity.castingTotalTime > 0
+            ? Math.min(1, entity.castingElapsed / entity.castingTotalTime)
+            : 0;
+          entity.model.setChannelAnimation(entity.castingAbilityId, progress);
+          entity.model.setCastAnimation(null, 0);
+        } else {
+          const progress = entity.castingTotalTime > 0
+            ? Math.min(1, entity.castingElapsed / entity.castingTotalTime)
+            : 0;
+          entity.model.setCastAnimation(entity.castingAbilityId, progress);
+          entity.model.setChannelAnimation(null, 0);
+        }
+      } else {
+        entity.model.setCastAnimation(null, 0);
+        entity.model.setChannelAnimation(null, 0);
+      }
+
+      // Handle death animation
+      if (entity.dead && !entity.model.isDying) {
+        entity.model.startDeath();
+      } else if (!entity.dead && entity.model.isDying) {
+        entity.model.resetDeath();
+      }
+
+      entity.model.update(dt, {
+        isMoving: entity.isMoving,
+        isGrounded: true,
+        velocityY: 0,
+        turnSpeed: 0,
+        speedMultiplier: 1,
+        strafeDirection: 0,
+      });
+    }
+
+    // Update gas cloud visuals
+    for (const [id, cloud] of this.gasClouds) {
+      cloud.elapsed += dt;
+      if (updateGasCloud(cloud, cloud.elapsed, cloud.duration, dt)) {
+        disposeGroup(this.scene, cloud.group);
+        this.gasClouds.delete(id);
+      }
+    }
+
+    // Update chem pool visuals
+    for (const [id, pool] of this.chemPools) {
+      pool.elapsed += dt;
+      if (pool.consumed) pool.consumeElapsed += dt;
+      if (updateChemPool(pool, pool.elapsed, pool.duration, pool.activationDelay, pool.consumed, pool.consumeElapsed, dt)) {
+        disposeGroup(this.scene, pool.group);
+        this.chemPools.delete(id);
+      }
+    }
+
+    // Update sweep charge (local player movement during charge)
+    this.updateSweepCharge(dt);
+
+    // Update channel beam visual
+    this.updateChannelBeam(dt);
+
+    // Update Full Retard aura visuals
+    this.updateFullRetardAuras(dt);
+
+    // Update map script (e.g., gate animations)
+    this.mapManager.update(dt);
+
+    // Process left click for target selection (same as playground: InputManager captures on mousedown)
+    const leftClick = this.input.getLeftClick();
+    if (leftClick) {
+      this.targetingSystem.processClick(leftClick.x, leftClick.y);
+      const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
+      if (newTargetId !== this.selectedTargetId) {
+        this.selectedTargetId = newTargetId;
+        this.sendSetTarget(newTargetId);
+        this.onTargetChanged?.(newTargetId);
+      }
+    }
+
+    // Process right click for auto-attack (same as playground: InputManager captures on mousedown)
+    const rightClick = this.input.getRightClick();
+    if (rightClick) {
+      const target = this.targetingSystem.processRightClick(rightClick.x, rightClick.y);
+      if (target) {
+        const targetId = this.findEntityIdByTargetable(target);
+        if (targetId && targetId !== this.selectedTargetId) {
+          this.selectedTargetId = targetId;
+          this.sendSetTarget(targetId);
+          this.onTargetChanged?.(targetId);
+        }
+        if (targetId && target.isHostileTo(this.playerController) && !target.dead) {
+          this.sendAutoAttack(targetId);
+        }
+      }
+    }
+
+    // Update targeting ring animation
+    this.targetingSystem.update(dt);
+
+    // Consume input deltas so they don't accumulate
+    this.input.resetDeltas();
+  }
+
+  private sendPositionUpdate(): void {
+    const pos = this.playerController.getPosition();
+    this.network.send({
+      type: 'player_state',
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      rotationY: this.playerController.mesh.rotation.y,
+      isMoving: this.playerController.isMoving ?? false,
+    });
+  }
+
+  // ── Sweep charge ──────────────────────────────────────────────────────
+
+  private startSweepCharge(): void {
+    const rotY = this.playerController.mesh.rotation.y;
+    this.playerController.charging = true;
+    this.sendStopAutoAttack();
+    this.sweepCharge = {
+      elapsed: 0,
+      duration: 1.0,
+      direction: new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY)),
+      speed: yardsToUnits(20),
+    };
+  }
+
+  private updateSweepCharge(dt: number): void {
+    if (!this.sweepCharge) return;
+    this.sweepCharge.elapsed += dt;
+    // Move player forward (client-authoritative movement)
+    this.playerController.mesh.position.addScaledVector(
+      this.sweepCharge.direction, this.sweepCharge.speed * dt
+    );
+    if (this.sweepCharge.elapsed >= this.sweepCharge.duration) {
+      this.playerController.charging = false;
+      this.sweepCharge = null;
+    }
+  }
+
+  // ── Channel beam visual ─────────────────────────────────────────────
+
+  private updateChannelBeam(dt: number): void {
+    // Find any entity that is channeling and has a target
+    let casterPos: THREE.Vector3 | null = null;
+    let targetPos: THREE.Vector3 | null = null;
+
+    // Check local player
+    if (this.localCastingAbilityId && this.localCastingIsChannel && this.selectedTargetId) {
+      casterPos = this.playerController.mesh.position;
+      const targetMesh = this.getEntityMesh(this.selectedTargetId);
+      if (targetMesh) targetPos = targetMesh.position;
+    }
+
+    // Check remote entities (find first channeling remote)
+    if (!casterPos) {
+      for (const entity of this.remoteEntities.values()) {
+        if (entity.castingAbilityId && entity.castingIsChannel && entity.targetEntityId) {
+          casterPos = entity.mesh.position;
+          const targetMesh = this.getEntityMesh(entity.targetEntityId);
+          if (targetMesh) targetPos = targetMesh.position;
+          break;
+        }
+      }
+    }
+
+    if (!casterPos || !targetPos) {
+      if (this.channelBeam) {
+        removeChannelBeam(this.scene, this.channelBeam);
+        this.channelBeam = null;
+      }
+      this.channelBeamElapsed = 0;
+      return;
+    }
+
+    this.channelBeamElapsed += dt;
+    if (!this.channelBeam) {
+      this.channelBeam = createChannelBeam(this.scene);
+    }
+    updateChannelBeamVisual(this.channelBeam, casterPos, targetPos, this.channelBeamElapsed);
+  }
+
+  // ── Full Retard aura visuals ────────────────────────────────────────
+
+  private updateFullRetardAuras(dt: number): void {
+    // Check all entities (local + remote) for full-retard buff
+    const activeIds = new Set<string>();
+
+    // Local player
+    if (this.localBuffs.some(b => b.id === 'full-retard')) {
+      activeIds.add(this.localEntityId);
+      if (!this.fullRetardAuras.has(this.localEntityId)) {
+        const pos = this.playerController.mesh.position;
+        const visual = createFullRetardAura(this.scene, pos.x, pos.z, this.playerController.autoAttackRange);
+        this.fullRetardAuras.set(this.localEntityId, { ...visual, elapsed: 0 });
+      }
+    }
+
+    // Remote entities
+    for (const entity of this.remoteEntities.values()) {
+      if (entity.buffs.some(b => b.id === 'full-retard')) {
+        activeIds.add(entity.id);
+        if (!this.fullRetardAuras.has(entity.id)) {
+          const visual = createFullRetardAura(this.scene, entity.mesh.position.x, entity.mesh.position.z, 1.5);
+          this.fullRetardAuras.set(entity.id, { ...visual, elapsed: 0 });
+        }
+      }
+    }
+
+    // Update existing auras
+    for (const [entityId, aura] of this.fullRetardAuras) {
+      if (!activeIds.has(entityId)) {
+        disposeGroup(this.scene, aura.group);
+        this.fullRetardAuras.delete(entityId);
+        continue;
+      }
+
+      aura.elapsed += dt;
+      const mesh = this.getEntityMesh(entityId);
+      const followX = mesh ? mesh.position.x : aura.group.position.x;
+      const followZ = mesh ? mesh.position.z : aura.group.position.z;
+      updateFullRetardAuraVisual(aura, aura.elapsed, dt, followX, followZ);
+    }
+  }
+
+  destroy(): void {
+    this.stop();
+    this.targetingSystem.dispose();
+    for (const cloud of this.gasClouds.values()) disposeGroup(this.scene, cloud.group);
+    this.gasClouds.clear();
+    for (const pool of this.chemPools.values()) disposeGroup(this.scene, pool.group);
+    this.chemPools.clear();
+    if (this.channelBeam) removeChannelBeam(this.scene, this.channelBeam);
+    for (const aura of this.fullRetardAuras.values()) disposeGroup(this.scene, aura.group);
+    this.fullRetardAuras.clear();
+    for (const entity of this.remoteEntities.values()) this.scene.remove(entity.mesh);
+    this.remoteEntities.clear();
+    this.scene.remove(this.playerController.mesh);
+  }
+}

@@ -9,7 +9,13 @@
       "Bash(xargs wc:*)",
       "Bash(xargs grep:*)",
       "Bash(find /c/Users/Joey/Repos/gtr/src -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\))",
-      "Bash(grep -r \"castTime\\\\|cast_time\" /c/Users/Joey/Repos/gtr/src --include=*.ts --include=*.tsx)"
+      "Bash(grep -r \"castTime\\\\|cast_time\" /c/Users/Joey/Repos/gtr/src --include=*.ts --include=*.tsx)",
+      "Bash(git mv:*)",
+      "Bash(cp -r src packages/client/src)",
+      "Bash(cp -r styles packages/client/styles)",
+      "Bash(npm install:*)",
+      "Bash(timeout 5 npx tsx packages/server/src/index.ts)",
+      "Bash(grep -rn \"channelBeam\\\\|channel.*beam\" \"C:\\\\Users\\\\Joey\\\\Repos\\\\gtr\\\\packages\\\\client\\\\src\"\" --include=\"*.ts \")"
     ]
   }
 }
