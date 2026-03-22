@@ -25,7 +25,7 @@ export class AuthManager {
     password: string,
     mode: 'login' | 'register',
     socket: WebSocket
-  ): { success: boolean; userId: string; isAdmin?: boolean; bannedUntil?: string; error?: string } {
+  ): { success: boolean; userId: string; username?: string; isAdmin?: boolean; bannedUntil?: string; error?: string } {
     if (!username || username.length < 1 || username.length > 20) {
       return { success: false, userId: '', error: 'Username must be 1-20 characters' };
     }
@@ -34,6 +34,8 @@ export class AuthManager {
     }
 
     let dbId: number;
+    // Use the originally-registered casing, not whatever the user typed at login
+    let displayUsername = username;
 
     if (mode === 'register') {
       const result = this.db.register(username, password);
@@ -47,11 +49,12 @@ export class AuthManager {
         return { success: false, userId: '', bannedUntil: result.bannedUntil, error: result.error };
       }
       dbId = result.userId!;
+      displayUsername = result.storedUsername!;
     }
 
     // Promote to admin if ADMIN_USERNAME env var matches
     const adminUsername = process.env.ADMIN_USERNAME;
-    if (adminUsername && username.toLowerCase() === adminUsername.toLowerCase()) {
+    if (adminUsername && displayUsername.toLowerCase() === adminUsername.toLowerCase()) {
       this.db.setAdmin(dbId, true);
     }
 
@@ -62,17 +65,17 @@ export class AuthManager {
     if (existingUserId) {
       const session = this.sessions.get(existingUserId)!;
       session.socket = socket;
-      session.username = username;
+      session.username = displayUsername;
       session.isAdmin = isAdmin;
-      return { success: true, userId: existingUserId, isAdmin };
+      return { success: true, userId: existingUserId, username: displayUsername, isAdmin };
     }
 
     // New session
     const userId = `user_${dbId}`;
-    const session: ActiveSession = { userId, dbId, username, isAdmin, socket };
+    const session: ActiveSession = { userId, dbId, username: displayUsername, isAdmin, socket };
     this.sessions.set(userId, session);
     this.userIdByDbId.set(dbId, userId);
-    return { success: true, userId, isAdmin };
+    return { success: true, userId, username: displayUsername, isAdmin };
   }
 
   disconnect(userId: string): void {

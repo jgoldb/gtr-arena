@@ -650,6 +650,10 @@ function handleServerMessage(msg: ServerMessage): void {
       if (msg.success) {
         localUserId = msg.userId;
         isAdmin = msg.isAdmin ?? false;
+        // Update stored username to the original registered casing from the server
+        if (msg.username) {
+          sessionStorage.setItem('gtr_username', msg.username);
+        }
         authScreen?.destroy();
         authScreen = null;
         showLobby();

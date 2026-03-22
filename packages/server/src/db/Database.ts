@@ -87,8 +87,8 @@ export class GtrDatabase {
     return { success: true, userId };
   }
 
-  login(username: string, password: string): { success: boolean; userId?: number; bannedUntil?: string; error?: string } {
-    const row = this.db.prepare('SELECT id, password_hash, banned_until FROM users WHERE username = ?').get(username) as { id: number; password_hash: string; banned_until: string | null } | undefined;
+  login(username: string, password: string): { success: boolean; userId?: number; storedUsername?: string; bannedUntil?: string; error?: string } {
+    const row = this.db.prepare('SELECT id, username, password_hash, banned_until FROM users WHERE username = ?').get(username) as { id: number; username: string; password_hash: string; banned_until: string | null } | undefined;
     if (!row) {
       return { success: false, error: 'Invalid username or password' };
     }
@@ -110,7 +110,7 @@ export class GtrDatabase {
       this.db.prepare("UPDATE users SET banned_until = NULL WHERE id = ?").run(row.id);
     }
 
-    return { success: true, userId: row.id };
+    return { success: true, userId: row.id, storedUsername: row.username };
   }
 
   getUsername(userId: number): string | undefined {

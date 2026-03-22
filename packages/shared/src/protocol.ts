@@ -106,6 +106,7 @@ export interface S2C_AuthResult {
   type: 'auth_result';
   success: boolean;
   userId: string;
+  username?: string;
   isAdmin?: boolean;
   bannedUntil?: string;
   error?: string;

@@ -88,13 +88,15 @@ wss.on('connection', (ws: WebSocket) => {
       const result = auth.authenticate(msg.username, msg.password, msg.mode, ws);
       if (result.success) {
         userId = result.userId;
+        const displayUsername = result.username!;
         ws.send(JSON.stringify({
           type: 'auth_result',
           success: true,
           userId: result.userId,
+          username: displayUsername,
           isAdmin: result.isAdmin || false,
         }));
-        lobby.addUser(result.userId, msg.username, ws);
+        lobby.addUser(result.userId, displayUsername, ws);
       } else {
         ws.send(JSON.stringify({
           type: 'auth_result',
