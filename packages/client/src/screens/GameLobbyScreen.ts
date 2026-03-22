@@ -8,6 +8,7 @@ export class GameLobbyScreen {
   private localUserId: string;
   private playersEl: HTMLDivElement;
   private leaveBtn: HTMLButtonElement;
+  private lockInBtn: HTMLButtonElement;
   private charListEl: HTMLDivElement;
   private statusEl: HTMLDivElement;
   private animFrameId = 0;
@@ -146,21 +147,23 @@ export class GameLobbyScreen {
       this.network.send({ type: 'leave_game' });
     });
 
-    const lockInBtn = document.createElement('button');
-    lockInBtn.className = 'glby-btn';
-    lockInBtn.textContent = 'Lock In';
-    lockInBtn.style.cssText = `
+    this.lockInBtn = document.createElement('button');
+    this.lockInBtn.className = 'glby-btn';
+    this.lockInBtn.textContent = 'Lock In';
+    this.lockInBtn.disabled = true;
+    this.lockInBtn.style.cssText = `
       padding: 10px 28px; font-size: 13px; font-weight: 600;
       background: #2a6e3c; color: rgba(220,225,240,0.9);
       border: 1px solid rgba(255,255,255,0.06); border-radius: 6px;
       cursor: pointer; outline: none;
+      opacity: 0.4; pointer-events: none;
     `;
-    lockInBtn.addEventListener('click', () => {
+    this.lockInBtn.addEventListener('click', () => {
       this.network.send({ type: 'lock_in' });
     });
 
     btnRow.appendChild(this.leaveBtn);
-    btnRow.appendChild(lockInBtn);
+    btnRow.appendChild(this.lockInBtn);
 
     box.appendChild(this.statusEl);
     box.appendChild(charSection);
@@ -269,6 +272,12 @@ export class GameLobbyScreen {
         card.style.boxShadow = 'none';
       }
     }
+
+    // Update lock-in button state
+    const canLockIn = !!localPlayer?.characterId && !localPlayer?.lockedIn;
+    this.lockInBtn.disabled = !canLockIn;
+    this.lockInBtn.style.opacity = canLockIn ? '1' : '0.4';
+    this.lockInBtn.style.pointerEvents = canLockIn ? 'auto' : 'none';
 
     // Update player list
     this.playersEl.innerHTML = '';
