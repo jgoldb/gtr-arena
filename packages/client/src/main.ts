@@ -270,7 +270,8 @@ function showAdmin(): void {
   lobbyScreen?.element.remove();
   adminScreen?.destroy();
 
-  adminScreen = new AdminScreen(network!);
+  const localDbId = parseInt(localUserId.replace('user_', ''), 10);
+  adminScreen = new AdminScreen(network!, localDbId);
   adminScreen.onBack = () => {
     adminScreen?.destroy();
     adminScreen = null;
@@ -900,9 +901,15 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
 
     case 'admin_result':
-      if (!msg.success) {
+      if (msg.action === 'reset_password' && msg.success && msg.generatedPassword) {
+        adminScreen?.showResetPasswordResult(msg.generatedPassword);
+      } else if (!msg.success) {
         console.warn('Admin action failed:', msg.error);
       }
+      break;
+
+    case 'change_password_result':
+      lobbyScreen?.showChangePasswordResult(msg.success, msg.error);
       break;
 
     case 'god_mode_update':

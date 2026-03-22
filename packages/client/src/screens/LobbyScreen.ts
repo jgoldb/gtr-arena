@@ -166,6 +166,10 @@ export class LobbyScreen {
       btnRow.appendChild(adminBtn);
     }
 
+    const changePwBtn = this.makeButton('Change PW', '#3a4a5a', '#4a5e72');
+    changePwBtn.addEventListener('click', () => this.showChangePasswordDialog());
+    btnRow.appendChild(changePwBtn);
+
     const logoutBtn = this.makeButton('Logout', '#6e2d2d', '#8a3a3a');
     logoutBtn.addEventListener('click', () => this.onLogout?.());
     btnRow.appendChild(logoutBtn);
@@ -540,6 +544,126 @@ export class LobbyScreen {
     this.element.appendChild(overlay);
   }
 
+  // ── Change Password Dialog ──────────────────────────────────────
+
+  private showChangePasswordDialog(): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      animation: lby-fade-in 0.15s ease both;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(18,20,35,0.98), rgba(8,10,18,0.99));
+      border: 1px solid rgba(100,120,200,0.15);
+      border-radius: 10px; padding: 32px 40px; min-width: 340px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(60,80,180,0.08);
+      animation: lby-fade-in 0.25s ease both;
+    `;
+
+    const title = document.createElement('div');
+    title.textContent = 'CHANGE PASSWORD';
+    title.style.cssText = `
+      font-size: 11px; font-weight: 700; letter-spacing: 2px;
+      color: rgba(130,150,210,0.8); margin-bottom: 24px;
+    `;
+
+    const makeInput = (placeholder: string): HTMLInputElement => {
+      const input = document.createElement('input');
+      input.type = 'password';
+      input.placeholder = placeholder;
+      input.className = 'lby-input';
+      input.style.cssText = `
+        width: 100%; padding: 10px 14px; font-size: 13px;
+        background: rgba(0,0,0,0.4); color: #ccc;
+        border: 1px solid rgba(100,120,200,0.12); border-radius: 6px; outline: none;
+        margin-bottom: 12px; box-sizing: border-box;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      `;
+      return input;
+    };
+
+    const currentPw = makeInput('Current password');
+    const newPw = makeInput('New password');
+    const confirmPw = makeInput('Confirm new password');
+
+    const errorEl = document.createElement('div');
+    errorEl.style.cssText = 'color: #cc4444; font-size: 12px; margin-bottom: 12px; min-height: 16px;';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display: flex; gap: 10px; justify-content: flex-end;';
+
+    const cancelBtn = this.makeButton('Cancel', '#4a2a2a', '#5e3636');
+    cancelBtn.addEventListener('click', () => overlay.remove());
+
+    const submitBtn = this.makeButton('Change', '#2a5090', '#3466b8');
+    submitBtn.style.fontWeight = '600';
+    submitBtn.addEventListener('click', () => {
+      errorEl.textContent = '';
+      if (!currentPw.value) { errorEl.textContent = 'Enter your current password'; return; }
+      if (!newPw.value) { errorEl.textContent = 'Enter a new password'; return; }
+      if (newPw.value.length < 3) { errorEl.textContent = 'New password must be at least 3 characters'; return; }
+      if (newPw.value !== confirmPw.value) { errorEl.textContent = 'Passwords do not match'; return; }
+      this.network.send({ type: 'change_password', currentPassword: currentPw.value, newPassword: newPw.value });
+      overlay.remove();
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(submitBtn);
+
+    dialog.appendChild(title);
+    dialog.appendChild(currentPw);
+    dialog.appendChild(newPw);
+    dialog.appendChild(confirmPw);
+    dialog.appendChild(errorEl);
+    dialog.appendChild(btnRow);
+    overlay.appendChild(dialog);
+
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    this.element.appendChild(overlay);
+    currentPw.focus();
+  }
+
+  showChangePasswordResult(success: boolean, error?: string): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      animation: lby-fade-in 0.15s ease both;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(18,20,35,0.98), rgba(8,10,18,0.99));
+      border: 1px solid ${success ? 'rgba(60,200,100,0.3)' : 'rgba(200,60,60,0.3)'};
+      border-radius: 10px; padding: 32px 40px; min-width: 300px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      animation: lby-fade-in 0.25s ease both; text-align: center;
+    `;
+
+    const msg = document.createElement('div');
+    msg.textContent = success ? 'Password changed successfully!' : (error || 'Failed to change password');
+    msg.style.cssText = `color: ${success ? '#66cc88' : '#cc4444'}; font-size: 14px; margin-bottom: 20px;`;
+
+    const closeBtn = this.makeButton('OK', '#3a3a50', '#4a4a66');
+    closeBtn.addEventListener('click', () => overlay.remove());
+
+    dialog.appendChild(msg);
+    dialog.appendChild(closeBtn);
+    overlay.appendChild(dialog);
+
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    this.element.appendChild(overlay);
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────
 
   private makeButton(text: string, bg: string, hoverBg: string): HTMLButtonElement {
@@ -671,9 +795,15 @@ export class LobbyScreen {
     nameEl.style.cssText = 'font-size: 22px; font-weight: 700; color: #dde2f0; position: relative;';
     const joinedEl = document.createElement('div');
     const joinedDate = new Date(profile.createdAt + 'Z');
+    const lastPlayedText = profile.lastPlayed
+      ? new Date(profile.lastPlayed + 'Z').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+      : 'Never';
     joinedEl.textContent = `Joined ${joinedDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
     joinedEl.style.cssText = 'font-size: 12px; color: rgba(130,150,200,0.6); margin-top: 4px; position: relative;';
-    header.append(nameEl, joinedEl);
+    const lastPlayedEl = document.createElement('div');
+    lastPlayedEl.textContent = `Last Played ${lastPlayedText}`;
+    lastPlayedEl.style.cssText = 'font-size: 12px; color: rgba(130,150,200,0.6); margin-top: 2px; position: relative;';
+    header.append(nameEl, joinedEl, lastPlayedEl);
 
     // Stats body
     const body = document.createElement('div');
@@ -766,7 +896,7 @@ export class LobbyScreen {
     const table = document.createElement('table');
     table.style.cssText = 'width: 100%; border-collapse: collapse; font-size: 13px;';
 
-    type SortKey = 'username' | 'gamesPlayed' | 'wins' | 'losses' | 'winRate' | 'createdAt';
+    type SortKey = 'username' | 'gamesPlayed' | 'wins' | 'losses' | 'winRate' | 'createdAt' | 'lastPlayed';
     let sortKey: SortKey = 'wins';
     let sortAsc = false;
 
@@ -776,11 +906,13 @@ export class LobbyScreen {
       { key: 'wins', label: 'Wins' },
       { key: 'losses', label: 'Losses' },
       { key: 'winRate', label: 'Win %' },
+      { key: 'lastPlayed', label: 'Last Played' },
       { key: 'createdAt', label: 'Joined' },
     ];
 
     const getValue = (e: UserProfileData, key: SortKey): string | number => {
       if (key === 'winRate') return e.gamesPlayed > 0 ? e.wins / e.gamesPlayed : 0;
+      if (key === 'lastPlayed') return e.lastPlayed ?? '';
       return e[key];
     };
 
@@ -831,6 +963,9 @@ export class LobbyScreen {
         const wr = entry.gamesPlayed > 0 ? (entry.wins / entry.gamesPlayed * 100) : 0;
         const joinedDate = new Date(entry.createdAt + 'Z');
         const joined = joinedDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        const lastPlayed = entry.lastPlayed
+          ? new Date(entry.lastPlayed + 'Z').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+          : 'Never';
 
         const values: { text: string; color: string }[] = [
           { text: entry.username, color: '#bbc4dd' },
@@ -838,6 +973,7 @@ export class LobbyScreen {
           { text: String(entry.wins), color: '#66cc88' },
           { text: String(entry.losses), color: '#cc6666' },
           { text: entry.gamesPlayed > 0 ? `${wr.toFixed(1)}%` : '-', color: wr >= 50 ? '#66cc88' : '#cc8866' },
+          { text: lastPlayed, color: 'rgba(150,160,190,0.6)' },
           { text: joined, color: 'rgba(150,160,190,0.6)' },
         ];
 

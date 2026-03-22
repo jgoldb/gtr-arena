@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled, S2C_AdminUsersList, S2C_AdminResult, S2C_UserProfile, S2C_Leaderboard, UserProfileData } from '@gtr/shared';
+import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled, S2C_AdminUsersList, S2C_AdminResult, S2C_UserProfile, S2C_Leaderboard, S2C_ChangePasswordResult, UserProfileData } from '@gtr/shared';
 import type { LobbyUser, LobbyGameInfo } from '@gtr/shared';
 import { GameLobby } from './GameLobby.js';
 import { GameSession } from '../game/GameSession.js';
@@ -190,6 +190,15 @@ export class LobbyManager {
         break;
       case 'admin_unban_user':
         this.handleAdminUnbanUser(userId, msg.targetUserId);
+        break;
+      case 'admin_reset_password':
+        this.handleAdminResetPassword(userId, msg.targetUserId);
+        break;
+      case 'admin_reset_stats':
+        this.handleAdminResetStats(userId, msg.targetUserId);
+        break;
+      case 'change_password':
+        this.handleChangePassword(userId, msg.currentPassword, msg.newPassword);
         break;
     }
   }
@@ -416,6 +425,7 @@ export class LobbyManager {
         wins: row.wins,
         losses: row.losses,
         createdAt: row.created_at,
+        lastPlayed: row.last_played,
       },
     };
     this.send(user.socket, msg);
@@ -432,6 +442,7 @@ export class LobbyManager {
       wins: r.wins,
       losses: r.losses,
       createdAt: r.created_at,
+      lastPlayed: r.last_played,
     }));
 
     const msg: S2C_Leaderboard = { type: 'leaderboard', entries };
@@ -515,6 +526,7 @@ export class LobbyManager {
         wins: r.wins,
         losses: r.losses,
         bannedUntil: r.banned_until,
+        lastPlayed: r.last_played,
       })),
     };
     this.send(user.socket, msg);
@@ -622,6 +634,70 @@ export class LobbyManager {
     if (success) {
       this.handleAdminGetUsers(userId);
     }
+  }
+
+  private handleAdminResetPassword(userId: string, targetUserId: number): void {
+    const user = this.users.get(userId);
+    if (!user || !this.auth.getIsAdmin(userId)) {
+      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
+      return;
+    }
+
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%';
+    let newPassword = '';
+    for (let i = 0; i < 12; i++) {
+      newPassword += chars[Math.floor(Math.random() * chars.length)];
+    }
+
+    const success = this.db.resetPassword(targetUserId, newPassword);
+    const result: S2C_AdminResult = {
+      type: 'admin_result',
+      action: 'reset_password',
+      success,
+      error: success ? undefined : 'Cannot reset password (not found or is admin)',
+      generatedPassword: success ? newPassword : undefined,
+    };
+    this.send(user.socket, result);
+  }
+
+  private handleAdminResetStats(userId: string, targetUserId: number): void {
+    const user = this.users.get(userId);
+    if (!user || !this.auth.getIsAdmin(userId)) {
+      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
+      return;
+    }
+
+    const success = this.db.resetStats(targetUserId);
+    const result: S2C_AdminResult = {
+      type: 'admin_result',
+      action: 'reset_stats',
+      success,
+      error: success ? undefined : 'User not found',
+    };
+    this.send(user.socket, result);
+
+    if (success) {
+      this.handleAdminGetUsers(userId);
+    }
+  }
+
+  private handleChangePassword(userId: string, currentPassword: string, newPassword: string): void {
+    const user = this.users.get(userId);
+    if (!user) return;
+
+    const dbId = this.auth.getDbId(userId);
+    if (dbId == null) {
+      this.send(user.socket, { type: 'change_password_result', success: false, error: 'User not found' } as S2C_ChangePasswordResult);
+      return;
+    }
+
+    if (!newPassword || newPassword.length < 3) {
+      this.send(user.socket, { type: 'change_password_result', success: false, error: 'New password must be at least 3 characters' } as S2C_ChangePasswordResult);
+      return;
+    }
+
+    const result = this.db.changePassword(dbId, currentPassword, newPassword);
+    this.send(user.socket, { type: 'change_password_result', success: result.success, error: result.error } as S2C_ChangePasswordResult);
   }
 
   private broadcastGameLobbyState(lobby: GameLobby): void {

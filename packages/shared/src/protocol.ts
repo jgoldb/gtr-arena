@@ -277,6 +277,7 @@ export interface UserProfileData {
   wins: number;
   losses: number;
   createdAt: string;
+  lastPlayed: string | null;
 }
 
 export interface S2C_UserProfile {
@@ -368,6 +369,22 @@ export interface C2S_AdminUnbanUser {
   targetUserId: number;
 }
 
+export interface C2S_AdminResetPassword {
+  type: 'admin_reset_password';
+  targetUserId: number;
+}
+
+export interface C2S_AdminResetStats {
+  type: 'admin_reset_stats';
+  targetUserId: number;
+}
+
+export interface C2S_ChangePassword {
+  type: 'change_password';
+  currentPassword: string;
+  newPassword: string;
+}
+
 export interface C2S_Ping {
   type: 'ping';
 }
@@ -380,6 +397,7 @@ export interface AdminUserRecord {
   wins: number;
   losses: number;
   bannedUntil: string | null;
+  lastPlayed: string | null;
 }
 
 export interface S2C_AdminUsersList {
@@ -390,6 +408,14 @@ export interface S2C_AdminUsersList {
 export interface S2C_AdminResult {
   type: 'admin_result';
   action: string;
+  success: boolean;
+  error?: string;
+  /** For reset_password action, contains the generated password. */
+  generatedPassword?: string;
+}
+
+export interface S2C_ChangePasswordResult {
+  type: 'change_password_result';
   success: boolean;
   error?: string;
 }
@@ -510,6 +536,9 @@ export type ClientMessage =
   | C2S_AdminDeleteUser
   | C2S_AdminBanUser
   | C2S_AdminUnbanUser
+  | C2S_AdminResetPassword
+  | C2S_AdminResetStats
+  | C2S_ChangePassword
   | C2S_Ping;
 
 export type ServerMessage =
@@ -536,6 +565,7 @@ export type ServerMessage =
   | S2C_Kicked
   | S2C_AdminUsersList
   | S2C_AdminResult
+  | S2C_ChangePasswordResult
   | S2C_GodModeUpdate
   | S2C_RematchChallenge
   | S2C_RematchReadyUpdate

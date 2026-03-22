@@ -67,6 +67,9 @@ export class GtrDatabase {
     if (!cols.some(c => c.name === 'banned_until')) {
       this.db.exec("ALTER TABLE users ADD COLUMN banned_until TEXT DEFAULT NULL");
     }
+    if (!cols.some(c => c.name === 'last_played')) {
+      this.db.exec("ALTER TABLE users ADD COLUMN last_played TEXT DEFAULT NULL");
+    }
   }
 
   // ── Auth ────────────────────────────────────────────────────────────────
@@ -127,6 +130,8 @@ export class GtrDatabase {
       `UPDATE user_stats SET games_played = games_played + 1, ${col} = ${col} + 1 WHERE user_id = ?`
     ).run(userId);
 
+    this.db.prepare("UPDATE users SET last_played = datetime('now') WHERE id = ?").run(userId);
+
     this.db.prepare(`
       INSERT INTO user_character_stats (user_id, character_id, games_played, ${col})
       VALUES (?, ?, 1, 1)
@@ -162,9 +167,9 @@ export class GtrDatabase {
     return true;
   }
 
-  getAllUsersWithStats(): { id: number; username: string; created_at: string; games_played: number; wins: number; losses: number; banned_until: string | null }[] {
+  getAllUsersWithStats(): { id: number; username: string; created_at: string; games_played: number; wins: number; losses: number; banned_until: string | null; last_played: string | null }[] {
     return this.db.prepare(`
-      SELECT u.id, u.username, u.created_at, u.banned_until,
+      SELECT u.id, u.username, u.created_at, u.banned_until, u.last_played,
              COALESCE(s.games_played, 0) as games_played,
              COALESCE(s.wins, 0) as wins,
              COALESCE(s.losses, 0) as losses
@@ -186,6 +191,34 @@ export class GtrDatabase {
     const row = this.db.prepare('SELECT id FROM users WHERE id = ?').get(userId) as { id: number } | undefined;
     if (!row) return false;
     this.db.prepare('UPDATE users SET banned_until = NULL WHERE id = ?').run(userId);
+    return true;
+  }
+
+  changePassword(userId: number, currentPassword: string, newPassword: string): { success: boolean; error?: string } {
+    const row = this.db.prepare('SELECT password_hash FROM users WHERE id = ?').get(userId) as { password_hash: string } | undefined;
+    if (!row) return { success: false, error: 'User not found' };
+    if (!bcrypt.compareSync(currentPassword, row.password_hash)) {
+      return { success: false, error: 'Current password is incorrect' };
+    }
+    const hash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS);
+    this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, userId);
+    return { success: true };
+  }
+
+  resetPassword(userId: number, newPassword: string): boolean {
+    const row = this.db.prepare('SELECT id FROM users WHERE id = ?').get(userId) as { id: number } | undefined;
+    if (!row) return false;
+    const hash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS);
+    this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, userId);
+    return true;
+  }
+
+  resetStats(userId: number): boolean {
+    const row = this.db.prepare('SELECT id FROM users WHERE id = ?').get(userId) as { id: number } | undefined;
+    if (!row) return false;
+    this.db.prepare('UPDATE user_stats SET games_played = 0, wins = 0, losses = 0 WHERE user_id = ?').run(userId);
+    this.db.prepare('DELETE FROM user_character_stats WHERE user_id = ?').run(userId);
+    this.db.prepare('UPDATE users SET last_played = NULL WHERE id = ?').run(userId);
     return true;
   }
 
