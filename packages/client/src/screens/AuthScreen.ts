@@ -89,6 +89,44 @@ export class AuthScreen {
       });
     }
 
+    // Asteroids — large detailed rocks drifting through
+    type AsteroidRock = {
+      x: number; y: number; vx: number; vy: number;
+      rotation: number; rotSpeed: number; size: number;
+      shape: number[];
+      craters: { cx: number; cy: number; r: number }[];
+      ridges: { dist: number; start: number; len: number }[];
+      rgb: [number, number, number];
+    };
+    const asteroidList: AsteroidRock[] = [];
+
+    const makeAsteroid = (): AsteroidRock => {
+      const size = 80 + Math.random() * 120;
+      const nv = 10 + Math.floor(Math.random() * 6);
+      const shape: number[] = [];
+      for (let i = 0; i < nv; i++) {
+        shape.push((i / nv) * Math.PI * 2, size * (0.65 + Math.random() * 0.35));
+      }
+      const craters: AsteroidRock['craters'] = [];
+      for (let i = 0, n = 2 + Math.floor(Math.random() * 4); i < n; i++) {
+        const a = Math.random() * Math.PI * 2, d = Math.random() * size * 0.45;
+        craters.push({ cx: Math.cos(a) * d, cy: Math.sin(a) * d, r: 5 + Math.random() * size * 0.12 });
+      }
+      const ridges: AsteroidRock['ridges'] = [];
+      for (let i = 0, n = 2 + Math.floor(Math.random() * 3); i < n; i++) {
+        ridges.push({ dist: Math.random() * size * 0.55, start: Math.random() * Math.PI * 2, len: 0.4 + Math.random() * 0.8 });
+      }
+      const speed = 0.5 + Math.random() * 1.0;
+      const edge = Math.floor(Math.random() * 4);
+      let x: number, y: number, vx: number, vy: number;
+      if (edge === 0) { x = -size * 1.5; y = Math.random() * canvas.height; vx = speed; vy = (Math.random() - 0.5) * speed * 0.4; }
+      else if (edge === 1) { x = canvas.width + size * 1.5; y = Math.random() * canvas.height; vx = -speed; vy = (Math.random() - 0.5) * speed * 0.4; }
+      else if (edge === 2) { x = Math.random() * canvas.width; y = -size * 1.5; vx = (Math.random() - 0.5) * speed * 0.4; vy = speed; }
+      else { x = Math.random() * canvas.width; y = canvas.height + size * 1.5; vx = (Math.random() - 0.5) * speed * 0.4; vy = -speed; }
+      const palettes: [number, number, number][] = [[95, 85, 70], [75, 68, 58], [105, 92, 75], [85, 78, 65], [65, 58, 50]];
+      return { x, y, vx, vy, rotation: Math.random() * Math.PI * 2, rotSpeed: (Math.random() - 0.5) * 0.004, size, shape, craters, ridges, rgb: palettes[Math.floor(Math.random() * palettes.length)] };
+    };
+
     let lastDrawTime = 0;
     const FRAME_INTERVAL = 66; // ~15fps — plenty for slow ambient motion
 
@@ -145,6 +183,73 @@ export class AuthScreen {
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(s.x + s.len, s.y);
         ctx.stroke();
+      }
+
+      // Asteroids — occasional large rocks drifting through
+      if (asteroidList.length < 3 && Math.random() < 0.004) asteroidList.push(makeAsteroid());
+
+      for (let i = asteroidList.length - 1; i >= 0; i--) {
+        const a = asteroidList[i];
+        a.x += a.vx; a.y += a.vy; a.rotation += a.rotSpeed;
+        const m = a.size * 2;
+        if (a.x < -m || a.x > canvas.width + m || a.y < -m || a.y > canvas.height + m) {
+          asteroidList.splice(i, 1); continue;
+        }
+        const [r, g, b] = a.rgb;
+        ctx.save();
+        ctx.translate(a.x, a.y);
+        ctx.rotate(a.rotation);
+
+        // Body shape
+        ctx.beginPath();
+        for (let j = 0; j < a.shape.length; j += 2) {
+          const px = Math.cos(a.shape[j]) * a.shape[j + 1];
+          const py = Math.sin(a.shape[j]) * a.shape[j + 1];
+          j === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fill();
+
+        // 3D lighting gradient (lit from upper-left)
+        const lg = ctx.createRadialGradient(-a.size * 0.3, -a.size * 0.3, 0, 0, 0, a.size);
+        lg.addColorStop(0, `rgba(${r + 55},${g + 50},${b + 45},0.35)`);
+        lg.addColorStop(0.5, 'rgba(0,0,0,0)');
+        lg.addColorStop(1, 'rgba(0,0,0,0.35)');
+        ctx.fillStyle = lg;
+        ctx.fill();
+
+        // Edge outline
+        ctx.strokeStyle = `rgba(${r + 35},${g + 30},${b + 25},0.35)`;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Craters
+        for (const c of a.craters) {
+          ctx.globalAlpha = 0.5;
+          ctx.beginPath();
+          ctx.arc(c.cx, c.cy, c.r, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${r - 25},${g - 25},${b - 20},0.7)`;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(c.cx - c.r * 0.25, c.cy - c.r * 0.25, c.r * 0.75, 0, Math.PI * 2);
+          ctx.strokeStyle = `rgba(${r + 25},${g + 20},${b + 15},0.2)`;
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+        }
+
+        // Surface ridges
+        ctx.globalAlpha = 0.15;
+        ctx.strokeStyle = `rgb(${r - 15},${g - 15},${b - 10})`;
+        ctx.lineWidth = 0.7;
+        for (const rd of a.ridges) {
+          ctx.beginPath();
+          ctx.arc(0, 0, rd.dist, rd.start, rd.start + rd.len);
+          ctx.stroke();
+        }
+
+        ctx.restore();
       }
 
       ctx.globalAlpha = 1;
