@@ -15,6 +15,7 @@ export class EscapeMenu {
   private box: HTMLElement;
   private _isOpen = false;
   private rematchPollId: ReturnType<typeof setInterval> | null = null;
+  private exitBtn!: HTMLButtonElement;
   private confirmRow: HTMLDivElement | null = null;
 
   // Rematch UI elements
@@ -60,7 +61,8 @@ export class EscapeMenu {
     }
 
     // Exit Game button
-    const exitBtn = document.createElement('button');
+    this.exitBtn = document.createElement('button');
+    const exitBtn = this.exitBtn;
     exitBtn.textContent = 'Exit Game';
     exitBtn.style.cssText = `
       display: block; width: 100%;
@@ -224,6 +226,11 @@ export class EscapeMenu {
   private showExitConfirm(): void {
     if (this.confirmRow) return;
 
+    this.exitBtn.style.background = 'rgba(80, 50, 50, 0.5)';
+    this.exitBtn.style.color = '#666';
+    this.exitBtn.style.cursor = 'default';
+    this.exitBtn.style.borderColor = 'rgba(100, 60, 60, 0.2)';
+
     this.confirmRow = document.createElement('div');
     this.confirmRow.style.cssText = 'margin-top: 10px; text-align: center;';
 
@@ -265,6 +272,10 @@ export class EscapeMenu {
   private hideExitConfirm(): void {
     this.confirmRow?.remove();
     this.confirmRow = null;
+    this.exitBtn.style.background = 'rgba(160, 50, 50, 0.8)';
+    this.exitBtn.style.color = '#ddd';
+    this.exitBtn.style.cursor = 'pointer';
+    this.exitBtn.style.borderColor = 'rgba(200, 80, 80, 0.3)';
   }
 
   dispose(): void {

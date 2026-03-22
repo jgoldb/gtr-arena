@@ -31,6 +31,7 @@ export class PlayerController implements Targetable {
   private input: InputManager;
   private mapManager: MapManager;
   private cameraAzimuthGetter: () => number;
+  private cameraElevationGetter: () => number;
   private targetRotation = 0;
   private movementAzimuth = 0;
   private velocityY = 0;
@@ -44,11 +45,13 @@ export class PlayerController implements Targetable {
     scene: THREE.Scene,
     input: InputManager,
     mapManager: MapManager,
-    getCameraAzimuth: () => number
+    getCameraAzimuth: () => number,
+    getCameraElevation: () => number = () => 0
   ) {
     this.input = input;
     this.mapManager = mapManager;
     this.cameraAzimuthGetter = getCameraAzimuth;
+    this.cameraElevationGetter = getCameraElevation;
 
     this.mesh = new THREE.Group();
     this.mesh.userData.targetRef = this;
@@ -145,11 +148,16 @@ export class PlayerController implements Targetable {
     this.characterModel.setResting(active);
   }
 
+  setOpacity(opacity: number): void {
+    this.characterModel.setOpacity(opacity);
+  }
+
   movementSpeedModifier = 1;
   stunned = false;
   charging = false;
   discombobulated = false;
   isMoving = false;
+  godMode = false;
   private keyScramble = new Map<string, string>();
 
   setDiscombobulated(active: boolean): void {
@@ -297,10 +305,26 @@ export class PlayerController implements Targetable {
     const sDown = this.input.isKeyDown(this.getMovementKey('KeyS')) || (bothMouseHeld && this.getMovementKey('KeyS') === 'KeyW');
     const dDown = this.input.isKeyDown(this.getMovementKey('KeyD')) || (bothMouseHeld && this.getMovementKey('KeyD') === 'KeyW');
     const aDown = this.input.isKeyDown(this.getMovementKey('KeyA')) || (bothMouseHeld && this.getMovementKey('KeyA') === 'KeyW');
-    if (wDown) moveDir.add(forward);
-    if (sDown) moveDir.sub(forward);
-    if (dDown) moveDir.add(right);
-    if (aDown) moveDir.sub(right);
+    if (this.godMode && rightHeld) {
+      // 3D flight: W/S follows camera pitch, A/D strafes horizontally
+      const elevation = this.cameraElevationGetter();
+      const cosElev = Math.cos(elevation);
+      const sinElev = Math.sin(elevation);
+      const forward3D = new THREE.Vector3(
+        -cosElev * Math.sin(this.movementAzimuth),
+        -sinElev,
+        -cosElev * Math.cos(this.movementAzimuth)
+      );
+      if (wDown) moveDir.add(forward3D);
+      if (sDown) moveDir.sub(forward3D);
+      if (dDown) moveDir.add(right);
+      if (aDown) moveDir.sub(right);
+    } else {
+      if (wDown) moveDir.add(forward);
+      if (sDown) moveDir.sub(forward);
+      if (dDown) moveDir.add(right);
+      if (aDown) moveDir.sub(right);
+    }
 
     // Pure strafe (A/D without W/S) for animation
     let strafeDirection = 0;
@@ -314,8 +338,8 @@ export class PlayerController implements Targetable {
     const speedMultiplier = isBackpedaling ? this.backpedalMultiplier : 1;
     const effectiveSpeed = (this.inWater ? this.speed * this.waterSpeedMultiplier : this.speed) * speedMultiplier * this.movementSpeedModifier;
 
-    if (this.grounded) {
-      // On ground: full movement control
+    if (this.grounded || this.godMode) {
+      // On ground (or flying in god mode): full movement control
       if (isMoving) {
         moveDir.normalize();
         this.mesh.position.addScaledVector(moveDir, effectiveSpeed * deltaTime);
@@ -342,57 +366,70 @@ export class PlayerController implements Targetable {
     this.mesh.rotation.y += rotApplied;
     const turnSpeed = deltaTime > 0 ? rotApplied / deltaTime : 0;
 
-    // Jump — requires fresh press (not held from previous frame)
+    // Jump / fly
     const spaceDown = this.input.isKeyDown('Space');
-    if (spaceDown && !this.spaceWasDown && this.grounded) {
-      // Snapshot current horizontal velocity for air movement
-      if (isMoving) {
-        moveDir.normalize();
-        this.airVelocity.copy(moveDir).multiplyScalar(effectiveSpeed);
-      } else {
-        this.airVelocity.set(0, 0, 0);
+    if (this.godMode) {
+      // Flying: Space = ascend, Shift = descend, no gravity
+      if (spaceDown) {
+        this.mesh.position.y += effectiveSpeed * deltaTime;
       }
-      this.velocityY = this.jumpForce;
+      if (this.input.isKeyDown('ShiftLeft') || this.input.isKeyDown('ShiftRight')) {
+        this.mesh.position.y -= effectiveSpeed * deltaTime;
+      }
+      this.velocityY = 0;
       this.grounded = false;
+    } else {
+      // Normal jump — requires fresh press (not held from previous frame)
+      if (spaceDown && !this.spaceWasDown && this.grounded) {
+        // Snapshot current horizontal velocity for air movement
+        if (isMoving) {
+          moveDir.normalize();
+          this.airVelocity.copy(moveDir).multiplyScalar(effectiveSpeed);
+        } else {
+          this.airVelocity.set(0, 0, 0);
+        }
+        this.velocityY = this.jumpForce;
+        this.grounded = false;
+      }
+
+      this.velocityY -= this.gravity * deltaTime;
+      this.mesh.position.y += this.velocityY * deltaTime;
+
+      // Resolve collisions (3D-aware: handles ground height, water, obstacle push-out)
+      const preResolveX = this.mesh.position.x;
+      const preResolveZ = this.mesh.position.z;
+      const resolved = this.mapManager.collision.resolve(
+        this.mesh.position.x,
+        this.mesh.position.z,
+        this.mesh.position.y,
+        this.collisionRadius
+      );
+      this.mesh.position.x = resolved.x;
+      this.mesh.position.z = resolved.z;
+      this.inWater = resolved.inWater;
+
+      // If collision pushed us back while airborne, kill air velocity
+      // so jumping into a wall acts like a stationary jump
+      if (!this.grounded) {
+        const pushDx = resolved.x - preResolveX;
+        const pushDz = resolved.z - preResolveZ;
+        if (pushDx * pushDx + pushDz * pushDz > 0.0001) {
+          this.airVelocity.set(0, 0, 0);
+        }
+      }
+
+      // Land on surfaces
+      if (this.mesh.position.y <= resolved.groundY) {
+        this.mesh.position.y = resolved.groundY;
+        this.velocityY = 0;
+        this.grounded = true;
+      } else if (this.grounded && this.mesh.position.y - resolved.groundY < 1) {
+        // Follow descending platforms smoothly instead of free-falling in tiny steps
+        this.mesh.position.y = resolved.groundY;
+        this.velocityY = 0;
+      }
     }
     this.spaceWasDown = spaceDown;
-
-    this.velocityY -= this.gravity * deltaTime;
-    this.mesh.position.y += this.velocityY * deltaTime;
-
-    // Resolve collisions (3D-aware: handles ground height, water, obstacle push-out)
-    const preResolveX = this.mesh.position.x;
-    const preResolveZ = this.mesh.position.z;
-    const resolved = this.mapManager.collision.resolve(
-      this.mesh.position.x,
-      this.mesh.position.z,
-      this.mesh.position.y,
-      this.collisionRadius
-    );
-    this.mesh.position.x = resolved.x;
-    this.mesh.position.z = resolved.z;
-    this.inWater = resolved.inWater;
-
-    // If collision pushed us back while airborne, kill air velocity
-    // so jumping into a wall acts like a stationary jump
-    if (!this.grounded) {
-      const pushDx = resolved.x - preResolveX;
-      const pushDz = resolved.z - preResolveZ;
-      if (pushDx * pushDx + pushDz * pushDz > 0.0001) {
-        this.airVelocity.set(0, 0, 0);
-      }
-    }
-
-    // Land on surfaces
-    if (this.mesh.position.y <= resolved.groundY) {
-      this.mesh.position.y = resolved.groundY;
-      this.velocityY = 0;
-      this.grounded = true;
-    } else if (this.grounded && this.mesh.position.y - resolved.groundY < 1) {
-      // Follow descending platforms smoothly instead of free-falling in tiny steps
-      this.mesh.position.y = resolved.groundY;
-      this.velocityY = 0;
-    }
 
     // Clamp to map bounds
     const bounds = this.mapManager.getBounds();

@@ -111,6 +111,7 @@ export class ClientEngine {
   private resting = false;
   private rKeyWasDown = false;
   private tabKeyWasDown = false;
+  private fKeyWasDown = false;
   private gKeyWasDown = false;
   private restingSentAt = 0; // timestamp when resting was requested, to ignore stale server updates
 
@@ -154,6 +155,7 @@ export class ClientEngine {
     this.playerController = new PlayerController(
       this.scene, this.input, this.mapManager,
       () => this.thirdPersonCamera.getAzimuth(),
+      () => this.thirdPersonCamera.getElevation(),
     );
 
     // Targeting system — same class as playground, handles raycasting + selection ring
@@ -684,6 +686,7 @@ export class ClientEngine {
   handleGodModeUpdate(entityId: string, active: boolean): void {
     if (entityId === this.localEntityId) {
       this.godMode = active;
+      this.playerController.godMode = active;
       this.onGodModeToggle?.(active);
     }
   }
@@ -860,6 +863,7 @@ export class ClientEngine {
 
     // Update camera (same as playground)
     this.thirdPersonCamera.update(dt);
+    this.playerController.setOpacity(this.thirdPersonCamera.getPlayerModelOpacity());
 
     // Send local position to server at tick rate
     this.sendAccumulator += dt * 1000;
@@ -979,6 +983,27 @@ export class ClientEngine {
       }
     }
     this.tabKeyWasDown = tabDown;
+
+    // F key — target the target's target
+    const fDown = this.input.isKeyDown('KeyF');
+    if (fDown && !this.fKeyWasDown && this.selectedTargetId) {
+      const isSelf = this.selectedTargetId === this.localEntityId;
+      const totId = isSelf
+        ? this.selectedTargetId
+        : this.getRemoteEntity(this.selectedTargetId)?.targetEntityId ?? null;
+      if (totId && totId !== this.selectedTargetId) {
+        const totTargetable = totId === this.localEntityId
+          ? (this.playerController as unknown as Targetable)
+          : this.getRemoteEntity(totId)?.targetable ?? null;
+        if (totTargetable) {
+          this.targetingSystem.currentTarget = totTargetable;
+          this.selectedTargetId = totId;
+          this.sendSetTarget(totId);
+          this.onTargetChanged?.(totId);
+        }
+      }
+    }
+    this.fKeyWasDown = fDown;
 
     // Process left click for target selection (same as playground: InputManager captures on mousedown)
     const leftClick = this.input.getLeftClick();

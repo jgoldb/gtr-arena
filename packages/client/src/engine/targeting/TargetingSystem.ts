@@ -221,6 +221,11 @@ export class TargetingSystem {
     return null;
   }
 
+  /** The entity currently under the mouse (nameplate or 3D raycast). */
+  getHoveredTarget(): Targetable | null {
+    return this.nameplateHover ?? this.raycastHover;
+  }
+
   /** Update canvas cursor based on whether mouse is hovering a targetable. */
   updateHoverCursor(screenPos: { x: number; y: number } | null): void {
     if (!screenPos) {

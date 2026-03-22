@@ -528,6 +528,29 @@ export abstract class CharacterModel {
     this.group.position.y = fallEase * 0.15;
   }
 
+  /** Set opacity on all meshes in the model (0 = invisible, 1 = fully opaque). */
+  setOpacity(opacity: number): void {
+    this.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        const mat = child.material as THREE.MeshStandardMaterial;
+        if (!mat || !mat.isMeshStandardMaterial) return;
+        // Store original state on first call
+        if ((mat as any)._baseOpacity === undefined) {
+          (mat as any)._baseOpacity = mat.opacity;
+          (mat as any)._baseTransparent = mat.transparent;
+        }
+        const baseOpacity = (mat as any)._baseOpacity as number;
+        const wasTransparent = mat.transparent;
+        mat.opacity = baseOpacity * opacity;
+        mat.transparent = opacity < 1 || (mat as any)._baseTransparent;
+        // Three.js needs a shader recompile when transparent changes
+        if (mat.transparent !== wasTransparent) {
+          mat.needsUpdate = true;
+        }
+      }
+    });
+  }
+
   dispose(): void {
     this.group.traverse((child) => {
       if (child instanceof THREE.Mesh) {

@@ -6,10 +6,12 @@ import { AdminScreen } from './screens/AdminScreen';
 import { NetworkManager } from './network/NetworkManager';
 import { ClientEngine } from './network/ClientEngine';
 import { UnitFrame } from './ui/UnitFrame';
+import { TargetOfTargetFrame } from './ui/TargetOfTargetFrame';
 import { ActionBar } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
 import { Nameplates } from './ui/Nameplates';
+import { UnitTooltip } from './ui/UnitTooltip';
 import { EscapeMenu } from './ui/EscapeMenu';
 import { DebugHUD } from './ui/DebugHUD';
 import { ReconnectOverlay } from './ui/ReconnectOverlay';
@@ -52,9 +54,11 @@ const reconnectOverlay = new ReconnectOverlay();
 let mpActionBar: ActionBar | null = null;
 let mpPlayerFrame: UnitFrame | null = null;
 let mpTargetFrame: UnitFrame | null = null;
+let mpToTFrame: TargetOfTargetFrame | null = null;
 let mpErrorText: ErrorText | null = null;
 let mpCombatText: FloatingCombatText | null = null;
 let mpNameplates: Nameplates | null = null;
+let mpUnitTooltip: UnitTooltip | null = null;
 let mpCastBarContainer: HTMLDivElement | null = null;
 let mpCastBarFill: HTMLDivElement | null = null;
 let mpCastBarHeader: HTMLDivElement | null = null;
@@ -71,9 +75,11 @@ let pgDebugPanel: import('./ui/DebugPanel').DebugPanel | null = null;
 let pgActionBar: ActionBar | null = null;
 let pgPlayerFrame: UnitFrame | null = null;
 let pgTargetFrame: UnitFrame | null = null;
+let pgToTFrame: TargetOfTargetFrame | null = null;
 let pgErrorText: ErrorText | null = null;
 let pgCombatText: FloatingCombatText | null = null;
 let pgNameplates: Nameplates | null = null;
+let pgUnitTooltip: UnitTooltip | null = null;
 let pgDeathScreen: HTMLDivElement | null = null;
 let pgCastBarContainer: HTMLDivElement | null = null;
 let pgEscapeMenu: EscapeMenu | null = null;
@@ -152,12 +158,16 @@ function cleanupMultiplayerUI(): void {
   mpPlayerFrame = null;
   mpTargetFrame?.element.remove();
   mpTargetFrame = null;
+  mpToTFrame?.element.remove();
+  mpToTFrame = null;
   mpErrorText?.element.remove();
   mpErrorText = null;
   mpCombatText?.element.remove();
   mpCombatText = null;
   mpNameplates?.element.remove();
   mpNameplates = null;
+  mpUnitTooltip?.dispose();
+  mpUnitTooltip = null;
   mpCastBarContainer?.remove();
   mpCastBarContainer = null;
   mpGameOverScreen?.remove();
@@ -195,12 +205,16 @@ function cleanupPlaygroundUI(): void {
   pgPlayerFrame = null;
   pgTargetFrame?.element.remove();
   pgTargetFrame = null;
+  pgToTFrame?.element.remove();
+  pgToTFrame = null;
   pgErrorText?.element.remove();
   pgErrorText = null;
   pgCombatText?.element.remove();
   pgCombatText = null;
   pgNameplates?.element.remove();
   pgNameplates = null;
+  pgUnitTooltip?.dispose();
+  pgUnitTooltip = null;
   pgDeathScreen?.remove();
   pgDeathScreen = null;
   pgCastBarContainer?.remove();
@@ -502,6 +516,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   );
   document.body.appendChild(mpNameplates.element);
 
+  // Unit tooltip (bottom-right, on hover)
+  mpUnitTooltip = new UnitTooltip(player);
+  document.body.appendChild(mpUnitTooltip.element);
+
   // Unit frames
   const unitFrameContainer = document.getElementById('unit-frames');
   if (unitFrameContainer) unitFrameContainer.style.display = 'flex';
@@ -542,6 +560,9 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
 
   mpTargetFrame = new UnitFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
   targetFrameContainer.appendChild(mpTargetFrame.element);
+
+  mpToTFrame = new TargetOfTargetFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
+  targetFrameContainer.appendChild(mpToTFrame.element);
 
   // Action bar - abilities come from shared character data
   const abilities: readonly Ability[] = localCharStats.abilities;
@@ -719,6 +740,16 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       mpTargetFrame.update(null);
     }
 
+    // Target of Target frame (hidden when target is self — already shown in player frame)
+    if (mpToTFrame) {
+      let totTargetable: Targetable | null = null;
+      if (mpSelectedTargetId && mpSelectedTargetId !== clientEngine.localId) {
+        const totId = clientEngine.getRemoteEntity(mpSelectedTargetId)?.targetEntityId ?? null;
+        if (totId) totTargetable = makeTargetable(totId);
+      }
+      mpToTFrame.update(totTargetable);
+    }
+
     mpPlayerFrame?.updateCombatText(dt);
     mpTargetFrame?.updateCombatText(dt);
     mpActionBar?.update();
@@ -744,6 +775,25 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
         }
       }
       mpNameplates.update(player, npcsTargetable, (target) => debuffMap.get(target) ?? []);
+    }
+
+    // Unit tooltip (hover)
+    if (mpUnitTooltip) {
+      const hovered = clientEngine.targetingSystem.getHoveredTarget();
+      mpUnitTooltip.update(hovered, (entity) => {
+        // Resolve the hovered entity's target to a name
+        let targetId: string | null = null;
+        if (entity === (player as unknown as Targetable)) {
+          targetId = clientEngine!.selectedTargetId;
+        } else {
+          for (const e of clientEngine!.getAllRemoteEntities()) {
+            if (e.targetable === entity) { targetId = e.targetEntityId; break; }
+          }
+        }
+        if (!targetId) return 'None';
+        const targetEntity = clientEngine!.getEntity(targetId);
+        return targetEntity ? targetEntity.name : 'None';
+      }, dt);
     }
 
     // Cast bar
@@ -1335,6 +1385,10 @@ async function startPlayground(): Promise<void> {
   pgTargetFrame = targetFrame;
   targetFrameContainer.appendChild(targetFrame.element);
 
+  const totFrame = new TargetOfTargetFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
+  pgToTFrame = totFrame;
+  targetFrameContainer.appendChild(totFrame.element);
+
   const errorText = new ErrorText();
   pgErrorText = errorText;
   document.body.appendChild(errorText.element);
@@ -1348,6 +1402,11 @@ async function startPlayground(): Promise<void> {
   );
   pgNameplates = nameplates;
   document.body.appendChild(nameplates.element);
+
+  // Unit tooltip (bottom-right, on hover)
+  const unitTooltip = new UnitTooltip(engine.playerController);
+  pgUnitTooltip = unitTooltip;
+  document.body.appendChild(unitTooltip.element);
 
   engine.combatSystem.onCombatText = (target, amount, type) => {
     combatText.spawn(target.mesh, amount, type);
@@ -1524,6 +1583,13 @@ async function startPlayground(): Promise<void> {
     playerFrame.update(engine.playerController, bs.getBuffs(engine.playerController), bs.getDebuffs(engine.playerController));
     const ct = engine.targetingSystem.currentTarget;
     targetFrame.update(ct, ct ? bs.getBuffs(ct) : [], ct ? bs.getDebuffs(ct) : []);
+
+    // Target of Target: NPC targets are tracked via autoAttackTarget
+    const tot = ct && ct !== engine.playerController && 'autoAttackTarget' in ct
+      ? (ct as any).autoAttackTarget as Targetable | null
+      : null;
+    totFrame.update(tot);
+
     playerFrame.updateCombatText(dt);
     targetFrame.updateCombatText(dt);
     actionBar.update();
@@ -1550,6 +1616,18 @@ async function startPlayground(): Promise<void> {
     nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
       return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
     });
+
+    // Unit tooltip (hover)
+    const hovered = engine.targetingSystem.getHoveredTarget();
+    unitTooltip.update(hovered, (entity) => {
+      if (entity === (engine.playerController as unknown as Targetable)) {
+        return engine.targetingSystem.currentTarget?.name ?? 'None';
+      }
+      // NPC — check autoAttackTarget
+      const npc = engine.getNpcs().find(n => n === entity);
+      return npc?.autoAttackTarget?.name ?? 'None';
+    }, dt);
+
     pgDebugHUD?.update(dt);
 
     if (engine.playerController.dead && !deathScreenShown) { deathScreenShown = true; deathScreen.style.display = 'block'; }

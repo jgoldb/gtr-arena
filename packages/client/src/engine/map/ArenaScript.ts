@@ -48,6 +48,7 @@ export abstract class ArenaScript implements MapScript {
     this.openAnimProgress = 0;
 
     this.initArena(scene);
+    this.preCreateFlashLights();
     this.createCountdownUI();
   }
 
@@ -94,15 +95,14 @@ export abstract class ArenaScript implements MapScript {
       this.animateOpen(t);
     }
 
-    // Flash light fade
-    for (let i = this.flashLights.length - 1; i >= 0; i--) {
-      const flash = this.flashLights[i];
+    // Flash light fade (keep lights in scene to avoid shader recompilation)
+    if (this.flashLights.length > 0) {
       const age = this.elapsed - this.OPEN_TIME;
-      if (age < 1.2) {
-        flash.intensity = this.theme.flashIntensity * (1 - age / 1.2);
-      } else {
-        this.group.remove(flash);
-        this.flashLights.splice(i, 1);
+      if (age >= 0 && age < 1.2) {
+        const intensity = this.theme.flashIntensity * (1 - age / 1.2);
+        for (const flash of this.flashLights) flash.intensity = intensity;
+      } else if (age >= 1.2) {
+        for (const flash of this.flashLights) flash.intensity = 0;
       }
     }
 
@@ -181,15 +181,26 @@ export abstract class ArenaScript implements MapScript {
 
     if (silent) return;
 
-    // Flash effects
+    // Activate pre-created flash lights
+    for (const flash of this.flashLights) {
+      flash.intensity = this.theme.flashIntensity;
+    }
+
+    this.showFightText();
+  }
+
+  /**
+   * Pre-create flash lights with intensity 0 during init so they are part of
+   * the scene's light count from the start.  This prevents Three.js from
+   * recompiling every material's shader when the doors open.
+   */
+  private preCreateFlashLights(): void {
     for (const pos of this.getFlashPositions()) {
-      const flash = new THREE.PointLight(this.theme.flashColor, this.theme.flashIntensity, 40);
+      const flash = new THREE.PointLight(this.theme.flashColor, 0, 40);
       flash.position.set(pos.x, pos.y, pos.z);
       this.group.add(flash);
       this.flashLights.push(flash);
     }
-
-    this.showFightText();
   }
 
   private createCountdownUI(): void {

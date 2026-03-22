@@ -128,6 +128,7 @@ export class Engine {
   private resting = false;
   private rKeyWasDown = false;
   private tabKeyWasDown = false;
+  private fKeyWasDown = false;
   private gKeyWasDown = false;
   isAdmin = false;
   godMode = false;
@@ -168,7 +169,8 @@ export class Engine {
       this.scene,
       this.input,
       this.mapManager,
-      () => this.thirdPersonCamera.getAzimuth()
+      () => this.thirdPersonCamera.getAzimuth(),
+      () => this.thirdPersonCamera.getElevation()
     );
 
     this.targetingSystem = new TargetingSystem(
@@ -1136,11 +1138,25 @@ export class Engine {
     }
     this.tabKeyWasDown = tabDown;
 
+    // F key — target the target's target
+    const fDown = this.input.isKeyDown('KeyF');
+    if (fDown && !this.fKeyWasDown) {
+      const ct = this.targetingSystem.currentTarget;
+      if (ct && 'autoAttackTarget' in ct) {
+        const tot = (ct as any).autoAttackTarget as Targetable | null;
+        if (tot && tot !== ct) {
+          this.targetingSystem.currentTarget = tot;
+        }
+      }
+    }
+    this.fKeyWasDown = fDown;
+
     // God mode toggle — "G" key (admin only)
     const gKeyDown = this.input.isKeyDown('KeyG');
     if (gKeyDown && !this.gKeyWasDown && this.isAdmin) {
       this.godMode = !this.godMode;
       this.combatSystem.setGodMode(this.playerController, this.godMode);
+      this.playerController.godMode = this.godMode;
       if (this.godMode) {
         // Restore HP/mana to full
         this.playerController.hp = this.playerController.maxHp;
@@ -1296,6 +1312,7 @@ export class Engine {
     this.regenSystem.update(deltaTime);
     this.targetingSystem.update(deltaTime);
     this.thirdPersonCamera.update(deltaTime);
+    this.playerController.setOpacity(this.thirdPersonCamera.getPlayerModelOpacity());
     this.renderer.render(this.scene, this.camera);
     this.input.resetDeltas();
   };
