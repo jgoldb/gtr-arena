@@ -3,6 +3,8 @@ import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameSta
 import { MAPS } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
+import type { AuthManager } from '../auth/AuthManager.js';
+import type { GtrDatabase } from '../db/Database.js';
 
 interface SessionPlayer {
   userId: string;
@@ -20,8 +22,11 @@ export class GameSession {
   private sockets: Map<string, WebSocket>;
   private entityIdByUserId = new Map<string, string>();
   private userIdByEntityId = new Map<string, string>();
+  private auth: AuthManager;
+  private db: GtrDatabase;
   private onGameOver: (gameId: string) => void;
   private stopped = false;
+  private statsRecorded = false;
   private readyPlayers = new Set<string>();
   private readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private countdownStarted = false;
@@ -34,10 +39,14 @@ export class GameSession {
     _format: GameFormat,
     players: readonly { userId: string; username: string; team: number; characterId: CharacterId | null }[],
     sockets: Map<string, WebSocket>,
+    auth: AuthManager,
+    db: GtrDatabase,
     onGameOver: (gameId: string) => void,
   ) {
     this.gameId = gameId;
     this.sockets = sockets;
+    this.auth = auth;
+    this.db = db;
     this.onGameOver = onGameOver;
 
     this.mapId = mapId;
@@ -239,8 +248,24 @@ export class GameSession {
       }
     }
 
+    // Record stats for ALL players (including disconnected ones)
+    this.recordStats(winningTeam);
+
     this.stop();
     this.onGameOver(this.gameId);
+  }
+
+  /** Record win/loss stats for every player in this game. Called once at game end. */
+  private recordStats(winningTeam: number): void {
+    if (this.statsRecorded) return;
+    this.statsRecorded = true;
+
+    for (const p of this.players) {
+      const dbId = this.auth.getDbId(p.userId);
+      if (dbId == null) continue;
+      const won = p.team === winningTeam;
+      this.db.recordGameResult(dbId, p.characterId, won);
+    }
   }
 
   private broadcast(msg: ServerMessage): void {

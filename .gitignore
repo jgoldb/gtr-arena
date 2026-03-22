@@ -89,3 +89,6 @@ typings/
 
 # Vite build output
 dist/
+
+# SQLite database
+packages/server/data/

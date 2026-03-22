@@ -6,12 +6,14 @@ export class NetworkManager {
   private ws: WebSocket | null = null;
   private handlers: ServerMessageHandler[] = [];
   private reconnectTimer: number | null = null;
-  private token: string;
   private username: string;
+  private password: string;
+  private mode: 'login' | 'register';
 
-  constructor(token: string, username: string) {
-    this.token = token;
+  constructor(username: string, password: string, mode: 'login' | 'register') {
     this.username = username;
+    this.password = password;
+    this.mode = mode;
   }
 
   onMessage(handler: ServerMessageHandler): void {
@@ -24,7 +26,7 @@ export class NetworkManager {
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
-      this.send({ type: 'authenticate', username: this.username, token: this.token });
+      this.send({ type: 'authenticate', username: this.username, password: this.password, mode: this.mode });
     };
 
     this.ws.onmessage = (event) => {

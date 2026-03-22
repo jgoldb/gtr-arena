@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { AuthManager } from './auth/AuthManager.js';
 import { LobbyManager } from './lobby/LobbyManager.js';
+import { GtrDatabase } from './db/Database.js';
 import type { ClientMessage } from '@gtr/shared';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -67,8 +68,9 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
   }
 });
-const auth = new AuthManager();
-const lobby = new LobbyManager();
+const db = new GtrDatabase();
+const auth = new AuthManager(db);
+const lobby = new LobbyManager(auth, db);
 
 wss.on('connection', (ws: WebSocket) => {
   let userId: string | null = null;
@@ -83,13 +85,14 @@ wss.on('connection', (ws: WebSocket) => {
 
     // Authentication must come first
     if (msg.type === 'authenticate') {
-      const result = auth.authenticate(msg.username, msg.token, ws);
+      const result = auth.authenticate(msg.username, msg.password, msg.mode, ws);
       if (result.success) {
         userId = result.userId;
         ws.send(JSON.stringify({
           type: 'auth_result',
           success: true,
           userId: result.userId,
+          isAdmin: result.isAdmin || false,
         }));
         lobby.addUser(result.userId, msg.username, ws);
       } else {
@@ -97,6 +100,7 @@ wss.on('connection', (ws: WebSocket) => {
           type: 'auth_result',
           success: false,
           userId: '',
+          bannedUntil: result.bannedUntil,
           error: result.error,
         }));
       }

@@ -12,8 +12,10 @@ export class LobbyScreen {
   private localUserId: string;
 
   onPlayground?: () => void;
+  onLogout?: () => void;
+  onAdmin?: () => void;
 
-  constructor(network: NetworkManager, localUserId: string) {
+  constructor(network: NetworkManager, localUserId: string, isAdmin = false) {
     this.network = network;
     this.localUserId = localUserId;
 
@@ -86,6 +88,17 @@ export class LobbyScreen {
       playgroundBtn.addEventListener('click', () => this.onPlayground?.());
       btnRow.appendChild(playgroundBtn);
     }
+
+    // Admin button (admin only)
+    if (isAdmin) {
+      const adminBtn = this.makeButton('Admin', 'rgba(140, 80, 30, 0.8)');
+      adminBtn.addEventListener('click', () => this.onAdmin?.());
+      btnRow.appendChild(adminBtn);
+    }
+
+    const logoutBtn = this.makeButton('Logout', 'rgba(100, 40, 40, 0.8)');
+    logoutBtn.addEventListener('click', () => this.onLogout?.());
+    btnRow.appendChild(logoutBtn);
 
     header.appendChild(gamesTitle);
     header.appendChild(btnRow);

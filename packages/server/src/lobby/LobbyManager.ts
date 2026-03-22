@@ -1,8 +1,10 @@
 import type { WebSocket } from 'ws';
-import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled } from '@gtr/shared';
+import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled, S2C_AdminUsersList, S2C_AdminResult } from '@gtr/shared';
 import type { LobbyUser, LobbyGameInfo } from '@gtr/shared';
 import { GameLobby } from './GameLobby.js';
 import { GameSession } from '../game/GameSession.js';
+import type { AuthManager } from '../auth/AuthManager.js';
+import type { GtrDatabase } from '../db/Database.js';
 
 interface ConnectedUser {
   userId: string;
@@ -14,10 +16,17 @@ interface ConnectedUser {
 }
 
 export class LobbyManager {
+  private auth: AuthManager;
+  private db: GtrDatabase;
   private users = new Map<string, ConnectedUser>();
   private gameLobbies = new Map<string, GameLobby>();
   private gameSessions = new Map<string, GameSession>();
   private nextGameId = 1;
+
+  constructor(auth: AuthManager, db: GtrDatabase) {
+    this.auth = auth;
+    this.db = db;
+  }
 
   addUser(userId: string, username: string, socket: WebSocket): void {
     this.users.set(userId, {
@@ -29,6 +38,16 @@ export class LobbyManager {
       gameSessionId: null,
     });
     this.broadcastLobbyState();
+    this.notifyAdminsUserListChanged();
+  }
+
+  /** Send updated user list to all online admins (for the admin panel). */
+  private notifyAdminsUserListChanged(): void {
+    for (const u of this.users.values()) {
+      if (this.auth.getIsAdmin(u.userId) && !u.gameSessionId) {
+        this.handleAdminGetUsers(u.userId);
+      }
+    }
   }
 
   removeUser(userId: string): void {
@@ -111,6 +130,20 @@ export class LobbyManager {
         user.status = 'online';
         user.gameSessionId = null;
         this.broadcastLobbyState();
+        break;
+
+      // Admin messages
+      case 'admin_get_users':
+        this.handleAdminGetUsers(userId);
+        break;
+      case 'admin_delete_user':
+        this.handleAdminDeleteUser(userId, msg.targetUserId);
+        break;
+      case 'admin_ban_user':
+        this.handleAdminBanUser(userId, msg.targetUserId, msg.duration);
+        break;
+      case 'admin_unban_user':
+        this.handleAdminUnbanUser(userId, msg.targetUserId);
         break;
     }
   }
@@ -281,6 +314,8 @@ export class LobbyManager {
       lobby.format,
       players,
       playerSockets,
+      this.auth,
+      this.db,
       // onGameOver callback — just stop the session engine.
       // Players remain in 'in-game' status until they individually send 'return_to_lobby'.
       (gameId: string) => {
@@ -293,6 +328,135 @@ export class LobbyManager {
 
     session.start();
     this.broadcastLobbyState();
+  }
+
+  // ── Admin ────────────────────────────────────────────────────────────
+
+  private handleAdminGetUsers(userId: string): void {
+    const user = this.users.get(userId);
+    if (!user || !this.auth.getIsAdmin(userId)) {
+      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
+      return;
+    }
+
+    const rows = this.db.getAllUsersWithStats();
+    const msg: S2C_AdminUsersList = {
+      type: 'admin_users_list',
+      users: rows.map(r => ({
+        id: r.id,
+        username: r.username,
+        createdAt: r.created_at,
+        gamesPlayed: r.games_played,
+        wins: r.wins,
+        losses: r.losses,
+        bannedUntil: r.banned_until,
+      })),
+    };
+    this.send(user.socket, msg);
+  }
+
+  private handleAdminDeleteUser(userId: string, targetUserId: number): void {
+    const user = this.users.get(userId);
+    if (!user || !this.auth.getIsAdmin(userId)) {
+      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
+      return;
+    }
+
+    const success = this.db.deleteUser(targetUserId);
+    const result: S2C_AdminResult = {
+      type: 'admin_result',
+      action: 'delete_user',
+      success,
+      error: success ? undefined : 'Cannot delete user (not found or is admin)',
+    };
+    this.send(user.socket, result);
+
+    // If successful, kick the deleted user if they're online and refresh the list
+    if (success) {
+      const deletedUserId = `user_${targetUserId}`;
+      const deletedUser = this.users.get(deletedUserId);
+      if (deletedUser) {
+        this.send(deletedUser.socket, { type: 'kicked', reason: 'Your account has been deleted by an admin' });
+      }
+      // Send updated user list to admin
+      this.handleAdminGetUsers(userId);
+    }
+  }
+
+  private static BAN_DURATIONS: Record<string, { ms: number; label: string } | 'permanent'> = {
+    '1h':   { ms: 60 * 60 * 1000, label: '1 hour' },
+    '2h':   { ms: 2 * 60 * 60 * 1000, label: '2 hours' },
+    '1d':   { ms: 24 * 60 * 60 * 1000, label: '1 day' },
+    '3d':   { ms: 3 * 24 * 60 * 60 * 1000, label: '3 days' },
+    '1w':   { ms: 7 * 24 * 60 * 60 * 1000, label: '1 week' },
+    '1mo':  { ms: 30 * 24 * 60 * 60 * 1000, label: '1 month' },
+    '1y':   { ms: 365 * 24 * 60 * 60 * 1000, label: '1 year' },
+    'permanent': 'permanent',
+  };
+
+  private handleAdminBanUser(userId: string, targetUserId: number, duration: string): void {
+    const user = this.users.get(userId);
+    if (!user || !this.auth.getIsAdmin(userId)) {
+      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
+      return;
+    }
+
+    const dur = LobbyManager.BAN_DURATIONS[duration];
+    if (!dur) {
+      this.send(user.socket, { type: 'admin_result', action: 'ban_user', success: false, error: 'Invalid ban duration' });
+      return;
+    }
+
+    let bannedUntil: string;
+    let kickReason: string;
+
+    if (dur === 'permanent') {
+      bannedUntil = 'permanent';
+      kickReason = 'Your account has been permanently closed';
+    } else {
+      const banEnd = new Date(Date.now() + dur.ms);
+      bannedUntil = banEnd.toISOString().replace('T', ' ').replace('Z', '');
+      kickReason = `You have been banned for ${dur.label}`;
+    }
+
+    const success = this.db.banUser(targetUserId, bannedUntil);
+    const result: S2C_AdminResult = {
+      type: 'admin_result',
+      action: 'ban_user',
+      success,
+      error: success ? undefined : 'Cannot ban user (not found or is admin)',
+    };
+    this.send(user.socket, result);
+
+    if (success) {
+      const bannedUserId = `user_${targetUserId}`;
+      const bannedUser = this.users.get(bannedUserId);
+      if (bannedUser) {
+        this.send(bannedUser.socket, { type: 'kicked', reason: kickReason });
+      }
+      this.handleAdminGetUsers(userId);
+    }
+  }
+
+  private handleAdminUnbanUser(userId: string, targetUserId: number): void {
+    const user = this.users.get(userId);
+    if (!user || !this.auth.getIsAdmin(userId)) {
+      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
+      return;
+    }
+
+    const success = this.db.unbanUser(targetUserId);
+    const result: S2C_AdminResult = {
+      type: 'admin_result',
+      action: 'unban_user',
+      success,
+      error: success ? undefined : 'User not found',
+    };
+    this.send(user.socket, result);
+
+    if (success) {
+      this.handleAdminGetUsers(userId);
+    }
   }
 
   private broadcastGameLobbyState(lobby: GameLobby): void {

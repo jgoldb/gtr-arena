@@ -2,6 +2,7 @@ import type { ServerMessage, S2C_GameStart } from '@gtr/shared';
 import { AuthScreen } from './screens/AuthScreen';
 import { LobbyScreen } from './screens/LobbyScreen';
 import { GameLobbyScreen } from './screens/GameLobbyScreen';
+import { AdminScreen } from './screens/AdminScreen';
 import { NetworkManager } from './network/NetworkManager';
 import { ClientEngine } from './network/ClientEngine';
 import { UnitFrame } from './ui/UnitFrame';
@@ -36,11 +37,13 @@ type AppState = 'auth' | 'lobby' | 'game-lobby' | 'multiplayer' | 'playground';
 let currentState: AppState = 'auth';
 let network: NetworkManager | null = null;
 let localUserId = '';
+let isAdmin = false;
 
 // Active screens / engines
 let authScreen: AuthScreen | null = null;
 let lobbyScreen: LobbyScreen | null = null;
 let gameLobbyScreen: GameLobbyScreen | null = null;
+let adminScreen: AdminScreen | null = null;
 let clientEngine: ClientEngine | null = null;
 
 // MP game UI elements
@@ -100,6 +103,8 @@ function cleanupCurrentState(): void {
   lobbyScreen = null;
   gameLobbyScreen?.destroy();
   gameLobbyScreen = null;
+  adminScreen?.destroy();
+  adminScreen = null;
   cleanupMultiplayerUI();
   cleanupPlaygroundUI();
 }
@@ -185,12 +190,11 @@ function showAuth(): void {
   hideGameUI();
 
   authScreen = new AuthScreen((result) => {
-    authScreen?.destroy();
-    authScreen = null;
-    network = new NetworkManager(result.token, result.username);
+    sessionStorage.setItem('gtr_username', result.username);
+    network = new NetworkManager(result.username, result.password, result.mode);
     network.onMessage(handleServerMessage);
     network.connect();
-    // Will transition to lobby on auth_result
+    // Will transition to lobby on auth_result success, or show error on failure
   });
   document.body.appendChild(authScreen.element);
 }
@@ -202,9 +206,34 @@ function showLobby(): void {
   currentState = 'lobby';
   hideGameUI();
 
-  lobbyScreen = new LobbyScreen(network!, localUserId);
+  lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin);
   lobbyScreen.onPlayground = () => startPlayground();
+  lobbyScreen.onLogout = () => {
+    network?.disconnect();
+    network = null;
+    localUserId = '';
+    isAdmin = false;
+    sessionStorage.removeItem('gtr_username');
+    showAuth();
+  };
+  lobbyScreen.onAdmin = () => showAdmin();
   document.body.appendChild(lobbyScreen.element);
+}
+
+function showAdmin(): void {
+  lobbyScreen?.element.remove();
+  adminScreen?.destroy();
+
+  adminScreen = new AdminScreen(network!);
+  adminScreen.onBack = () => {
+    adminScreen?.destroy();
+    adminScreen = null;
+    showLobby();
+  };
+  document.body.appendChild(adminScreen.element);
+
+  // Request user list from server
+  network!.send({ type: 'admin_get_users' });
 }
 
 // ── Game Lobby Screen ──────────────────────────────────────────────────
@@ -589,9 +618,20 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'auth_result':
       if (msg.success) {
         localUserId = msg.userId;
+        isAdmin = msg.isAdmin ?? false;
+        authScreen?.destroy();
+        authScreen = null;
         showLobby();
       } else {
-        alert('Auth failed: ' + (msg.error ?? 'Unknown error'));
+        // Show error on auth screen, disconnect so user can retry
+        let errorMsg = msg.error ?? 'Authentication failed';
+        if (msg.bannedUntil && msg.bannedUntil !== 'permanent') {
+          const banEnd = new Date(msg.bannedUntil + 'Z');
+          errorMsg = `You are banned until ${banEnd.toLocaleString()}`;
+        }
+        authScreen?.showError(errorMsg);
+        network?.disconnect();
+        network = null;
       }
       break;
 
@@ -672,6 +712,27 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'game_cancelled':
       showLobby();
+      break;
+
+    case 'admin_users_list':
+      adminScreen?.updateUsers(msg.users);
+      break;
+
+    case 'admin_result':
+      if (!msg.success) {
+        console.warn('Admin action failed:', msg.error);
+      }
+      break;
+
+    case 'kicked':
+      network?.disconnect();
+      network = null;
+      localUserId = '';
+      isAdmin = false;
+      sessionStorage.removeItem('gtr_username');
+      showAuth();
+      // Show the reason on the auth screen after it renders
+      setTimeout(() => authScreen?.showError(msg.reason), 0);
       break;
 
     case 'error':

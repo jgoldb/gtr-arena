@@ -6,7 +6,8 @@ import type { GameFormat, EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, 
 export interface C2S_Authenticate {
   type: 'authenticate';
   username: string;
-  token: string;
+  password: string;
+  mode: 'login' | 'register';
 }
 
 export interface C2S_LobbyChat {
@@ -101,6 +102,8 @@ export interface S2C_AuthResult {
   type: 'auth_result';
   success: boolean;
   userId: string;
+  isAdmin?: boolean;
+  bannedUntil?: string;
   error?: string;
 }
 
@@ -224,6 +227,55 @@ export interface S2C_GameCancelled {
   reason: string;
 }
 
+export interface S2C_Kicked {
+  type: 'kicked';
+  reason: string;
+}
+
+// ── Admin Messages ──────────────────────────────────────────────────────
+
+export interface C2S_AdminGetUsers {
+  type: 'admin_get_users';
+}
+
+export interface C2S_AdminDeleteUser {
+  type: 'admin_delete_user';
+  targetUserId: number; // DB id
+}
+
+export interface C2S_AdminBanUser {
+  type: 'admin_ban_user';
+  targetUserId: number; // DB id
+  duration: string;     // e.g. '1h', '2h', '1d', '3d', '1w', '1mo', '1y', 'permanent'
+}
+
+export interface C2S_AdminUnbanUser {
+  type: 'admin_unban_user';
+  targetUserId: number;
+}
+
+export interface AdminUserRecord {
+  id: number;
+  username: string;
+  createdAt: string;
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+  bannedUntil: string | null;
+}
+
+export interface S2C_AdminUsersList {
+  type: 'admin_users_list';
+  users: AdminUserRecord[];
+}
+
+export interface S2C_AdminResult {
+  type: 'admin_result';
+  action: string;
+  success: boolean;
+  error?: string;
+}
+
 // ── Delta / Optimized State Messages ────────────────────────────────────
 
 /** Lightweight position-only data sent every tick */
@@ -320,7 +372,11 @@ export type ClientMessage =
   | C2S_CancelCast
   | C2S_CancelBuff
   | C2S_SetResting
-  | C2S_ReturnToLobby;
+  | C2S_ReturnToLobby
+  | C2S_AdminGetUsers
+  | C2S_AdminDeleteUser
+  | C2S_AdminBanUser
+  | C2S_AdminUnbanUser;
 
 export type ServerMessage =
   | S2C_AuthResult
@@ -342,4 +398,7 @@ export type ServerMessage =
   | S2C_GameOver
   | S2C_ErrorMessage
   | S2C_CountdownStart
-  | S2C_GameCancelled;
+  | S2C_GameCancelled
+  | S2C_Kicked
+  | S2C_AdminUsersList
+  | S2C_AdminResult;

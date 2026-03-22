@@ -19,7 +19,12 @@
       "Bash(npm run:*)",
       "Bash(grep -r \"countdown\\\\|Countdown\\\\|arena.*gate\\\\|gate.*countdown\" /c/Users/Joey/Repos/gtr/packages/client --include=*.ts --include=*.tsx)",
       "Bash(grep -n \"outlinePass\\\\|OutlinePass\\\\|SelectiveBloom\\\\|outline\" /c/Users/Joey/Repos/gtr/packages/client/src -r --include=*.ts)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(find /c/Users/Joey/Repos/gtr -type f \\\\\\(-name *.db -o -name *.sqlite* -o -name .env* -o -name config.* \\\\\\))",
+      "Bash(grep -r \"dependencies\\\\|devDependencies\" /c/Users/Joey/Repos/gtr/packages/*/package.json -A 50)",
+      "Bash(grep -r \"admin\\\\|admin\\\\|AUTH\\\\|SECRET\\\\|TOKEN\" /c/Users/Joey/Repos/gtr/packages --include=*.ts --include=*.env)",
+      "Bash(find /c/Users/Joey/Repos/gtr -type f \\\\\\(-name .env* -o -name package.json \\\\\\))",
+      "Bash(find /c/Users/Joey/Repos/gtr -type f -name *.db -o -name *.sqlite)"
     ]
   }
 }
