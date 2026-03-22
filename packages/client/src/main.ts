@@ -16,6 +16,7 @@ import { EscapeMenu } from './ui/EscapeMenu';
 import { DebugHUD } from './ui/DebugHUD';
 import { ReconnectOverlay } from './ui/ReconnectOverlay';
 import { ArenaFrames } from './ui/ArenaFrames';
+import { DeathFrame } from './ui/DeathFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats } from '@gtr/shared';
 import type { Ability } from './engine/combat/Ability';
@@ -68,6 +69,7 @@ let mpGameOver = false;
 let mpEscapeMenu: EscapeMenu | null = null;
 let mpDebugHUD: DebugHUD | null = null;
 let mpArenaFrames: ArenaFrames | null = null;
+let mpDeathFrame: DeathFrame | null = null;
 let mpFrameLoopId: number | null = null;
 let mpSelectedTargetId: string | null = null;
 
@@ -82,7 +84,7 @@ let pgErrorText: ErrorText | null = null;
 let pgCombatText: FloatingCombatText | null = null;
 let pgNameplates: Nameplates | null = null;
 let pgUnitTooltip: UnitTooltip | null = null;
-let pgDeathScreen: HTMLDivElement | null = null;
+let pgDeathFrame: DeathFrame | null = null;
 let pgCastBarContainer: HTMLDivElement | null = null;
 let pgEscapeMenu: EscapeMenu | null = null;
 let pgDebugHUD: DebugHUD | null = null;
@@ -183,6 +185,8 @@ function cleanupMultiplayerUI(): void {
   mpDebugHUD = null;
   mpArenaFrames?.dispose();
   mpArenaFrames = null;
+  mpDeathFrame?.element.remove();
+  mpDeathFrame = null;
   if (mpFrameLoopId !== null) {
     cancelAnimationFrame(mpFrameLoopId);
     mpFrameLoopId = null;
@@ -219,8 +223,8 @@ function cleanupPlaygroundUI(): void {
   pgNameplates = null;
   pgUnitTooltip?.dispose();
   pgUnitTooltip = null;
-  pgDeathScreen?.remove();
-  pgDeathScreen = null;
+  pgDeathFrame?.element.remove();
+  pgDeathFrame = null;
   pgCastBarContainer?.remove();
   pgCastBarContainer = null;
   pgEscapeMenu?.dispose();
@@ -586,6 +590,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     .filter((e): e is { entityId: string; targetable: Targetable } => e !== null);
   mpArenaFrames.setEntities(arenaEntities);
 
+  // Death frame
+  mpDeathFrame = new DeathFrame();
+  document.body.appendChild(mpDeathFrame.element);
+
   // Action bar - abilities come from shared character data
   const abilities: readonly Ability[] = localCharStats.abilities;
 
@@ -851,6 +859,12 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       mpCastBarHeader.innerHTML = `<span>${ab?.name ?? castState.abilityId}</span><span>${remaining.toFixed(1)}s</span>`;
     } else if (mpCastBarContainer) {
       mpCastBarContainer.style.display = 'none';
+    }
+
+    // Death frame
+    if (mpDeathFrame) {
+      if (player.dead && !mpDeathFrame.visible) mpDeathFrame.show();
+      else if (!player.dead && mpDeathFrame.visible) mpDeathFrame.hide();
     }
   }
   mpUpdateFrames();
@@ -1478,25 +1492,14 @@ async function startPlayground(): Promise<void> {
   // Apply Arena Preparation now that SCT callbacks are wired
   engine.applyArenaPreparation();
 
-  // Death screen
-  const deathScreen = document.createElement('div');
-  pgDeathScreen = deathScreen;
-  deathScreen.style.cssText = 'position: fixed; top: 35%; left: 50%; transform: translate(-50%, -50%); display: none; z-index: 500; pointer-events: none;';
-  const deathDialog = document.createElement('div');
-  deathDialog.style.cssText = 'pointer-events: auto; background: linear-gradient(to bottom, rgba(30,10,10,0.95), rgba(10,5,5,0.95)); border: 1px solid #aa3333; border-radius: 8px; padding: 30px 40px; text-align: center; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;';
-  const deathTitle = document.createElement('div');
-  deathTitle.textContent = 'You Died';
-  deathTitle.style.cssText = 'color: #cc2222; font-size: 32px; font-weight: bold; margin-bottom: 12px;';
-  const deathSub = document.createElement('div');
-  deathSub.textContent = 'Your character has been slain.';
-  deathSub.style.cssText = 'color: #888; font-size: 14px; margin-bottom: 24px;';
+  // Death frame
+  pgDeathFrame = new DeathFrame();
   const respawnBtn = document.createElement('button');
   respawnBtn.textContent = 'Respawn';
-  respawnBtn.style.cssText = 'padding: 10px 32px; font-size: 15px; font-weight: bold; background: rgba(180,60,60,0.85); color: #eee; border: 1px solid #cc4444; border-radius: 4px; cursor: pointer; outline: none;';
-  respawnBtn.addEventListener('click', () => { engine.playerController.respawn(); deathScreen.style.display = 'none'; });
-  deathDialog.append(deathTitle, deathSub, respawnBtn);
-  deathScreen.appendChild(deathDialog);
-  document.body.appendChild(deathScreen);
+  respawnBtn.style.cssText = 'margin-top: 12px; padding: 10px 32px; font-size: 15px; font-weight: bold; background: rgba(180,60,60,0.85); color: #eee; border: 1px solid #cc4444; border-radius: 4px; cursor: pointer; outline: none; pointer-events: auto;';
+  respawnBtn.addEventListener('click', () => { engine.playerController.respawn(); pgDeathFrame?.hide(); });
+  pgDeathFrame.element.querySelector('div')!.appendChild(respawnBtn);
+  document.body.appendChild(pgDeathFrame.element);
 
   // Cast bar
   const castBarContainer = document.createElement('div');
@@ -1609,7 +1612,7 @@ async function startPlayground(): Promise<void> {
   pgDebugHUD = new DebugHUD(false);
   document.body.appendChild(pgDebugHUD.element);
 
-  let deathScreenShown = false;
+  const deathFrame = pgDeathFrame!;
   let lastFrameTime = performance.now();
   function updateFrames(): void {
     pgFrameLoopId = requestAnimationFrame(updateFrames);
@@ -1668,8 +1671,8 @@ async function startPlayground(): Promise<void> {
 
     pgDebugHUD?.update(dt);
 
-    if (engine.playerController.dead && !deathScreenShown) { deathScreenShown = true; deathScreen.style.display = 'block'; }
-    else if (!engine.playerController.dead && deathScreenShown) { deathScreenShown = false; }
+    if (engine.playerController.dead && !deathFrame.visible) deathFrame.show();
+    else if (!engine.playerController.dead && deathFrame.visible) deathFrame.hide();
   }
   updateFrames();
 
