@@ -3,14 +3,25 @@ WORKDIR /app
 COPY package*.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/client/package.json packages/client/
+COPY packages/server/package.json packages/server/
 RUN npm ci
 COPY packages/shared/ packages/shared/
 COPY packages/client/ packages/client/
+COPY packages/server/ packages/server/
 COPY tsconfig*.json ./
 COPY vite.config.ts ./
-RUN npm run build -w packages/shared && npm run build -w packages/client
+RUN npm run build -w packages/shared && npm run build -w packages/client && npm run build -w packages/server
 
-FROM nginx:alpine
-COPY --from=build /app/packages/client/dist /usr/share/nginx/html
-RUN echo 'server { listen 8080; root /usr/share/nginx/html; location / { try_files $uri $uri/ /index.html; } }' > /etc/nginx/conf.d/default.conf
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/client/package.json packages/client/
+COPY packages/server/package.json packages/server/
+RUN npm ci --omit=dev
+COPY --from=build /app/packages/shared/dist packages/shared/dist
+COPY --from=build /app/packages/client/dist packages/client/dist
+COPY --from=build /app/packages/server/dist packages/server/dist
+ENV PORT=8080
 EXPOSE 8080
+CMD ["node", "packages/server/dist/index.js"]
