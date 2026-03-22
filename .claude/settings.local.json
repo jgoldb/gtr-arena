@@ -31,7 +31,9 @@
       "Bash(git stash:*)",
       "Bash(ls:*)",
       "Bash(find /c/Users/Joey/Repos/gtr -name *.html -type f)",
-      "Bash(find /c/Users/Joey/Repos/gtr -name *.css -type f)"
+      "Bash(find /c/Users/Joey/Repos/gtr -name *.css -type f)",
+      "Bash(fly logs:*)",
+      "Bash(where fly:*)"
     ]
   }
 }
