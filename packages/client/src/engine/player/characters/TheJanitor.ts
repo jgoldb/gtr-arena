@@ -818,6 +818,21 @@ export class TheJanitor extends CharacterModel {
     });
   }
 
+  protected override animateResting(time: number, weight: number): void {
+    super.animateResting(time, weight);
+
+    // Mop laid across the lap
+    if (this.mopHead) {
+      this.mopHead.rotation.z = 0.4 * weight;
+      this.mopHead.rotation.x = 0.1 * weight;
+    }
+
+    // Bucket set down beside — tilt slightly
+    if (this.bucketWater) {
+      this.bucketWater.rotation.x = Math.sin(time * 0.8) * 0.02 * weight;
+    }
+  }
+
   protected override animateStun(time: number, weight: number): void {
     super.animateStun(time, weight);
 

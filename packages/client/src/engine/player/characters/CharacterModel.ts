@@ -73,6 +73,15 @@ export abstract class CharacterModel {
   protected stunWeight = 0;
   protected stunTime = 0;
 
+  // Resting animation state
+  protected restingActive = false;
+  protected restingWeight = 0;
+  protected restingTime = 0;
+
+  // Flinch animation state (hit reaction)
+  private static readonly FLINCH_DURATION = 0.25;
+  protected flinchTime = -1; // -1 = not playing
+
   // Death animation
   private static readonly DEATH_DURATION = 1.5;
   protected deathTime = -1; // -1 = alive, >= 0 = seconds since death
@@ -158,6 +167,10 @@ export abstract class CharacterModel {
     this.abilityTargetPos = targetWorldPos ?? null;
   }
 
+  triggerFlinch(): void {
+    this.flinchTime = 0;
+  }
+
   get isSwinging(): boolean {
     return this.attackAnimTime >= 0;
   }
@@ -188,6 +201,29 @@ export abstract class CharacterModel {
       this.headGroup.rotation.set(0, 0, 0);
 
       this.animateStun(this.stunTime, this.stunWeight);
+      this.onAnimate(dt, input);
+      return;
+    }
+
+    // Resting animation blend
+    const wantRest = this.restingActive ? 1 : 0;
+    this.restingWeight += (wantRest - this.restingWeight) * Math.min(1, 6 * dt);
+    if (this.restingActive) this.restingTime += dt;
+
+    // When resting, override normal animation with sitting pose
+    if (this.restingWeight > 0.01) {
+      this.leftArmGroup.rotation.set(0, 0, 0);
+      this.rightArmGroup.rotation.set(0, 0, 0);
+      this.leftLegGroup.rotation.set(0, 0, 0);
+      this.rightLegGroup.rotation.set(0, 0, 0);
+      this.bodyGroup.rotation.set(0, 0, 0);
+      this.bodyGroup.position.y = 0;
+      this.headGroup.rotation.set(0, 0, 0);
+      // Reset leg pivot positions (modified by animateResting)
+      this.leftLegGroup.position.y = 0.78;
+      this.rightLegGroup.position.y = 0.78;
+
+      this.animateResting(this.restingTime, this.restingWeight);
       this.onAnimate(dt, input);
       return;
     }
@@ -306,6 +342,16 @@ export abstract class CharacterModel {
       }
     }
 
+    // --- Flinch layer (additive, short recoil on hit) ---
+    if (this.flinchTime >= 0) {
+      this.flinchTime += dt;
+      const t = Math.min(1, this.flinchTime / CharacterModel.FLINCH_DURATION);
+      this.animateFlinch(t);
+      if (t >= 1) {
+        this.flinchTime = -1;
+      }
+    }
+
     // --- Cast animation layer (driven by Engine during cast bar) ---
     if (this.castAnimActive) {
       this.animateCasting(this.castAnimId, this.castAnimProgress);
@@ -326,6 +372,13 @@ export abstract class CharacterModel {
     this.stunActive = active;
     if (!active) {
       this.stunTime = 0;
+    }
+  }
+
+  setResting(active: boolean): void {
+    this.restingActive = active;
+    if (!active) {
+      this.restingTime = 0;
     }
   }
 
@@ -361,6 +414,59 @@ export abstract class CharacterModel {
   protected animateAbilityUse(_abilityId: string, _t: number): void {}
   protected animateCasting(_abilityId: string, _t: number): void {}
   protected animateChanneling(_abilityId: string, _t: number): void {}
+
+  protected animateFlinch(t: number): void {
+    // Quick recoil: sharp peak at ~20% then ease out
+    const impact = t < 0.2 ? t / 0.2 : Math.max(0, 1 - (t - 0.2) / 0.8);
+    const ease = impact * impact * (3 - 2 * impact); // smoothstep
+
+    // Body recoils backward with slight lateral twist
+    this.bodyGroup.rotation.x -= ease * 0.2;
+    this.bodyGroup.rotation.z += ease * 0.08;
+
+    // Head snaps back
+    this.headGroup.rotation.x -= ease * 0.15;
+
+    // Arms flare out
+    this.leftArmGroup.rotation.z -= ease * 0.15;
+    this.rightArmGroup.rotation.z += ease * 0.15;
+    this.leftArmGroup.rotation.x -= ease * 0.1;
+    this.rightArmGroup.rotation.x -= ease * 0.1;
+  }
+
+  protected animateResting(time: number, weight: number): void {
+    const w = weight;
+    const sitDrop = 0.55; // how far the whole character drops to sit
+
+    // Lower body and leg pivots together so hips sit near ground
+    this.bodyGroup.position.y -= sitDrop * w;
+    this.leftLegGroup.position.y -= sitDrop * w;
+    this.rightLegGroup.position.y -= sitDrop * w;
+
+    // Lean back slightly
+    this.bodyGroup.rotation.x -= 0.15 * w;
+
+    // Legs extended forward from the lowered hip pivot
+    this.leftLegGroup.rotation.x += 1.4 * w;
+    this.rightLegGroup.rotation.x += 1.4 * w;
+    // Slight splay
+    this.leftLegGroup.rotation.z -= 0.08 * w;
+    this.rightLegGroup.rotation.z += 0.08 * w;
+
+    // Arms resting on knees
+    this.leftArmGroup.rotation.x += 0.5 * w;
+    this.rightArmGroup.rotation.x += 0.5 * w;
+    this.leftArmGroup.rotation.z -= 0.15 * w;
+    this.rightArmGroup.rotation.z += 0.15 * w;
+
+    // Gentle idle breathing
+    const breathe = Math.sin(time * 1.5) * 0.02;
+    this.bodyGroup.position.y += breathe * w;
+
+    // Slight head look-around
+    this.headGroup.rotation.y += Math.sin(time * 0.6) * 0.08 * w;
+    this.headGroup.rotation.x -= 0.1 * w; // look slightly down
+  }
 
   protected animateStun(time: number, weight: number): void {
     const w = weight;
@@ -420,6 +526,29 @@ export abstract class CharacterModel {
     this.group.rotation.x = recoil + fallEase * (Math.PI / 2);
     // Lift just enough to keep the torso depth above the ground plane
     this.group.position.y = fallEase * 0.15;
+  }
+
+  /** Set opacity on all meshes in the model (0 = invisible, 1 = fully opaque). */
+  setOpacity(opacity: number): void {
+    this.group.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        const mat = child.material as THREE.MeshStandardMaterial;
+        if (!mat || !mat.isMeshStandardMaterial) return;
+        // Store original state on first call
+        if ((mat as any)._baseOpacity === undefined) {
+          (mat as any)._baseOpacity = mat.opacity;
+          (mat as any)._baseTransparent = mat.transparent;
+        }
+        const baseOpacity = (mat as any)._baseOpacity as number;
+        const wasTransparent = mat.transparent;
+        mat.opacity = baseOpacity * opacity;
+        mat.transparent = opacity < 1 || (mat as any)._baseTransparent;
+        // Three.js needs a shader recompile when transparent changes
+        if (mat.transparent !== wasTransparent) {
+          mat.needsUpdate = true;
+        }
+      }
+    });
   }
 
   dispose(): void {

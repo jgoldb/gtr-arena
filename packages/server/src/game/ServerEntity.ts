@@ -27,6 +27,8 @@ export class ServerEntity {
   charging = false;
   isMoving = false;
   isAutoAttacking = false;
+  godMode = false;
+  disconnected = false;
 
   // Character stats
   readonly autoAttackDamageMin: number;
@@ -143,6 +145,7 @@ export class ServerEntity {
       castingTotalTime: 0,
       castingIsChannel: false,
       targetEntityId: null,
+      disconnected: this.disconnected || undefined,
     };
   }
 }

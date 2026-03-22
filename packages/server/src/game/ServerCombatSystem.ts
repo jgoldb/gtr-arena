@@ -19,6 +19,7 @@ export class ServerCombatSystem {
   private cooldowns = new Map<string, Map<string, { remaining: number; total: number }>>(); // entityId -> (abilityId -> cooldown)
   private static readonly COMBAT_DURATION = 5;
   private static readonly MISS_CHANCE = 0.03;
+  private static readonly GOD_MODE_DAMAGE_MULT = 11; // +1000% damage
   // Generous range tolerance to compensate for client-server latency.
   // Without this, high-latency players get abilities rejected at range boundaries
   // because the target has moved by the time the server processes the request.
@@ -30,6 +31,7 @@ export class ServerCombatSystem {
 
   onCombatText?: (source: ServerEntity, target: ServerEntity, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: ServerEntity) => void;
+  onFlinchDamage?: (target: ServerEntity) => void;
 
   constructor(regenSystem: ServerRegenSystem, buffSystem: ServerBuffSystem, collision: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -61,6 +63,8 @@ export class ServerCombatSystem {
       const targetStunned = this.buffSystem.isStunned(target);
       if (targetFacing && !targetStunned && roll < ServerCombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
     }
+    // Resting targets are always crit
+    if (this.buffSystem.hasBuff(target, 'resting')) return 'crit';
     if (Math.random() < attacker.critChance) return 'crit';
     return 'normal';
   }
@@ -147,13 +151,13 @@ export class ServerCombatSystem {
     if (attacker.dead) {
       return { success: false, error: 'dead', errorMessage: 'You are dead' };
     }
-    if (target?.dead) {
+    if (target?.dead && (ability.requiresHostileTarget || ability.requiresTarget)) {
       return { success: false, error: 'dead', errorMessage: 'Target is dead' };
     }
     if (this.buffSystem.isStunned(attacker)) {
       return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     }
-    if (this.getCooldownRemaining(attacker.id, ability.id) > 0) {
+    if (!attacker.godMode && this.getCooldownRemaining(attacker.id, ability.id) > 0) {
       return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
     }
     if (ability.requiresHostileTarget) {
@@ -161,8 +165,11 @@ export class ServerCombatSystem {
         return { success: false, error: 'no-target', errorMessage: 'No hostile target' };
       }
     }
-    if (attacker.mana < ability.manaCost) {
-      return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
+    if (!attacker.godMode) {
+      const effectiveManaCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
+      if (attacker.mana < effectiveManaCost) {
+        return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
+      }
     }
     if (ability.requiresHostileTarget && target) {
       const dist = this.getDistance(attacker.x, attacker.z, target.x, target.z);
@@ -201,9 +208,12 @@ export class ServerCombatSystem {
     const validation = this.validateAbility(ability, attacker, target);
     if (!validation.success) return validation;
 
-    attacker.mana -= ability.manaCost;
-    if (ability.manaCost > 0) {
-      this.regenSystem.notifyManaUsed(attacker);
+    if (!attacker.godMode) {
+      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
+      attacker.mana -= effectiveCost;
+      if (effectiveCost > 0) {
+        this.regenSystem.notifyManaUsed(attacker);
+      }
     }
 
     if (ability.requiresHostileTarget && target) {
@@ -227,14 +237,18 @@ export class ServerCombatSystem {
           }
         }
 
-        const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+        let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+        if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
         baseDamage = Math.round(baseDamage * damageMult);
 
         const multiplier = outcome === 'crit' ? 2 : 1;
         const damage = baseDamage * multiplier;
-        const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+        const actualDamage = target.godMode ? 0 : this.processDamageAbsorb(target, damage, attacker);
         target.hp = Math.max(0, target.hp - actualDamage);
-        if (damage > 0) this.onDirectDamageDealt?.(target);
+        if (damage > 0) {
+          this.onDirectDamageDealt?.(target);
+          this.onFlinchDamage?.(target);
+        }
         if (actualDamage > 0) {
           this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
         }
@@ -261,7 +275,9 @@ export class ServerCombatSystem {
       this.buffSystem.apply(attacker, ability.appliesSelfBuff);
     }
 
-    this.setCooldown(attacker.id, ability.id, ability.cooldown);
+    if (!attacker.godMode) {
+      this.setCooldown(attacker.id, ability.id, ability.cooldown);
+    }
     return { success: true };
   }
 
@@ -276,14 +292,18 @@ export class ServerCombatSystem {
       return;
     }
 
-    const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+    let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+    if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
     const adjustedBase = Math.round(baseDamage * damageMult);
     const isCrit = Math.random() < attacker.critChance;
     const multiplier = isCrit ? 2 : 1;
     const damage = Math.round(adjustedBase * multiplier);
-    const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+    const actualDamage = target.godMode ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
-    if (damage > 0) this.onDirectDamageDealt?.(target);
+    if (damage > 0) {
+      this.onDirectDamageDealt?.(target);
+      this.onFlinchDamage?.(target);
+    }
     if (actualDamage > 0) {
       this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage');
     }
@@ -300,11 +320,12 @@ export class ServerCombatSystem {
   applyChannelTickDamage(attacker: ServerEntity, target: ServerEntity, tickDamage: number, damageMultiplier = 1): void {
     if (attacker.dead || target.dead) return;
 
-    const adjustedTick = Math.round(tickDamage * damageMultiplier);
+    const godMult = attacker.godMode ? ServerCombatSystem.GOD_MODE_DAMAGE_MULT : 1;
+    const adjustedTick = Math.round(tickDamage * damageMultiplier * godMult);
     const isCrit = Math.random() < attacker.critChance;
     const mult = isCrit ? 2 : 1;
     const damage = Math.round(adjustedTick * mult);
-    const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+    const actualDamage = target.godMode ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
     if (damage > 0) this.onDirectDamageDealt?.(target);
     if (actualDamage > 0) {
@@ -321,7 +342,7 @@ export class ServerCombatSystem {
 
   processDamageAbsorb(target: ServerEntity, damage: number, attacker: ServerEntity | null): number {
     const { remaining, reflectDamage } = this.buffSystem.absorbDamage(target, damage);
-    if (reflectDamage > 0 && attacker && !attacker.dead) {
+    if (reflectDamage > 0 && attacker && !attacker.dead && !attacker.godMode) {
       attacker.hp = Math.max(0, attacker.hp - reflectDamage);
       this.onCombatText?.(target, attacker, reflectDamage, 'damage');
       this.enterCombat(attacker);
@@ -351,11 +372,15 @@ export class ServerCombatSystem {
     } else {
       const critMult = outcome === 'crit' ? 2 : 1;
       const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
-      const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+      let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+      if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
       const damage = Math.round(baseDamage * buffMult * damageMult * critMult);
-      const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+      const actualDamage = target.godMode ? 0 : this.processDamageAbsorb(target, damage, attacker);
       target.hp = Math.max(0, target.hp - actualDamage);
-      if (damage > 0) this.onDirectDamageDealt?.(target);
+      if (damage > 0) {
+        this.onDirectDamageDealt?.(target);
+        this.onFlinchDamage?.(target);
+      }
       if (actualDamage > 0) {
         this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
       }

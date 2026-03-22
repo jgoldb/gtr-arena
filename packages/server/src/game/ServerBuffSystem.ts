@@ -123,6 +123,18 @@ export class ServerBuffSystem {
     return mult;
   }
 
+  getManaCostMultiplier(source: ServerEntity): number {
+    const buffs = this.activeBuffs.get(source);
+    if (!buffs) return 1;
+    let mult = 1;
+    for (const buff of buffs) {
+      for (const effect of buff.definition.effects) {
+        if (effect.type === 'manaCostPercent') mult += effect.value / 100;
+      }
+    }
+    return Math.max(0, mult);
+  }
+
   getDamageDealtMultiplier(source: ServerEntity): number {
     const buffs = this.activeBuffs.get(source);
     if (!buffs) return 1;

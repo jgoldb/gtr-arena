@@ -33,4 +33,5 @@ export interface Targetable {
   castingElapsed: number;
   castingTotalTime: number;
   castingIsChannel: boolean;
+  disconnected?: boolean;
 }

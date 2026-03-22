@@ -74,6 +74,16 @@ export class MapManager {
     this.currentScript?.resetTimer?.();
   }
 
+  /** Set the elapsed time for the arena countdown (used on rejoin to sync). */
+  setElapsed(elapsed: number): void {
+    this.currentScript?.setElapsed?.(elapsed);
+  }
+
+  /** Force open the arena doors immediately. */
+  forceOpenDoors(): void {
+    this.currentScript?.forceOpenDoors?.();
+  }
+
   getScript(): MapScript | null {
     return this.currentScript;
   }

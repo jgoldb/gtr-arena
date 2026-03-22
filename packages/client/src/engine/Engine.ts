@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { yardsToUnits, type Ability } from './combat/Ability';
+import { yardsToUnits, ArenaPreparationBuff, RestingBuff, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
@@ -22,6 +22,7 @@ import {
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   disposeGroup,
 } from './effects/VisualEffects';
+import { keybindManager } from '../ui/KeybindManager';
 
 interface ActiveGasCloud extends GasCloudVisual {
   center: THREE.Vector3;
@@ -124,8 +125,18 @@ export class Engine {
   onCastComplete?: (ability: Ability, target: Targetable | null) => void;
   onCastFailed?: (message: string) => void;
 
+  private arenaPreparationActive = false;
+  private resting = false;
+  private rKeyWasDown = false;
+  private tabKeyWasDown = false;
+  private fKeyWasDown = false;
+  private gKeyWasDown = false;
+  isAdmin = false;
+  godMode = false;
+  onRestError?: (message: string) => void;
   onCharacterChange?: (abilities: readonly Ability[]) => void;
   onAutoAttackError?: (message: string) => void;
+  onGodModeToggle?: (active: boolean) => void;
   private animationFrameId: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -159,7 +170,8 @@ export class Engine {
       this.scene,
       this.input,
       this.mapManager,
-      () => this.thirdPersonCamera.getAzimuth()
+      () => this.thirdPersonCamera.getAzimuth(),
+      () => this.thirdPersonCamera.getElevation()
     );
 
     this.targetingSystem = new TargetingSystem(
@@ -167,10 +179,15 @@ export class Engine {
     );
     this.regenSystem = new RegenSystem(() => [this.playerController, ...this.npcs]);
     this.buffSystem = new BuffSystem();
+    this.regenSystem.setBuffSystem(this.buffSystem);
     this.combatSystem = new CombatSystem(this.regenSystem, this.buffSystem, this.mapManager.collision);
 
     // Direct damage pushback for casting/channeling (DoT damage bypasses CombatSystem, so no pushback)
+    // Also cancels resting on the first hit taken
     this.combatSystem.onDirectDamageDealt = (target) => {
+      if (target === this.playerController && this.resting) {
+        this.stopResting();
+      }
       if (target === this.playerController && this.casting) {
         if (this.casting.isChannel) {
           // Channel pushback: reduce remaining time (loses ticks)
@@ -185,6 +202,18 @@ export class Engine {
         }
       }
     };
+
+    // Flinch animation on direct damage (not DoT/channel ticks)
+    this.combatSystem.onFlinchDamage = (target) => {
+      if (target === this.playerController) {
+        this.playerController.triggerFlinch();
+      } else {
+        for (const npc of this.npcs) {
+          if (npc === target) { npc.triggerFlinch(); break; }
+        }
+      }
+    };
+
   }
 
   start(): void {
@@ -212,9 +241,23 @@ export class Engine {
     this.clearNpcs();
     this.mapManager.loadMap(id);
     this.playerController.respawn();
+    this.applyArenaPreparation();
+  }
+
+  applyArenaPreparation(): void {
+    this.arenaPreparationActive = true;
+    this.buffSystem.apply(this.playerController, ArenaPreparationBuff);
+    const script = this.mapManager.getScript();
+    if (script) {
+      script.onDoorsOpen = () => {
+        this.arenaPreparationActive = false;
+        this.buffSystem.remove(this.playerController, ArenaPreparationBuff.id);
+      };
+    }
   }
 
   setCharacter(id: CharacterId): void {
+    this.stopResting();
     this.stopAutoAttack();
     this.cancelCasting();
     this.buffSystem.clearEntity(this.playerController);
@@ -222,6 +265,9 @@ export class Engine {
     this.combatSystem.clearCooldowns();
     this.playerController.setCharacter(id);
     this.playerController.dead = false;
+    if (this.arenaPreparationActive) {
+      this.buffSystem.apply(this.playerController, ArenaPreparationBuff);
+    }
     this.onCharacterChange?.(this.playerController.abilities);
   }
 
@@ -302,11 +348,14 @@ export class Engine {
 
     if (isChannel) {
       // Channels consume mana and start cooldown immediately
-      this.playerController.mana -= ability.manaCost;
-      if (ability.manaCost > 0) {
-        this.regenSystem.notifyManaUsed(this.playerController);
+      if (!this.godMode) {
+        const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(this.playerController));
+        this.playerController.mana -= effectiveCost;
+        if (effectiveCost > 0) {
+          this.regenSystem.notifyManaUsed(this.playerController);
+        }
+        this.combatSystem.setCooldown(ability.id, ability.cooldown);
       }
-      this.combatSystem.setCooldown(ability.id, ability.cooldown);
       // Enter combat for hostile channel targets
       if (target && target.isHostileTo(this.playerController)) {
         this.combatSystem.enterCombat(this.playerController);
@@ -320,7 +369,7 @@ export class Engine {
     }
 
     // Non-channels: start a short interrupt cooldown; on success useAbility overwrites with the real one
-    if (!isChannel) {
+    if (!isChannel && !this.godMode) {
       this.combatSystem.setCooldown(ability.id, Engine.INTERRUPT_COOLDOWN);
     }
 
@@ -343,10 +392,11 @@ export class Engine {
         id: `channel-${ability.id}`,
         name: ability.name,
         icon: ability.icon,
-        duration: Infinity, // managed manually
+        duration: ability.castTime!, // remaining managed manually via updateChannelAuraRemaining
         type: isFriendly ? 'buff' : 'debuff',
         description: ability.description,
         effects: [],
+        unremovable: true,
       });
       // Set initial remaining to channel duration
       this.updateChannelAuraRemaining();
@@ -413,7 +463,7 @@ export class Engine {
 
   private removeChannelAura(): void {
     if (!this.casting || !this.casting.isChannel || !this.casting.target) return;
-    this.buffSystem.remove(this.casting.target, `channel-${this.casting.ability.id}`);
+    this.buffSystem.remove(this.casting.target, `channel-${this.casting.ability.id}`, true);
   }
 
   isCasting(): boolean {
@@ -441,8 +491,39 @@ export class Engine {
     };
   }
 
+  // ── Resting ──────────────────────────────────────────
+
+  startResting(): boolean {
+    if (this.playerController.dead) return false;
+    if (this.playerController.inCombat) {
+      this.onRestError?.('You are in combat');
+      return false;
+    }
+    if (this.playerController.isMoving) return false;
+    if (this.casting) return false;
+    if (this.buffSystem.isStunned(this.playerController)) return false;
+
+    this.resting = true;
+    this.stopAutoAttack();
+    this.buffSystem.apply(this.playerController, RestingBuff);
+    this.playerController.setResting(true);
+    return true;
+  }
+
+  stopResting(): void {
+    if (!this.resting) return;
+    this.resting = false;
+    this.buffSystem.remove(this.playerController, RestingBuff.id);
+    this.playerController.setResting(false);
+  }
+
+  isResting(): boolean {
+    return this.resting;
+  }
+
   startAutoAttack(target: Targetable): void {
     if (target === this.autoAttackTarget && this.autoAttacking) return;
+    if (this.resting) this.stopResting();
     this.autoAttacking = true;
     this.autoAttackTarget = target;
     this.autoAttackTimer = this.playerController.autoAttackSpeed; // immediate first swing
@@ -545,7 +626,8 @@ export class Engine {
           if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
 
           if (target.isHostileTo(pool.owner)) {
-            const actualPoolDmg = this.combatSystem.processDamageAbsorb(target, pool.initialDamage, pool.owner);
+            const poolGodImmune = this.godMode && target === this.playerController;
+            const actualPoolDmg = poolGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, pool.initialDamage, pool.owner);
             target.hp = Math.max(0, target.hp - actualPoolDmg);
             if (actualPoolDmg > 0) this.combatSystem.onCombatText?.(target, actualPoolDmg, 'damage');
             this.combatSystem.enterCombat(pool.owner);
@@ -592,7 +674,8 @@ export class Engine {
       // Tick damage
       while (dot.elapsed >= dot.nextTickAt && dot.nextTickAt <= dot.totalDuration) {
         if (!dot.target.dead) {
-          const actualDotDmg = this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
+          const dotGodImmune = this.godMode && dot.target === this.playerController;
+          const actualDotDmg = dotGodImmune ? 0 : this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
           dot.target.hp = Math.max(0, dot.target.hp - actualDotDmg);
           if (actualDotDmg > 0) this.combatSystem.onCombatText?.(dot.target, actualDotDmg, 'damage');
           this.combatSystem.enterCombat(dot.target);
@@ -662,7 +745,8 @@ export class Engine {
       while (cloud.elapsed >= cloud.nextTickAt && cloud.nextTickAt <= cloud.duration) {
         for (const target of cloud.affectedTargets) {
           if (target.dead) continue;
-          const actualCloudDmg = this.combatSystem.processDamageAbsorb(target, cloud.damagePerTick, cloud.owner);
+          const cloudGodImmune = this.godMode && target === this.playerController;
+          const actualCloudDmg = cloudGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, cloud.damagePerTick, cloud.owner);
           target.hp = Math.max(0, target.hp - actualCloudDmg);
           if (actualCloudDmg > 0) this.combatSystem.onCombatText?.(target, actualCloudDmg, 'damage');
           this.combatSystem.enterCombat(target);
@@ -966,7 +1050,7 @@ export class Engine {
 
     this.autoAttackTimer += dt;
 
-    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(player);
+    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(player) * (this.godMode ? 6 : 1);
     if (this.autoAttackTimer >= player.autoAttackSpeed / atkSpeedMult) {
       // Check range
       const dx = player.mesh.position.x - target.mesh.position.x;
@@ -1031,16 +1115,86 @@ export class Engine {
     this.updateAutoAttack(deltaTime);
 
     // Update buff-driven modifiers before player update
-    this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController);
+    this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController)
+      * (this.godMode ? 4 : 1); // God mode: +300% movement speed
     this.playerController.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(this.playerController, 'crash-out'));
     this.playerController.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(this.playerController, 'retard-strength'));
     this.playerController.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(this.playerController, 'full-retard'));
+
+    // Resting toggle
+    const rKeyDown = this.input.isKeyDown(keybindManager.getCode('rest'));
+    if (rKeyDown && !this.rKeyWasDown) {
+      if (this.resting) {
+        this.stopResting();
+      } else {
+        this.startResting();
+      }
+    }
+    this.rKeyWasDown = rKeyDown;
+
+    // Tab targeting — nearest hostile in front within 30 yards
+    const tabDown = this.input.isKeyDown('Tab');
+    if (tabDown && !this.tabKeyWasDown) {
+      this.targetingSystem.selectNearestHostileInFront(this.npcs, yardsToUnits(30));
+    }
+    this.tabKeyWasDown = tabDown;
+
+    // Target of target key
+    const fDown = this.input.isKeyDown(keybindManager.getCode('target_of_target'));
+    if (fDown && !this.fKeyWasDown) {
+      const ct = this.targetingSystem.currentTarget;
+      if (ct && 'autoAttackTarget' in ct) {
+        const tot = (ct as any).autoAttackTarget as Targetable | null;
+        if (tot && tot !== ct) {
+          this.targetingSystem.currentTarget = tot;
+        }
+      }
+    }
+    this.fKeyWasDown = fDown;
+
+    // God mode toggle — "G" key (admin only)
+    const gKeyDown = this.input.isKeyDown('KeyG');
+    if (gKeyDown && !this.gKeyWasDown && this.isAdmin) {
+      this.godMode = !this.godMode;
+      this.combatSystem.setGodMode(this.playerController, this.godMode);
+      this.playerController.godMode = this.godMode;
+      if (this.godMode) {
+        // Restore HP/mana to full
+        this.playerController.hp = this.playerController.maxHp;
+        this.playerController.mana = this.playerController.maxMana;
+      }
+      this.onGodModeToggle?.(this.godMode);
+    }
+    this.gKeyWasDown = gKeyDown;
+
+    // Cancel resting on movement
+    if (this.resting) {
+      const wDown = this.input.isKeyDown(keybindManager.getCode('move_forward'));
+      const sDown = this.input.isKeyDown(keybindManager.getCode('move_backward'));
+      const aDown = this.input.isKeyDown(keybindManager.getCode('move_left'));
+      const dDown = this.input.isKeyDown(keybindManager.getCode('move_right'));
+      const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
+      const jumping = this.input.isKeyDown('Space');
+      if (wDown || sDown || aDown || dDown || bothMouse || jumping) {
+        this.stopResting();
+      }
+    }
+
+    // Cancel resting on entering combat
+    if (this.resting && this.playerController.inCombat) {
+      this.stopResting();
+    }
 
     // Stun state — player
     const playerStunned = this.buffSystem.isStunned(this.playerController);
     this.playerController.setStunned(playerStunned);
     if (playerStunned && this.autoAttacking) {
       this.stopAutoAttack();
+    }
+
+    // Cancel resting on stun
+    if (playerStunned && this.resting) {
+      this.stopResting();
     }
 
     // Discombobulate state — player
@@ -1159,6 +1313,7 @@ export class Engine {
     this.regenSystem.update(deltaTime);
     this.targetingSystem.update(deltaTime);
     this.thirdPersonCamera.update(deltaTime);
+    this.playerController.setOpacity(this.thirdPersonCamera.getPlayerModelOpacity());
     this.renderer.render(this.scene, this.camera);
     this.input.resetDeltas();
   };

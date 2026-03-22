@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { EntitySnapshot, EntityBuffSnapshot } from '@gtr/shared';
 import type {
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
-  S2C_CombatEvent, S2C_AbilityEffect, S2C_CooldownUpdate,
+  S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
@@ -27,6 +27,7 @@ import {
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   disposeGroup,
 } from '../engine/effects/VisualEffects';
+import { keybindManager } from '../ui/KeybindManager';
 
 interface RemoteEntity {
   id: string;
@@ -44,6 +45,7 @@ interface RemoteEntity {
   buffs: EntityBuffSnapshot['buffs'];
   targetable: Targetable;
   targetEntityId: string | null;
+  disconnected: boolean;
 }
 
 export class ClientEngine {
@@ -106,6 +108,23 @@ export class ClientEngine {
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
 
+  // Entities fading out before removal
+  private static readonly ENTITY_FADE_DURATION = 1.5;
+  private fadingEntities = new Map<string, { model: CharacterModel; mesh: THREE.Group; elapsed: number }>();
+
+  // Resting state
+  private resting = false;
+  private rKeyWasDown = false;
+  private tabKeyWasDown = false;
+  private fKeyWasDown = false;
+  private gKeyWasDown = false;
+  private restingSentAt = 0; // timestamp when resting was requested, to ignore stale server updates
+
+  // God mode (admin only)
+  isAdmin = false;
+  godMode = false;
+  onGodModeToggle?: (active: boolean) => void;
+
   // Event callbacks for UI
   onCombatText?: (sourceEntityId: string, targetEntityId: string, amount: number, type: string) => void;
   onCooldownUpdate?: (abilityId: string, remaining: number, total: number) => void;
@@ -141,6 +160,7 @@ export class ClientEngine {
     this.playerController = new PlayerController(
       this.scene, this.input, this.mapManager,
       () => this.thirdPersonCamera.getAzimuth(),
+      () => this.thirdPersonCamera.getElevation(),
     );
 
     // Targeting system — same class as playground, handles raycasting + selection ring
@@ -207,6 +227,7 @@ export class ClientEngine {
       buffs: [],
       targetable: null!, // Set below
       targetEntityId: snap.targetEntityId,
+      disconnected: snap.disconnected ?? false,
     };
 
     // Create a Targetable wrapper with live getters so it always reflects current state
@@ -244,6 +265,7 @@ export class ClientEngine {
       set castingTotalTime(_v) { /* read-only */ },
       get castingIsChannel() { return entity.castingIsChannel; },
       set castingIsChannel(_v) { /* read-only */ },
+      get disconnected() { return entity.disconnected; },
     };
     entity.targetable = targetable;
     mesh.userData.targetRef = targetable;
@@ -320,6 +342,7 @@ export class ClientEngine {
   private handleBundledEvent(event: import('@gtr/shared').GameTickEvent): void {
     switch (event.type) {
       case 'combat_event': this.handleCombatEvent(event); break;
+      case 'flinch': this.handleFlinch(event); break;
       case 'ability_effect': this.handleAbilityEffect(event); break;
       case 'cooldown_update': this.handleCooldownUpdate(event); break;
       case 'auto_attack_swing': this.handleAutoAttackSwing(event); break;
@@ -376,6 +399,45 @@ export class ClientEngine {
     });
   }
 
+  handlePlayerDisconnected(entityId: string): void {
+    const entity = this.remoteEntities.get(entityId);
+    if (entity) {
+      entity.disconnected = true;
+      entity.isMoving = false;
+    }
+  }
+
+  handlePlayerReconnected(entityId: string): void {
+    const entity = this.remoteEntities.get(entityId);
+    if (entity) {
+      entity.disconnected = false;
+    }
+  }
+
+  isEntityDisconnected(entityId: string): boolean {
+    return this.remoteEntities.get(entityId)?.disconnected ?? false;
+  }
+
+  /** Remove a remote entity from the game world entirely (grace period expired). */
+  handleEntityRemoved(entityId: string): void {
+    const entity = this.remoteEntities.get(entityId);
+    if (!entity) return;
+
+    // Clear target if we were targeting this entity
+    if (this.selectedTargetId === entityId) {
+      this.selectTarget(null);
+    }
+
+    // Start fade-out — mesh stays in scene until fade completes
+    this.fadingEntities.set(entityId, {
+      model: entity.model,
+      mesh: entity.mesh,
+      elapsed: 0,
+    });
+
+    this.remoteEntities.delete(entityId);
+  }
+
   /** Apply state deltas to local player and remote entities. */
   private applyEntityStateDeltas(deltas: import('@gtr/shared').EntityStateDelta[]): void {
     for (const delta of deltas) {
@@ -385,7 +447,11 @@ export class ClientEngine {
         if (delta.maxHp !== undefined) pc.maxHp = delta.maxHp;
         if (delta.mana !== undefined) pc.mana = delta.mana;
         if (delta.maxMana !== undefined) pc.maxMana = delta.maxMana;
-        if (delta.dead !== undefined) pc.dead = delta.dead;
+        if (delta.dead !== undefined) {
+          if (delta.dead && !pc.dead) pc.die();
+          else if (!delta.dead && pc.dead) pc.respawn();
+          pc.dead = delta.dead;
+        }
         if (delta.inCombat !== undefined) {
           if (delta.inCombat && !pc.inCombat) this.onEnterCombat?.(delta.id);
           else if (!delta.inCombat && pc.inCombat) this.onLeaveCombat?.(delta.id);
@@ -418,6 +484,7 @@ export class ClientEngine {
       if (delta.castingTotalTime !== undefined) entity.castingTotalTime = delta.castingTotalTime;
       if (delta.castingIsChannel !== undefined) entity.castingIsChannel = delta.castingIsChannel;
       if ('targetEntityId' in delta) entity.targetEntityId = delta.targetEntityId!;
+      if (delta.disconnected !== undefined) entity.disconnected = delta.disconnected;
     }
   }
 
@@ -428,6 +495,8 @@ export class ClientEngine {
     pc.maxHp = snap.maxHp;
     pc.mana = snap.mana;
     pc.maxMana = snap.maxMana;
+    if (snap.dead && !pc.dead) pc.die();
+    else if (!snap.dead && pc.dead) pc.respawn();
     pc.dead = snap.dead;
     pc.inCombat = snap.inCombat;
     pc.stunned = snap.stunned;
@@ -457,6 +526,7 @@ export class ClientEngine {
     entity.castingTotalTime = snap.castingTotalTime;
     entity.castingIsChannel = snap.castingIsChannel;
     entity.targetEntityId = snap.targetEntityId;
+    entity.disconnected = snap.disconnected ?? false;
   }
 
   /** Apply buff updates to local player and remote entity visuals. */
@@ -474,11 +544,18 @@ export class ClientEngine {
         }
 
         this.localBuffs = buffSnap.buffs;
-        const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
+        // Sync resting state from server — but ignore stale updates that arrive
+        // before the server has processed our resting request (grace period 500ms)
+        const restingGraceExpired = performance.now() - this.restingSentAt > 500;
+        if (this.resting && restingGraceExpired && !this.localBuffs.some(b => b.id === 'resting')) {
+          this.resting = false;
+          this.playerController.setResting(false);
+        }
+        const hasBuff = (id: string) => this.localBuffs.some(b => b.id === id);
         this.playerController.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
         this.playerController.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
         this.playerController.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
-        this.playerController.setDiscombobulated(buffSnap.buffs.some(b => b.id === 'discombobulate'));
+        this.playerController.setDiscombobulated(this.localBuffs.some(b => b.id === 'discombobulate'));
         continue;
       }
       const entity = this.remoteEntities.get(buffSnap.entityId);
@@ -488,6 +565,7 @@ export class ClientEngine {
         entity.model.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
         entity.model.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
         entity.model.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
+        entity.model.setResting(hasBuff('resting'));
       }
     }
   }
@@ -511,6 +589,15 @@ export class ClientEngine {
         const targetMesh = entity.targetEntityId ? this.getEntityMesh(entity.targetEntityId) : undefined;
         entity.model.triggerAbilityAnimation(msg.abilityId, targetMesh?.position.clone());
       }
+    }
+  }
+
+  handleFlinch(msg: S2C_Flinch): void {
+    if (msg.entityId === this.localEntityId) {
+      this.playerController.triggerFlinch();
+    } else {
+      const entity = this.remoteEntities.get(msg.entityId);
+      if (entity) entity.model.triggerFlinch();
     }
   }
 
@@ -583,6 +670,18 @@ export class ClientEngine {
     return this.localBuffs;
   }
 
+  getManaCostMultiplier(): number {
+    let mult = 1;
+    for (const buff of this.localBuffs) {
+      if (buff.effects) {
+        for (const effect of buff.effects) {
+          if (effect.type === 'manaCostPercent') mult += effect.value / 100;
+        }
+      }
+    }
+    return Math.max(0, mult);
+  }
+
   /** Get the Three.js group for an entity (for raycasting/combat text positioning) */
   getEntityMesh(entityId: string): THREE.Group | undefined {
     if (entityId === this.localEntityId) return this.playerController.mesh;
@@ -591,6 +690,14 @@ export class ClientEngine {
 
   get localId(): string {
     return this.localEntityId;
+  }
+
+  handleGodModeUpdate(entityId: string, active: boolean): void {
+    if (entityId === this.localEntityId) {
+      this.godMode = active;
+      this.playerController.godMode = active;
+      this.onGodModeToggle?.(active);
+    }
   }
 
   /** Look up entity ID from a Targetable reference */
@@ -636,6 +743,41 @@ export class ClientEngine {
     this.network.send({ type: 'cancel_cast' });
   }
 
+  sendCancelBuff(buffId: string): void {
+    this.network.send({ type: 'cancel_buff', buffId });
+  }
+
+  // ── Resting ─────────────────────────────────────────────────────────
+
+  startResting(): boolean {
+    if (this.playerController.dead) return false;
+    if (this.playerController.inCombat) {
+      this.onError?.('You are in combat');
+      return false;
+    }
+    if (this.playerController.isMoving) return false;
+    if (this.playerController.stunned) return false;
+    if (this.localCastingAbilityId) return false;
+
+    this.resting = true;
+    this.restingSentAt = performance.now();
+    this.sendStopAutoAttack();
+    this.playerController.setResting(true);
+    this.network.send({ type: 'set_resting', resting: true });
+    return true;
+  }
+
+  stopResting(): void {
+    if (!this.resting) return;
+    this.resting = false;
+    this.playerController.setResting(false);
+    this.network.send({ type: 'set_resting', resting: false });
+  }
+
+  isResting(): boolean {
+    return this.resting;
+  }
+
   // ── Main loop ────────────────────────────────────────────────────────
 
   private lastFrameTime = performance.now();
@@ -651,6 +793,9 @@ export class ClientEngine {
   };
 
   private update(dt: number): void {
+    // God mode: +300% movement speed
+    this.playerController.movementSpeedModifier = this.godMode ? 4 : 1;
+
     // Update local player using the real PlayerController (same as playground)
     this.playerController.update(dt);
 
@@ -684,8 +829,50 @@ export class ClientEngine {
       this.playerController.setChannelAnimation(null, 0);
     }
 
+    // Resting toggle
+    const rKeyDown = this.input.isKeyDown(keybindManager.getCode('rest'));
+    if (rKeyDown && !this.rKeyWasDown) {
+      if (this.resting) {
+        this.stopResting();
+      } else {
+        this.startResting();
+      }
+    }
+    this.rKeyWasDown = rKeyDown;
+
+    // God mode toggle — "G" key (admin only, sends to server)
+    const gKeyDown = this.input.isKeyDown('KeyG');
+    if (gKeyDown && !this.gKeyWasDown && this.isAdmin) {
+      this.network.send({ type: 'toggle_god_mode' });
+    }
+    this.gKeyWasDown = gKeyDown;
+
+    // Cancel resting on movement or jump
+    if (this.resting) {
+      const wDown = this.input.isKeyDown(keybindManager.getCode('move_forward'));
+      const sDown = this.input.isKeyDown(keybindManager.getCode('move_backward'));
+      const aDown = this.input.isKeyDown(keybindManager.getCode('move_left'));
+      const dDown = this.input.isKeyDown(keybindManager.getCode('move_right'));
+      const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
+      const jumping = this.input.isKeyDown('Space');
+      if (wDown || sDown || aDown || dDown || bothMouse || jumping) {
+        this.stopResting();
+      }
+    }
+
+    // Cancel resting on entering combat or taking damage
+    if (this.resting && this.playerController.inCombat) {
+      this.stopResting();
+    }
+
+    // Cancel resting on stun or death
+    if (this.resting && (this.playerController.stunned || this.playerController.dead)) {
+      this.stopResting();
+    }
+
     // Update camera (same as playground)
     this.thirdPersonCamera.update(dt);
+    this.playerController.setOpacity(this.thirdPersonCamera.getPlayerModelOpacity());
 
     // Send local position to server at tick rate
     this.sendAccumulator += dt * 1000;
@@ -761,6 +948,18 @@ export class ClientEngine {
       });
     }
 
+    // Update fading-out entities
+    for (const [id, fading] of this.fadingEntities) {
+      fading.elapsed += dt;
+      const t = fading.elapsed / ClientEngine.ENTITY_FADE_DURATION;
+      if (t >= 1) {
+        this.scene.remove(fading.mesh);
+        this.fadingEntities.delete(id);
+      } else {
+        fading.model.setOpacity(1 - t);
+      }
+    }
+
     // Update gas cloud visuals
     for (const [id, cloud] of this.gasClouds) {
       cloud.elapsed += dt;
@@ -792,6 +991,41 @@ export class ClientEngine {
     // Update map script (e.g., gate animations)
     this.mapManager.update(dt);
 
+    // Tab targeting — nearest hostile in front within 30 yards
+    const tabDown = this.input.isKeyDown('Tab');
+    if (tabDown && !this.tabKeyWasDown) {
+      const hostiles = this.getAllRemoteEntities().map(e => e.targetable);
+      this.targetingSystem.selectNearestHostileInFront(hostiles, yardsToUnits(30));
+      const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
+      if (newTargetId !== this.selectedTargetId) {
+        this.selectedTargetId = newTargetId;
+        this.sendSetTarget(newTargetId);
+        this.onTargetChanged?.(newTargetId);
+      }
+    }
+    this.tabKeyWasDown = tabDown;
+
+    // Target of target key
+    const fDown = this.input.isKeyDown(keybindManager.getCode('target_of_target'));
+    if (fDown && !this.fKeyWasDown && this.selectedTargetId) {
+      const isSelf = this.selectedTargetId === this.localEntityId;
+      const totId = isSelf
+        ? this.selectedTargetId
+        : this.getRemoteEntity(this.selectedTargetId)?.targetEntityId ?? null;
+      if (totId && totId !== this.selectedTargetId) {
+        const totTargetable = totId === this.localEntityId
+          ? (this.playerController as unknown as Targetable)
+          : this.getRemoteEntity(totId)?.targetable ?? null;
+        if (totTargetable) {
+          this.targetingSystem.currentTarget = totTargetable;
+          this.selectedTargetId = totId;
+          this.sendSetTarget(totId);
+          this.onTargetChanged?.(totId);
+        }
+      }
+    }
+    this.fKeyWasDown = fDown;
+
     // Process left click for target selection (same as playground: InputManager captures on mousedown)
     const leftClick = this.input.getLeftClick();
     if (leftClick) {
@@ -816,6 +1050,7 @@ export class ClientEngine {
           this.onTargetChanged?.(targetId);
         }
         if (targetId && target.isHostileTo(this.playerController) && !target.dead) {
+          if (this.resting) this.stopResting();
           this.sendAutoAttack(targetId);
         }
       }

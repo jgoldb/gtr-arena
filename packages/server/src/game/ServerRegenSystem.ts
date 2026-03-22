@@ -1,16 +1,23 @@
 import type { ServerEntity } from './ServerEntity.js';
+import type { ServerBuffSystem } from './ServerBuffSystem.js';
 
 export class ServerRegenSystem {
   private static readonly TICK_INTERVAL = 2.5;
   private static readonly REGEN_AMOUNT = 2;
   private static readonly MANA_REGEN_DELAY = 5;
+  private static readonly RESTING_MANA_MULTIPLIER = 4; // 300% increase = 4x total
 
   private tickAccumulator = 0;
   private manaUsedTimers = new Map<ServerEntity, number>();
   private getEntities: () => ServerEntity[];
+  private buffSystem: ServerBuffSystem | null = null;
 
   constructor(getEntities: () => ServerEntity[]) {
     this.getEntities = getEntities;
+  }
+
+  setBuffSystem(buffSystem: ServerBuffSystem): void {
+    this.buffSystem = buffSystem;
   }
 
   notifyManaUsed(entity: ServerEntity): void {
@@ -40,7 +47,11 @@ export class ServerRegenSystem {
       if (entity.maxMana > 0 && entity.mana < entity.maxMana) {
         const timeSinceUse = this.manaUsedTimers.get(entity);
         if (timeSinceUse === undefined || timeSinceUse >= ServerRegenSystem.MANA_REGEN_DELAY) {
-          entity.mana = Math.min(entity.maxMana, entity.mana + ServerRegenSystem.REGEN_AMOUNT);
+          const isResting = this.buffSystem?.hasBuff(entity, 'resting') ?? false;
+          const regenAmount = isResting
+            ? ServerRegenSystem.REGEN_AMOUNT * ServerRegenSystem.RESTING_MANA_MULTIPLIER
+            : ServerRegenSystem.REGEN_AMOUNT;
+          entity.mana = Math.min(entity.maxMana, entity.mana + regenAmount);
         }
       }
     }

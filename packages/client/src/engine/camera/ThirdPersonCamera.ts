@@ -14,7 +14,7 @@ export class ThirdPersonCamera {
   distance = 12;
 
   // Limits
-  minElevation = -0.5;
+  minElevation = -Math.PI / 2; // directly below the player
   maxElevation = 1.4; // ~80 degrees
   minDistance = 3;
   maxDistance = 12;
@@ -23,6 +23,9 @@ export class ThirdPersonCamera {
   mouseSensitivity = 0.003;
   scrollSensitivity = 0.005;
   followSmoothing = 0.3;
+
+  // Elevation threshold below which the player model starts fading out
+  private readonly fadeStartElevation = -0.5; // same as the old minElevation
 
   // Camera collision
   private wallOffset = 0.3;
@@ -112,5 +115,18 @@ export class ThirdPersonCamera {
 
   getAzimuth(): number {
     return this.azimuth;
+  }
+
+  getElevation(): number {
+    return this.elevation;
+  }
+
+  /** Returns 0–1 opacity for the local player model based on camera elevation. */
+  getPlayerModelOpacity(): number {
+    if (this.elevation >= this.fadeStartElevation) return 1;
+    // Map from fadeStartElevation → minElevation  to  1 → 0
+    const range = this.fadeStartElevation - this.minElevation;
+    if (range <= 0) return 1;
+    return Math.max(0, (this.elevation - this.minElevation) / range);
   }
 }

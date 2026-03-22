@@ -1,3 +1,5 @@
+import { keybindManager } from '../../ui/KeybindManager';
+
 export class InputManager {
   private keys = new Map<string, boolean>();
   private mouseButtons = { left: false, right: false, middle: false };
@@ -38,7 +40,7 @@ export class InputManager {
 
   private onKeyDown = (e: KeyboardEvent): void => {
     this.keys.set(e.code, true);
-    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight'].includes(e.code)) {
+    if (keybindManager.getAllBoundCodes().has(e.code)) {
       e.preventDefault();
     }
   };

@@ -6,7 +6,8 @@ import type { GameFormat, EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, 
 export interface C2S_Authenticate {
   type: 'authenticate';
   username: string;
-  token: string;
+  password: string;
+  mode: 'login' | 'register';
 }
 
 export interface C2S_LobbyChat {
@@ -81,8 +82,55 @@ export interface C2S_ClientReady {
   type: 'client_ready';
 }
 
+export interface C2S_SetResting {
+  type: 'set_resting';
+  resting: boolean;
+}
+
+export interface C2S_CancelBuff {
+  type: 'cancel_buff';
+  buffId: string;
+}
+
 export interface C2S_ReturnToLobby {
   type: 'return_to_lobby';
+}
+
+export interface C2S_RequestLobbyState {
+  type: 'request_lobby_state';
+}
+
+export interface C2S_InspectUser {
+  type: 'inspect_user';
+  targetUserId: string;
+}
+
+export interface C2S_GetLeaderboard {
+  type: 'get_leaderboard';
+}
+
+export interface C2S_RequestRematch {
+  type: 'request_rematch';
+  mapMode: 'random' | 'same' | 'new';
+}
+
+export interface C2S_AcceptRematch {
+  type: 'accept_rematch';
+}
+
+export interface C2S_DeclineRematch {
+  type: 'decline_rematch';
+}
+
+export interface C2S_ToggleGodMode {
+  type: 'toggle_god_mode';
+}
+
+export interface C2S_SwapTeam {
+  type: 'swap_team';
+  draggedUserId: string;
+  droppedOnUserId?: string;
+  newTeam: number;
 }
 
 // ── Server -> Client Messages ───────────────────────────────────────────
@@ -91,6 +139,9 @@ export interface S2C_AuthResult {
   type: 'auth_result';
   success: boolean;
   userId: string;
+  username?: string;
+  isAdmin?: boolean;
+  bannedUntil?: string;
   error?: string;
 }
 
@@ -145,6 +196,11 @@ export interface S2C_CombatEvent {
   combatType: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge';
 }
 
+export interface S2C_Flinch {
+  type: 'flinch';
+  entityId: string;
+}
+
 export interface S2C_AbilityEffect {
   type: 'ability_effect';
   entityId: string;
@@ -192,6 +248,46 @@ export interface S2C_EntityDied {
 export interface S2C_GameOver {
   type: 'game_over';
   winningTeam: number;
+  /** Whether all original players are still connected (enables rematch option). */
+  allPlayersPresent: boolean;
+}
+
+export interface S2C_RematchChallenge {
+  type: 'rematch_challenge';
+  challengerUsername: string;
+  mapMode: 'random' | 'same' | 'new';
+  totalPlayers: number;
+  readyCount: number;
+}
+
+export interface S2C_RematchReadyUpdate {
+  type: 'rematch_ready_update';
+  readyCount: number;
+  totalPlayers: number;
+}
+
+export interface S2C_RematchFailed {
+  type: 'rematch_failed';
+  reason: string;
+}
+
+export interface UserProfileData {
+  username: string;
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+  createdAt: string;
+  lastPlayed: string | null;
+}
+
+export interface S2C_UserProfile {
+  type: 'user_profile';
+  profile: UserProfileData;
+}
+
+export interface S2C_Leaderboard {
+  type: 'leaderboard';
+  entries: UserProfileData[];
 }
 
 export interface S2C_ErrorMessage {
@@ -207,6 +303,121 @@ export interface S2C_CountdownStart {
 export interface S2C_GameCancelled {
   type: 'game_cancelled';
   reason: string;
+}
+
+export interface S2C_Kicked {
+  type: 'kicked';
+  reason: string;
+}
+
+export interface S2C_Pong {
+  type: 'pong';
+}
+
+export interface S2C_RejoinGame {
+  type: 'rejoin_game';
+  gameId: string;
+  mapId: string;
+  entities: EntitySnapshot[];
+  localEntityId: string;
+  buffs: EntityBuffSnapshot[];
+  gasClouds: GasCloudSnapshot[];
+  chemicalPools: ChemicalPoolSnapshot[];
+  disconnectedEntityIds: string[];
+  gameOver?: { winningTeam: number };
+  /** Seconds remaining until arena doors open. Undefined/0 = already open. */
+  arenaTimeRemaining?: number;
+}
+
+export interface S2C_PlayerDisconnected {
+  type: 'player_disconnected';
+  entityId: string;
+  username: string;
+}
+
+export interface S2C_PlayerReconnected {
+  type: 'player_reconnected';
+  entityId: string;
+  username: string;
+}
+
+export interface S2C_EntityRemoved {
+  type: 'entity_removed';
+  entityId: string;
+  username?: string;
+}
+
+// ── Admin Messages ──────────────────────────────────────────────────────
+
+export interface C2S_AdminGetUsers {
+  type: 'admin_get_users';
+}
+
+export interface C2S_AdminDeleteUser {
+  type: 'admin_delete_user';
+  targetUserId: number; // DB id
+}
+
+export interface C2S_AdminBanUser {
+  type: 'admin_ban_user';
+  targetUserId: number; // DB id
+  duration: string;     // e.g. '1h', '2h', '1d', '3d', '1w', '1mo', '1y', 'permanent'
+}
+
+export interface C2S_AdminUnbanUser {
+  type: 'admin_unban_user';
+  targetUserId: number;
+}
+
+export interface C2S_AdminResetPassword {
+  type: 'admin_reset_password';
+  targetUserId: number;
+}
+
+export interface C2S_AdminResetStats {
+  type: 'admin_reset_stats';
+  targetUserId: number;
+}
+
+export interface C2S_ChangePassword {
+  type: 'change_password';
+  currentPassword: string;
+  newPassword: string;
+}
+
+export interface C2S_Ping {
+  type: 'ping';
+}
+
+export interface AdminUserRecord {
+  id: number;
+  username: string;
+  createdAt: string;
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+  bannedUntil: string | null;
+  lastPlayed: string | null;
+}
+
+export interface S2C_AdminUsersList {
+  type: 'admin_users_list';
+  users: AdminUserRecord[];
+}
+
+export interface S2C_AdminResult {
+  type: 'admin_result';
+  action: string;
+  success: boolean;
+  error?: string;
+  /** For reset_password action, contains the generated password. */
+  generatedPassword?: string;
+}
+
+export interface S2C_ChangePasswordResult {
+  type: 'change_password_result';
+  success: boolean;
+  error?: string;
 }
 
 // ── Delta / Optimized State Messages ────────────────────────────────────
@@ -238,6 +449,7 @@ export interface EntityStateDelta {
   castingTotalTime?: number;
   castingIsChannel?: boolean;
   targetEntityId?: string | null;
+  disconnected?: boolean;
 }
 
 /**
@@ -250,6 +462,7 @@ export interface EntityStateDelta {
 /** Discrete event bundled into the tick update to reduce WebSocket frames. */
 export type GameTickEvent =
   | S2C_CombatEvent
+  | S2C_Flinch
   | S2C_AbilityEffect
   | S2C_CooldownUpdate
   | S2C_AutoAttackSwing
@@ -284,6 +497,12 @@ export interface S2C_GameStateSnapshot {
   chemicalPools: ChemicalPoolSnapshot[];
 }
 
+export interface S2C_GodModeUpdate {
+  type: 'god_mode_update';
+  entityId: string;
+  active: boolean;
+}
+
 // ── Union types ─────────────────────────────────────────────────────────
 
 export type ClientMessage =
@@ -302,7 +521,25 @@ export type ClientMessage =
   | C2S_AutoAttack
   | C2S_StopAutoAttack
   | C2S_CancelCast
-  | C2S_ReturnToLobby;
+  | C2S_CancelBuff
+  | C2S_SetResting
+  | C2S_ReturnToLobby
+  | C2S_RequestLobbyState
+  | C2S_InspectUser
+  | C2S_GetLeaderboard
+  | C2S_RequestRematch
+  | C2S_AcceptRematch
+  | C2S_DeclineRematch
+  | C2S_ToggleGodMode
+  | C2S_SwapTeam
+  | C2S_AdminGetUsers
+  | C2S_AdminDeleteUser
+  | C2S_AdminBanUser
+  | C2S_AdminUnbanUser
+  | C2S_AdminResetPassword
+  | C2S_AdminResetStats
+  | C2S_ChangePassword
+  | C2S_Ping;
 
 export type ServerMessage =
   | S2C_AuthResult
@@ -314,6 +551,7 @@ export type ServerMessage =
   | S2C_GameStateUpdate
   | S2C_GameStateSnapshot
   | S2C_CombatEvent
+  | S2C_Flinch
   | S2C_AbilityEffect
   | S2C_CooldownUpdate
   | S2C_AutoAttackSwing
@@ -323,4 +561,19 @@ export type ServerMessage =
   | S2C_GameOver
   | S2C_ErrorMessage
   | S2C_CountdownStart
-  | S2C_GameCancelled;
+  | S2C_GameCancelled
+  | S2C_Kicked
+  | S2C_AdminUsersList
+  | S2C_AdminResult
+  | S2C_ChangePasswordResult
+  | S2C_GodModeUpdate
+  | S2C_RematchChallenge
+  | S2C_RematchReadyUpdate
+  | S2C_RematchFailed
+  | S2C_UserProfile
+  | S2C_Leaderboard
+  | S2C_Pong
+  | S2C_RejoinGame
+  | S2C_PlayerDisconnected
+  | S2C_PlayerReconnected
+  | S2C_EntityRemoved;

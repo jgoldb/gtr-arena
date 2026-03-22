@@ -5,6 +5,7 @@ export interface UnitFrameOptions {
   localPlayer?: Targetable;
   getPortrait?: (modelName: string) => string | undefined;
   onClick?: (target: Targetable) => void;
+  onBuffRightClick?: (buffId: string) => void;
 }
 
 export class UnitFrame {
@@ -28,8 +29,10 @@ export class UnitFrame {
   private lastModelName = '';
   private currentTarget: Targetable | null = null;
   private onClick: ((target: Targetable) => void) | undefined;
+  private onBuffRightClick: ((buffId: string) => void) | undefined;
   private combatTextEl: HTMLElement;
   private combatTextTimer = -1; // -1 = inactive
+  private disconnectOverlay: HTMLElement;
   private tooltipEl: HTMLElement;
   private tooltipHoveredEl: HTMLElement | null = null;
 
@@ -37,6 +40,7 @@ export class UnitFrame {
     this.localPlayer = options?.localPlayer;
     this.getPortrait = options?.getPortrait;
     this.onClick = options?.onClick;
+    this.onBuffRightClick = options?.onBuffRightClick;
 
     this.element = document.createElement('div');
     this.element.style.cssText = `
@@ -92,6 +96,16 @@ export class UnitFrame {
       text-align: center;
     `;
     portraitWrap.appendChild(this.skullOverlay);
+
+    this.disconnectOverlay = document.createElement('div');
+    this.disconnectOverlay.style.cssText = `
+      position: absolute;
+      inset: 0;
+      display: none;
+      background: rgba(128, 128, 128, 0.5);
+      border-radius: 2px;
+    `;
+    portraitWrap.appendChild(this.disconnectOverlay);
 
     // Combat text overlay (centered on portrait)
     this.combatTextEl = document.createElement('div');
@@ -240,7 +254,7 @@ export class UnitFrame {
       background: rgba(80, 80, 100, 0.8);
       border-radius: 2px;
       overflow: hidden;
-      cursor: default;
+      cursor: pointer;
       ${isDebuff ? 'border: 1.5px solid #cc2222;' : 'border: 1px solid rgba(255,255,255,0.2);'}
     `;
 
@@ -284,6 +298,18 @@ export class UnitFrame {
       }
     });
 
+    // Right-click to cancel buffs (not debuffs)
+    if (!isDebuff) {
+      icon.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const aura = (icon as any)._aura as ActiveBuff | undefined;
+        if (aura && !aura.definition.unremovable && this.onBuffRightClick) {
+          this.onBuffRightClick(aura.definition.id);
+        }
+      });
+    }
+
     return icon;
   }
 
@@ -295,7 +321,7 @@ export class UnitFrame {
     }
 
     const remaining = Math.ceil(aura.remaining);
-    const durationLabel = !isFinite(remaining) ? '' : `<div style="
+    const durationLabel = !(remaining > 0 && isFinite(remaining)) ? '' : `<div style="
       color: #aaa;
       font-size: 11px;
       margin-top: 4px;
@@ -347,17 +373,20 @@ export class UnitFrame {
         (el as any)._aura = aura;
         el.style.display = 'flex';
         (el.children[0] as HTMLElement).textContent = aura.definition.icon;
-        const finite = isFinite(aura.definition.duration);
+        const hasFiniteDuration = (aura.definition.duration > 0 && isFinite(aura.definition.duration))
+          || (aura.remaining > 0 && isFinite(aura.remaining));
+        el.style.background = hasFiniteDuration ? 'rgba(80, 80, 100, 0.8)' : 'transparent';
         // Duration sweep: fills up as time elapses (opposite of cooldown drain)
         const elapsed = aura.definition.duration - aura.remaining;
-        const degrees = finite && aura.definition.duration > 0
+        const degrees = hasFiniteDuration && isFinite(aura.definition.duration) && aura.definition.duration > 0
           ? (elapsed / aura.definition.duration) * 360
           : 0;
-        (el.children[1] as HTMLElement).style.background =
-          degrees > 0
-            ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
-            : 'transparent';
-        (el.children[2] as HTMLElement).textContent = finite ? Math.ceil(aura.remaining).toString() : '';
+        const sweepEl = el.children[1] as HTMLElement;
+        sweepEl.style.display = hasFiniteDuration ? '' : 'none';
+        sweepEl.style.background = degrees > 0
+          ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
+          : 'transparent';
+        (el.children[2] as HTMLElement).textContent = hasFiniteDuration ? Math.ceil(aura.remaining).toString() : '';
         // Refresh tooltip if this icon is hovered
         if (this.tooltipHoveredEl === el) {
           this.refreshTooltip(el);
@@ -470,20 +499,23 @@ export class UnitFrame {
       }
     }
 
+    const isDisconnected = target.disconnected ?? false;
+
     // Skull overlay on portrait when dead
     this.skullOverlay.style.display = target.dead ? 'flex' : 'none';
+    this.disconnectOverlay.style.display = isDisconnected && !target.dead ? 'block' : 'none';
 
     // Name, combat indicator, and model
     this.nameEl.textContent = target.name;
-    this.nameEl.style.color = hostile ? '#ff4444' : target.dead ? '#888' : '#fff';
+    this.nameEl.style.color = isDisconnected ? '#888' : hostile ? '#ff4444' : target.dead ? '#888' : '#fff';
     this.combatIcon.style.display = target.inCombat ? 'inline' : 'none';
     this.modelEl.textContent = target.modelName;
 
-    // HP bar — red for hostile targets, green otherwise
+    // HP bar — red for hostile targets, green otherwise; gray for disconnected
     const hpPct = target.maxHp > 0 ? (target.hp / target.maxHp) * 100 : 0;
     this.hpFill.style.width = `${hpPct}%`;
-    this.hpFill.style.background = hostile ? '#cc2222' : '#22aa22';
-    this.hpBar.style.background = hostile ? '#3a0a0a' : '#0a3a0a';
+    this.hpFill.style.background = isDisconnected ? '#666' : hostile ? '#cc2222' : '#22aa22';
+    this.hpBar.style.background = isDisconnected ? '#333' : hostile ? '#3a0a0a' : '#0a3a0a';
     this.hpText.textContent = `${Math.round(target.hp)} / ${target.maxHp}`;
 
     // Mana bar — always blue

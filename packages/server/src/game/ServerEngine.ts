@@ -1,13 +1,13 @@
 import type { Ability, BuffDefinition } from '@gtr/shared';
 import type { EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot } from '@gtr/shared';
 import type {
-  S2C_CombatEvent, S2C_AbilityEffect, S2C_CooldownUpdate,
+  S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_EntityDied,
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot } from '@gtr/shared';
+import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, ArenaPreparationBuff, RestingBuff } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -100,6 +100,7 @@ export class ServerEngine {
   private regenSystem: ServerRegenSystem;
 
   // Per-entity state
+  private frozenEntities = new Set<string>();
   private targets = new Map<string, string | null>(); // entityId -> targetEntityId
   private castingStates = new Map<string, CastingState>();
   private autoAttacks = new Map<string, AutoAttackState>();
@@ -143,6 +144,7 @@ export class ServerEngine {
     castingAbilityId: string | null; castingElapsed: number;
     castingTotalTime: number; castingIsChannel: boolean;
     targetEntityId: string | null;
+    disconnected: boolean;
   }>();
   private lastBroadcastBuffs = new Map<string, string>(); // entityId -> buff signature
   // Track world effect IDs + consumed state to only send when actually changed
@@ -152,6 +154,7 @@ export class ServerEngine {
   onBroadcast?: (msg: ServerMessage) => void;
   onSendToPlayer?: (entityId: string, msg: ServerMessage) => void;
   onGameOver?: (winningTeam: number) => void;
+  private gameOverFired = false;
 
   constructor(obstacles: import('@gtr/shared').ObstacleConfig[]) {
     this.collision = new CollisionSystem();
@@ -159,6 +162,7 @@ export class ServerEngine {
 
     this.buffSystem = new ServerBuffSystem();
     this.regenSystem = new ServerRegenSystem(() => this.entities);
+    this.regenSystem.setBuffSystem(this.buffSystem);
     this.combatSystem = new ServerCombatSystem(this.regenSystem, this.buffSystem, this.collision);
 
     this.combatSystem.onCombatText = (source, target, amount, type) => {
@@ -171,7 +175,12 @@ export class ServerEngine {
       } as S2C_CombatEvent);
     };
 
+    this.combatSystem.onFlinchDamage = (target) => {
+      this.pendingEvents.push({ type: 'flinch', entityId: target.id } as S2C_Flinch);
+    };
+
     this.combatSystem.onDirectDamageDealt = (target) => {
+      this.cancelResting(target.id);
       const casting = this.castingStates.get(target.id);
       if (casting) {
         if (casting.isChannel) {
@@ -182,6 +191,18 @@ export class ServerEngine {
         }
       }
     };
+  }
+
+  toggleGodMode(entityId: string): boolean {
+    const entity = this.getEntity(entityId);
+    if (!entity) return false;
+    entity.godMode = !entity.godMode;
+    if (entity.godMode) {
+      entity.hp = entity.maxHp;
+      entity.mana = entity.maxMana;
+      entity.dead = false;
+    }
+    return entity.godMode;
   }
 
   addEntity(entity: ServerEntity): void {
@@ -200,17 +221,97 @@ export class ServerEngine {
     return this.entities;
   }
 
+  applyArenaPreparation(): void {
+    for (const entity of this.entities) {
+      this.buffSystem.apply(entity, ArenaPreparationBuff);
+    }
+  }
+
+  removeArenaPreparation(): void {
+    for (const entity of this.entities) {
+      this.buffSystem.remove(entity, ArenaPreparationBuff.id);
+    }
+  }
+
+  cancelBuff(entityId: string, buffId: string): void {
+    const entity = this.getEntity(entityId);
+    if (!entity || this.frozenEntities.has(entityId)) return;
+    const buffs = this.buffSystem.getBuffs(entity);
+    const buff = buffs.find(b => b.definition.id === buffId);
+    if (buff && buff.definition.type === 'buff' && !buff.definition.unremovable) {
+      this.buffSystem.remove(entity, buffId);
+    }
+  }
+
+  freezeEntity(entityId: string): void {
+    const entity = this.getEntity(entityId);
+    if (!entity) return;
+    this.frozenEntities.add(entityId);
+    entity.disconnected = true;
+    entity.isMoving = false;
+    this.cancelCasting(entityId);
+    this.stopAutoAttack(entityId);
+    this.cancelResting(entityId);
+    if (entity.charging) {
+      entity.charging = false;
+      this.sweepCharges.delete(entityId);
+    }
+  }
+
+  /** Fully remove an entity from the game world (not a kill). */
+  removeEntity(entityId: string): void {
+    const idx = this.entities.findIndex(e => e.id === entityId);
+    if (idx === -1) return;
+
+    // Clean up all per-entity state
+    this.frozenEntities.delete(entityId);
+    this.castingStates.delete(entityId);
+    this.autoAttacks.delete(entityId);
+    this.sweepCharges.delete(entityId);
+    this.fullRetardAuras.delete(entityId);
+    this.targets.delete(entityId);
+    this.lastBroadcastPosition.delete(entityId);
+    this.lastBroadcastState.delete(entityId);
+    this.lastBroadcastBuffs.delete(entityId);
+
+    // Clear other entities' targets/auto-attacks pointing at this entity
+    for (const [eid, targetId] of this.targets) {
+      if (targetId === entityId) this.targets.set(eid, null);
+    }
+    for (const [eid, state] of this.autoAttacks) {
+      if (state.target.id === entityId) this.autoAttacks.delete(eid);
+    }
+
+    // Remove dots involving this entity
+    this.activeDots = this.activeDots.filter(d => d.target.id !== entityId && d.owner.id !== entityId);
+
+    // Remove buffs
+    const entity = this.entities[idx];
+    this.buffSystem.clearEntity(entity);
+
+    this.entities.splice(idx, 1);
+  }
+
+  unfreezeEntity(entityId: string): void {
+    const entity = this.getEntity(entityId);
+    if (!entity) return;
+    this.frozenEntities.delete(entityId);
+    entity.disconnected = false;
+  }
+
   updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean): void {
     const entity = this.getEntity(entityId);
-    if (!entity || entity.dead) return;
+    if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
     entity.x = x;
     entity.y = y;
     entity.z = z;
     entity.rotationY = rotationY;
     entity.isMoving = isMoving;
+    if (isMoving) this.cancelResting(entityId);
   }
 
   setTarget(entityId: string, targetEntityId: string | null): void {
+    if (this.frozenEntities.has(entityId)) return;
     this.targets.set(entityId, targetEntityId);
 
     // Stop auto-attack if the player de-targets or switches to a different target
@@ -229,7 +330,7 @@ export class ServerEngine {
   requestAutoAttack(entityId: string, targetEntityId: string): void {
     const entity = this.getEntity(entityId);
     const target = this.getEntity(targetEntityId);
-    if (!entity || !target || entity.dead || target.dead) return;
+    if (!entity || !target || entity.dead || target.dead || this.frozenEntities.has(entityId)) return;
     if (!target.isHostileTo(entity)) return;
 
     const existing = this.autoAttacks.get(entityId);
@@ -247,7 +348,7 @@ export class ServerEngine {
 
   requestAbility(entityId: string, abilityId: string, targetEntityId: string | null): void {
     const entity = this.getEntity(entityId);
-    if (!entity) return;
+    if (!entity || this.frozenEntities.has(entityId)) return;
 
     const ability = entity.abilities.find(a => a.id === abilityId);
     if (!ability) return;
@@ -279,7 +380,32 @@ export class ServerEngine {
   }
 
   cancelCastRequest(entityId: string): void {
+    if (this.frozenEntities.has(entityId)) return;
     this.cancelCasting(entityId);
+  }
+
+  setResting(entityId: string, resting: boolean): void {
+    const entity = this.getEntity(entityId);
+    if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
+
+    if (resting) {
+      if (entity.inCombat) return;
+      if (entity.isMoving) return;
+      if (this.buffSystem.isStunned(entity)) return;
+      if (this.castingStates.has(entityId)) return;
+      this.stopAutoAttack(entityId);
+      this.buffSystem.apply(entity, RestingBuff);
+    } else {
+      this.buffSystem.remove(entity, RestingBuff.id);
+    }
+  }
+
+  private cancelResting(entityId: string): void {
+    const entity = this.getEntity(entityId);
+    if (!entity) return;
+    if (this.buffSystem.hasBuff(entity, RestingBuff.id)) {
+      this.buffSystem.remove(entity, RestingBuff.id);
+    }
   }
 
   start(): void {
@@ -305,16 +431,23 @@ export class ServerEngine {
 
     // Update buff-driven modifiers
     for (const entity of this.entities) {
-      entity.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(entity);
+      entity.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(entity)
+        * (entity.godMode ? 4 : 1); // God mode: +300% movement speed
       entity.stunned = this.buffSystem.isStunned(entity);
       entity.setDiscombobulated(this.buffSystem.isDiscombobulated(entity));
 
       if (entity.stunned) {
         this.stopAutoAttack(entity.id);
+        this.cancelResting(entity.id);
         if (this.sweepCharges.has(entity.id)) {
           entity.charging = false;
           this.sweepCharges.delete(entity.id);
         }
+      }
+
+      // Cancel resting if entity entered combat
+      if (entity.inCombat) {
+        this.cancelResting(entity.id);
       }
     }
 
@@ -381,16 +514,19 @@ export class ServerEngine {
     const isChannel = ability.isChannel ?? false;
 
     if (isChannel) {
-      entity.mana -= ability.manaCost;
-      if (ability.manaCost > 0) this.regenSystem.notifyManaUsed(entity);
-      this.combatSystem.setCooldown(entity.id, ability.id, ability.cooldown);
-      if (ability.cooldown > 0) {
-        this.onSendToPlayer?.(entity.id, {
-          type: 'cooldown_update',
-          abilityId: ability.id,
-          remaining: ability.cooldown,
-          total: ability.cooldown,
-        } as S2C_CooldownUpdate);
+      if (!entity.godMode) {
+        const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
+        entity.mana -= effectiveCost;
+        if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
+        this.combatSystem.setCooldown(entity.id, ability.id, ability.cooldown);
+        if (ability.cooldown > 0) {
+          this.onSendToPlayer?.(entity.id, {
+            type: 'cooldown_update',
+            abilityId: ability.id,
+            remaining: ability.cooldown,
+            total: ability.cooldown,
+          } as S2C_CooldownUpdate);
+        }
       }
 
       if (target && target.isHostileTo(entity)) {
@@ -409,7 +545,7 @@ export class ServerEngine {
       }
     }
 
-    if (!isChannel) {
+    if (!isChannel && !entity.godMode) {
       this.combatSystem.setCooldown(entity.id, ability.id, ServerEngine.INTERRUPT_COOLDOWN);
       this.onSendToPlayer?.(entity.id, {
         type: 'cooldown_update',
@@ -437,10 +573,11 @@ export class ServerEngine {
         id: `channel-${ability.id}`,
         name: ability.name,
         icon: ability.icon,
-        duration: Infinity,
+        duration: ability.castTime!, // remaining managed manually in tick loop
         type: isFriendly ? 'buff' : 'debuff',
         description: ability.description,
         effects: [],
+        unremovable: true,
       });
     }
   }
@@ -556,7 +693,7 @@ export class ServerEngine {
     }
 
     state.timer += dt;
-    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(entity);
+    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(entity) * (entity.godMode ? 6 : 1);
     if (state.timer >= entity.autoAttackSpeed / atkSpeedMult) {
       const dx = entity.x - state.target.x;
       const dz = entity.z - state.target.z;
@@ -645,8 +782,8 @@ export class ServerEngine {
       abilityId: ability.id,
     } as S2C_AbilityEffect);
 
-    // Send cooldown update to the entity's player
-    if (ability.cooldown > 0) {
+    // Send cooldown update to the entity's player (skip in god mode)
+    if (ability.cooldown > 0 && !entity.godMode) {
       this.onSendToPlayer?.(entity.id, {
         type: 'cooldown_update',
         abilityId: ability.id,
@@ -743,7 +880,7 @@ export class ServerEngine {
       while (cloud.elapsed >= cloud.nextTickAt && cloud.nextTickAt <= cloud.duration) {
         for (const entity of cloud.affectedTargets) {
           if (entity.dead) continue;
-          const actualDmg = this.combatSystem.processDamageAbsorb(entity, cloud.damagePerTick, cloud.owner);
+          const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, cloud.damagePerTick, cloud.owner);
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
@@ -810,7 +947,7 @@ export class ServerEngine {
         if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
 
         if (entity.isHostileTo(pool.owner)) {
-          const actualDmg = this.combatSystem.processDamageAbsorb(entity, pool.initialDamage, pool.owner);
+          const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, pool.initialDamage, pool.owner);
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
@@ -849,7 +986,7 @@ export class ServerEngine {
 
       while (dot.elapsed >= dot.nextTickAt && dot.nextTickAt <= dot.totalDuration) {
         if (!dot.target.dead) {
-          const actualDmg = this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
+          const actualDmg = dot.target.godMode ? 0 : this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
           dot.target.hp = Math.max(0, dot.target.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
@@ -980,6 +1117,7 @@ export class ServerEngine {
         castingAbilityId: e.castingAbilityId, castingElapsed: e.castingElapsed,
         castingTotalTime: e.castingTotalTime, castingIsChannel: e.castingIsChannel,
         targetEntityId: e.targetEntityId,
+        disconnected: e.disconnected ?? false,
       });
     }
     for (const b of buffs) {
@@ -1033,6 +1171,7 @@ export class ServerEngine {
           isAutoAttacking: e.isAutoAttacking,
           castingAbilityId, castingElapsed, castingTotalTime, castingIsChannel,
           targetEntityId,
+          disconnected: e.disconnected,
         };
         states.push(delta);
         this.lastBroadcastState.set(e.id, {
@@ -1041,6 +1180,7 @@ export class ServerEngine {
           isAutoAttacking: e.isAutoAttacking,
           castingAbilityId, castingElapsed, castingTotalTime, castingIsChannel,
           targetEntityId,
+          disconnected: e.disconnected,
         });
         continue;
       }
@@ -1070,17 +1210,19 @@ export class ServerEngine {
       if (prev.castingTotalTime !== castingTotalTime) { delta.castingTotalTime = castingTotalTime; prev.castingTotalTime = castingTotalTime; hasChanges = true; }
       if (prev.castingIsChannel !== castingIsChannel) { delta.castingIsChannel = castingIsChannel; prev.castingIsChannel = castingIsChannel; hasChanges = true; }
       if (prev.targetEntityId !== targetEntityId) { delta.targetEntityId = targetEntityId; prev.targetEntityId = targetEntityId; hasChanges = true; }
+      if (prev.disconnected !== e.disconnected) { delta.disconnected = e.disconnected; prev.disconnected = e.disconnected; hasChanges = true; }
 
       if (hasChanges) states.push(delta);
     }
 
     // Buffs: only include entities whose buff list changed in a meaningful way.
-    // Use a lightweight signature (buff ids + shield values) instead of JSON.stringify,
-    // and exclude `remaining` since clients can decrement it locally.
+    // Use a lightweight signature (buff ids + shield values + remaining rounded up)
+    // instead of JSON.stringify. Remaining is rounded to avoid sending every tick,
+    // but still detects duration refreshes (e.g. 0.3s → 8s).
     const allBuffs = this.buildBuffSnapshots();
     const changedBuffs: EntityBuffSnapshot[] = [];
     for (const b of allBuffs) {
-      const sig = b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}`).join(',');
+      const sig = b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}:${Math.ceil(buf.remaining)}`).join(',');
       const prevSig = this.lastBroadcastBuffs.get(b.entityId);
       if (sig !== prevSig) {
         changedBuffs.push(b);
@@ -1127,6 +1269,8 @@ export class ServerEngine {
         duration: b.definition.duration,
         description: b.definition.description,
         shieldRemaining: b.shieldRemaining,
+        effects: b.definition.effects.length > 0 ? b.definition.effects : undefined,
+        unremovable: b.definition.unremovable || undefined,
       })),
     }));
   }
@@ -1148,9 +1292,19 @@ export class ServerEngine {
     }));
   }
 
+  /** Returns full current state for a rejoining player. */
+  getFullState(): { buffs: EntityBuffSnapshot[]; gasClouds: GasCloudSnapshot[]; chemicalPools: ChemicalPoolSnapshot[] } {
+    return {
+      buffs: this.buildBuffSnapshots(),
+      gasClouds: this.buildGasCloudSnapshots(),
+      chemicalPools: this.buildChemPoolSnapshots(),
+    };
+  }
+
   // ── Win condition ───────────────────────────────────────────────────
 
   private checkWinCondition(): void {
+    if (this.gameOverFired) return;
     const teams = new Set(this.entities.map(e => e.team));
     for (const team of teams) {
       const teamEntities = this.entities.filter(e => e.team === team);
@@ -1158,8 +1312,8 @@ export class ServerEngine {
         // This team is eliminated - the other team wins
         const winningTeam = this.entities.find(e => e.team !== team && !e.dead)?.team;
         if (winningTeam !== undefined) {
+          this.gameOverFired = true;
           this.onGameOver?.(winningTeam);
-          this.stop();
         }
         return;
       }

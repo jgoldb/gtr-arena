@@ -1,8 +1,10 @@
 import type { WebSocket } from 'ws';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart } from '@gtr/shared';
-import { MAPS } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo } from '@gtr/shared';
+import { MAPS, MAP_LIST } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
+import type { AuthManager } from '../auth/AuthManager.js';
+import type { GtrDatabase } from '../db/Database.js';
 
 interface SessionPlayer {
   userId: string;
@@ -11,36 +13,69 @@ interface SessionPlayer {
   characterId: CharacterId;
 }
 
+export interface RematchInfo {
+  mapId: string;
+  format: GameFormat;
+  players: readonly SessionPlayer[];
+  sockets: Map<string, WebSocket>;
+}
+
 export class GameSession {
   readonly gameId: string;
+  readonly format: GameFormat;
   private readonly mapId: string;
+  private readonly mapInfo: MapInfo | undefined;
   private engine: ServerEngine;
   private players: SessionPlayer[];
   private sockets: Map<string, WebSocket>;
   private entityIdByUserId = new Map<string, string>();
   private userIdByEntityId = new Map<string, string>();
+  private auth: AuthManager;
+  private db: GtrDatabase;
   private onGameOver: (gameId: string) => void;
+  onRematch: ((gameId: string, info: RematchInfo) => void) | null = null;
   private stopped = false;
+  private gameOver = false;
+  private statsRecorded = false;
   private readyPlayers = new Set<string>();
   private readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private arenaOpenTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private arenaPreparationActive = false;
   private countdownStarted = false;
+  private arenaCountdownStartedAt = 0;
   private static readonly READY_TIMEOUT_MS = 10_000; // max wait for slow clients
   private static readonly COUNTDOWN_SECONDS = 3;
+
+  // Disconnect grace period
+  private disconnectedPlayers = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
+  onGracePeriodExpired: ((userId: string) => void) | null = null;
+  private static readonly DISCONNECT_GRACE_PERIOD_MS = 120_000; // 2 minutes
+
+  // Rematch state
+  private rematchRequester: string | null = null;
+  private rematchMapMode: 'random' | 'same' | 'new' | null = null;
+  private rematchAccepted = new Set<string>();
 
   constructor(
     gameId: string,
     mapId: string,
-    _format: GameFormat,
+    format: GameFormat,
     players: readonly { userId: string; username: string; team: number; characterId: CharacterId | null }[],
     sockets: Map<string, WebSocket>,
+    auth: AuthManager,
+    db: GtrDatabase,
     onGameOver: (gameId: string) => void,
   ) {
     this.gameId = gameId;
+    this.format = format;
     this.sockets = sockets;
+    this.auth = auth;
+    this.db = db;
     this.onGameOver = onGameOver;
 
     this.mapId = mapId;
-    const mapInfo = MAPS[mapId];
+    this.mapInfo = MAPS[mapId];
+    const mapInfo = this.mapInfo;
     this.engine = new ServerEngine(mapInfo?.obstacles ?? []);
 
     this.players = players.map(p => ({
@@ -133,21 +168,57 @@ export class GameSession {
     };
     this.broadcast(countdownMsg);
 
-    setTimeout(() => {
-      if (!this.stopped) this.engine.start();
-    }, GameSession.COUNTDOWN_SECONDS * 1000);
+    // Start the engine tick loop immediately so game state (including buffs) is
+    // broadcast to clients during the preparation period.
+    this.arenaPreparationActive = true;
+    this.arenaCountdownStartedAt = Date.now();
+    this.engine.applyArenaPreparation();
+    this.engine.start();
+
+    // Remove the buff when the arena doors open (arenaOpenTime from map config).
+    const arenaOpenTime = this.mapInfo?.arenaOpenTime ?? 30;
+    this.arenaOpenTimeoutId = setTimeout(() => {
+      this.arenaPreparationActive = false;
+      this.arenaOpenTimeoutId = null;
+      if (!this.stopped) {
+        this.engine.removeArenaPreparation();
+      }
+    }, arenaOpenTime * 1000);
   }
 
   stop(): void {
     this.stopped = true;
+    this.arenaPreparationActive = false;
     this.engine.stop();
     if (this.readyTimeoutId) {
       clearTimeout(this.readyTimeoutId);
       this.readyTimeoutId = null;
     }
+    if (this.arenaOpenTimeoutId) {
+      clearTimeout(this.arenaOpenTimeoutId);
+      this.arenaOpenTimeoutId = null;
+    }
+    for (const dc of this.disconnectedPlayers.values()) {
+      clearTimeout(dc.timer);
+    }
+    this.disconnectedPlayers.clear();
   }
 
   handleMessage(userId: string, msg: ClientMessage): void {
+    // Rematch messages are handled even after game over
+    if (msg.type === 'request_rematch') {
+      this.handleRematchRequest(userId, msg.mapMode);
+      return;
+    }
+    if (msg.type === 'accept_rematch') {
+      this.handleRematchAccept(userId);
+      return;
+    }
+    if (msg.type === 'decline_rematch') {
+      this.handleRematchDecline(userId);
+      return;
+    }
+
     if (msg.type === 'client_ready') {
       this.markReady(userId);
       return;
@@ -175,40 +246,227 @@ export class GameSession {
       case 'cancel_cast':
         this.engine.cancelCastRequest(entityId);
         break;
+      case 'cancel_buff':
+        this.engine.cancelBuff(entityId, msg.buffId);
+        break;
+      case 'set_resting':
+        this.engine.setResting(entityId, msg.resting);
+        break;
+      case 'toggle_god_mode':
+        if (this.auth.getIsAdmin(userId)) {
+          const active = this.engine.toggleGodMode(entityId);
+          this.broadcast({
+            type: 'god_mode_update',
+            entityId,
+            active,
+          } as S2C_GodModeUpdate);
+        }
+        break;
     }
   }
 
+  /** Explicit leave (return to lobby). Immediately removes the player's entity. */
   removePlayer(userId: string): void {
-    this.sockets.delete(userId);
-    if (this.stopped) return;
+    // Clear any grace period
+    const dc = this.disconnectedPlayers.get(userId);
+    if (dc) {
+      clearTimeout(dc.timer);
+      this.disconnectedPlayers.delete(userId);
+    }
 
-    // Check if any team has 0 connected players — if so, the other team wins
+    this.sockets.delete(userId);
+
+    // If someone leaves during a pending rematch, cancel it
+    if (this.rematchRequester) {
+      this.resetRematch();
+      this.broadcast({
+        type: 'rematch_failed',
+        reason: 'A player left the game',
+      } as S2C_RematchFailed);
+    }
+
+    if (this.stopped && !this.gameOver) return;
+
+    // Immediately remove the entity from the game world
+    const entityId = this.entityIdByUserId.get(userId);
+    const player = this.players.find(p => p.userId === userId);
+    if (entityId) {
+      this.engine.removeEntity(entityId);
+      this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
+    }
+
+    if (!this.gameOver) {
+      this.checkTeamForfeit();
+    }
+  }
+
+  /** WebSocket closed — start grace period for reconnection. */
+  disconnectPlayer(userId: string): void {
+    this.sockets.delete(userId);
+
+    if (this.rematchRequester) {
+      this.resetRematch();
+      this.broadcast({
+        type: 'rematch_failed',
+        reason: 'A player disconnected',
+      } as S2C_RematchFailed);
+    }
+
+    if (this.stopped && !this.gameOver) return;
+
+    const entityId = this.entityIdByUserId.get(userId);
+    if (!entityId) return;
+    const player = this.players.find(p => p.userId === userId);
+    if (!player) return;
+
+    // Dead players or post-game disconnects: remove immediately, no grace period
+    const entity = this.engine.getEntity(entityId);
+    if (entity?.dead || this.gameOver) {
+      this.engine.removeEntity(entityId);
+      this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
+      this.onGracePeriodExpired?.(userId);
+      if (!this.gameOver) this.checkTeamForfeit();
+      return;
+    }
+
+    // Check full-team forfeit first (instant, no grace period)
+    if (this.checkTeamForfeit()) return;
+
+    this.engine.freezeEntity(entityId);
+
+    const timer = setTimeout(() => {
+      this.disconnectedPlayers.delete(userId);
+      // Remove the entity from the game world entirely (not a kill)
+      this.engine.removeEntity(entityId);
+      this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
+      this.onGracePeriodExpired?.(userId);
+      this.checkTeamForfeit();
+    }, GameSession.DISCONNECT_GRACE_PERIOD_MS);
+    this.disconnectedPlayers.set(userId, { timer });
+
+    this.broadcast({
+      type: 'player_disconnected',
+      entityId,
+      username: player.username,
+    } as S2C_PlayerDisconnected);
+  }
+
+  /** Reconnect a player to the active game. Returns true if successful. */
+  rejoinPlayer(userId: string, socket: WebSocket): boolean {
+    const player = this.players.find(p => p.userId === userId);
+    if (!player) return false;
+    const entityId = this.entityIdByUserId.get(userId);
+    if (!entityId) return false;
+
+    // Clear grace period
+    const dc = this.disconnectedPlayers.get(userId);
+    if (dc) {
+      clearTimeout(dc.timer);
+      this.disconnectedPlayers.delete(userId);
+    }
+
+    this.sockets.set(userId, socket);
+    this.engine.unfreezeEntity(entityId);
+
+    // Build rejoin message with full current state
+    const allEntities = this.engine.getAllEntities();
+    const snapshots = allEntities.map(e => e.toSnapshot());
+    const fullState = this.engine.getFullState();
+
+    const disconnectedEntityIds: string[] = [];
+    for (const [dcUserId] of this.disconnectedPlayers) {
+      const dcEntityId = this.entityIdByUserId.get(dcUserId);
+      if (dcEntityId) disconnectedEntityIds.push(dcEntityId);
+    }
+
+    // Calculate remaining arena prep time
+    let arenaTimeRemaining: number | undefined;
+    if (this.arenaPreparationActive && this.arenaCountdownStartedAt > 0) {
+      const arenaOpenTime = this.mapInfo?.arenaOpenTime ?? 30;
+      const elapsedMs = Date.now() - this.arenaCountdownStartedAt;
+      const remainingSec = arenaOpenTime - elapsedMs / 1000;
+      arenaTimeRemaining = remainingSec > 0 ? remainingSec : 0;
+    }
+
+    const rejoinMsg: S2C_RejoinGame = {
+      type: 'rejoin_game',
+      gameId: this.gameId,
+      mapId: this.mapId,
+      entities: snapshots,
+      localEntityId: entityId,
+      buffs: fullState.buffs,
+      gasClouds: fullState.gasClouds,
+      chemicalPools: fullState.chemicalPools,
+      disconnectedEntityIds,
+      ...(this.gameOver ? { gameOver: { winningTeam: this.getWinningTeam() } } : {}),
+      ...(arenaTimeRemaining !== undefined ? { arenaTimeRemaining } : {}),
+    };
+    this.sendToUser(userId, rejoinMsg);
+
+    // Notify others
+    this.broadcast({
+      type: 'player_reconnected',
+      entityId,
+      username: player.username,
+    } as S2C_PlayerReconnected);
+
+    return true;
+  }
+
+  /** Check if any team has 0 connected players. Returns true if forfeit triggered. */
+  private checkTeamForfeit(): boolean {
     const connectedUserIds = new Set(this.sockets.keys());
     const teams = new Set(this.players.map(p => p.team));
     for (const team of teams) {
       const teamPlayers = this.players.filter(p => p.team === team);
       const hasConnected = teamPlayers.some(p => connectedUserIds.has(p.userId));
       if (!hasConnected) {
-        // This team has no connected players — other team wins
         const winningTeam = [...teams].find(t => t !== team);
         if (winningTeam !== undefined) {
           this.handleGameOver(winningTeam);
         }
-        return;
+        return true;
       }
     }
+    return false;
   }
 
+  /** Whether all original players are still connected after game over. */
+  get allPlayersPresent(): boolean {
+    return this.players.every(p => this.sockets.has(p.userId));
+  }
+
+  /** Whether the session has no connected players AND no pending grace periods. */
   isEmpty(): boolean {
-    return this.sockets.size === 0;
+    return this.sockets.size === 0 && this.disconnectedPlayers.size === 0;
+  }
+
+  hasDisconnectedPlayer(userId: string): boolean {
+    return this.disconnectedPlayers.has(userId);
   }
 
   getPlayerIds(): string[] {
     return this.players.map(p => p.userId);
   }
 
+  private winningTeamResult = -1;
+
+  private getWinningTeam(): number {
+    return this.winningTeamResult;
+  }
+
   private handleGameOver(winningTeam: number): void {
-    const msg: S2C_GameOver = { type: 'game_over', winningTeam };
+    this.gameOver = true;
+    this.winningTeamResult = winningTeam;
+
+    // Clear all grace period timers — game is over
+    for (const dc of this.disconnectedPlayers.values()) {
+      clearTimeout(dc.timer);
+    }
+    this.disconnectedPlayers.clear();
+
+    const allPresent = this.allPlayersPresent;
+    const msg: S2C_GameOver = { type: 'game_over', winningTeam, allPlayersPresent: allPresent };
     this.broadcast(msg);
 
     // Notify entity deaths
@@ -222,8 +480,138 @@ export class GameSession {
       }
     }
 
-    this.stop();
-    this.onGameOver(this.gameId);
+    // Record stats for ALL players (including disconnected ones)
+    this.recordStats(winningTeam);
+  }
+
+  /** Record win/loss stats for every player in this game. Called once at game end. */
+  private recordStats(winningTeam: number): void {
+    if (this.statsRecorded) return;
+    this.statsRecorded = true;
+
+    for (const p of this.players) {
+      const dbId = this.auth.getDbId(p.userId);
+      if (dbId == null) continue;
+      const won = p.team === winningTeam;
+      this.db.recordGameResult(dbId, p.characterId, won);
+    }
+  }
+
+  // ── Rematch ──────────────────────────────────────────────────────────
+
+  private handleRematchRequest(userId: string, mapMode: 'random' | 'same' | 'new'): void {
+    // Allow rematch during arena preparation (pre-game) or after game over
+    if (!this.arenaPreparationActive && !this.gameOver) return;
+    if (!this.allPlayersPresent) {
+      this.sendToUser(userId, { type: 'rematch_failed', reason: 'Not all players are present' } as S2C_RematchFailed);
+      return;
+    }
+    if (this.rematchRequester) {
+      this.sendToUser(userId, { type: 'error', message: 'A rematch is already in progress' });
+      return;
+    }
+
+    const requester = this.players.find(p => p.userId === userId);
+    if (!requester) return;
+
+    this.rematchRequester = userId;
+    this.rematchMapMode = mapMode;
+    this.rematchAccepted.clear();
+    this.rematchAccepted.add(userId);
+
+    const total = this.players.length;
+
+    // If 1v1, the requester is the only one who needs to accept — check immediately
+    if (total === this.rematchAccepted.size) {
+      this.executeRematch();
+      return;
+    }
+
+    // Notify all OTHER players about the challenge
+    const challenge: S2C_RematchChallenge = {
+      type: 'rematch_challenge',
+      challengerUsername: requester.username,
+      mapMode,
+      totalPlayers: total,
+      readyCount: 1,
+    };
+    for (const p of this.players) {
+      if (p.userId !== userId) {
+        this.sendToUser(p.userId, challenge);
+      }
+    }
+
+    // Send ready update to the requester too so they see the ready check
+    this.sendToUser(userId, {
+      type: 'rematch_ready_update',
+      readyCount: 1,
+      totalPlayers: total,
+    } as S2C_RematchReadyUpdate);
+  }
+
+  private handleRematchAccept(userId: string): void {
+    if (!this.rematchRequester) return;
+    if (this.rematchAccepted.has(userId)) return;
+
+    this.rematchAccepted.add(userId);
+    const total = this.players.length;
+
+    // Broadcast updated ready count to all players
+    const update: S2C_RematchReadyUpdate = {
+      type: 'rematch_ready_update',
+      readyCount: this.rematchAccepted.size,
+      totalPlayers: total,
+    };
+    this.broadcast(update);
+
+    if (this.rematchAccepted.size === total) {
+      this.executeRematch();
+    }
+  }
+
+  private handleRematchDecline(userId: string): void {
+    if (!this.rematchRequester) return;
+
+    const decliner = this.players.find(p => p.userId === userId);
+    const name = decliner?.username ?? 'A player';
+    this.resetRematch();
+    this.broadcast({
+      type: 'rematch_failed',
+      reason: `${name} declined the rematch`,
+    } as S2C_RematchFailed);
+  }
+
+  private executeRematch(): void {
+    const mapMode = this.rematchMapMode!;
+    let newMapId: string;
+
+    if (mapMode === 'same') {
+      newMapId = this.mapId;
+    } else if (mapMode === 'random') {
+      const mapIds = MAP_LIST.map(m => m.id);
+      newMapId = mapIds[Math.floor(Math.random() * mapIds.length)];
+    } else {
+      // 'new' — iterate to the next map
+      const mapIds = MAP_LIST.map(m => m.id);
+      const currentIdx = mapIds.indexOf(this.mapId);
+      newMapId = mapIds[(currentIdx + 1) % mapIds.length];
+    }
+
+    const info: RematchInfo = {
+      mapId: newMapId,
+      format: this.format,
+      players: this.players,
+      sockets: new Map(this.sockets),
+    };
+
+    this.resetRematch();
+    this.onRematch?.(this.gameId, info);
+  }
+
+  private resetRematch(): void {
+    this.rematchRequester = null;
+    this.rematchMapMode = null;
+    this.rematchAccepted.clear();
   }
 
   private broadcast(msg: ServerMessage): void {

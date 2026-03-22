@@ -1,16 +1,23 @@
-import type { ServerMessage, S2C_GameStart } from '@gtr/shared';
+import type { ServerMessage, S2C_GameStart, S2C_RejoinGame } from '@gtr/shared';
 import { AuthScreen } from './screens/AuthScreen';
 import { LobbyScreen } from './screens/LobbyScreen';
 import { GameLobbyScreen } from './screens/GameLobbyScreen';
+import { AdminScreen } from './screens/AdminScreen';
 import { NetworkManager } from './network/NetworkManager';
 import { ClientEngine } from './network/ClientEngine';
 import { UnitFrame } from './ui/UnitFrame';
+import { TargetOfTargetFrame } from './ui/TargetOfTargetFrame';
 import { ActionBar } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
 import { Nameplates } from './ui/Nameplates';
-import { EscapeMenu } from './ui/EscapeMenu';
+import { UnitTooltip } from './ui/UnitTooltip';
+import { EscapeMenu, type EscapeMenuButton } from './ui/EscapeMenu';
+import { KeybindMenu } from './ui/KeybindMenu';
 import { DebugHUD } from './ui/DebugHUD';
+import { ReconnectOverlay } from './ui/ReconnectOverlay';
+import { ArenaFrames } from './ui/ArenaFrames';
+import { DeathFrame } from './ui/DeathFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats } from '@gtr/shared';
 import type { Ability } from './engine/combat/Ability';
@@ -18,6 +25,13 @@ import type { Targetable } from './engine/types';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas element not found');
+
+// Prevent browser context menu during gameplay
+document.addEventListener('contextmenu', (e) => {
+  if (currentState === 'playground' || currentState === 'multiplayer') {
+    e.preventDefault();
+  }
+});
 
 // Pre-render character face portraits
 const portraits = renderPortraits();
@@ -29,26 +43,34 @@ type AppState = 'auth' | 'lobby' | 'game-lobby' | 'multiplayer' | 'playground';
 let currentState: AppState = 'auth';
 let network: NetworkManager | null = null;
 let localUserId = '';
+let isAdmin = false;
 
 // Active screens / engines
 let authScreen: AuthScreen | null = null;
 let lobbyScreen: LobbyScreen | null = null;
 let gameLobbyScreen: GameLobbyScreen | null = null;
+let adminScreen: AdminScreen | null = null;
 let clientEngine: ClientEngine | null = null;
+const reconnectOverlay = new ReconnectOverlay();
 
 // MP game UI elements
 let mpActionBar: ActionBar | null = null;
 let mpPlayerFrame: UnitFrame | null = null;
 let mpTargetFrame: UnitFrame | null = null;
+let mpToTFrame: TargetOfTargetFrame | null = null;
 let mpErrorText: ErrorText | null = null;
 let mpCombatText: FloatingCombatText | null = null;
 let mpNameplates: Nameplates | null = null;
+let mpUnitTooltip: UnitTooltip | null = null;
 let mpCastBarContainer: HTMLDivElement | null = null;
 let mpCastBarFill: HTMLDivElement | null = null;
 let mpCastBarHeader: HTMLDivElement | null = null;
 let mpGameOverScreen: HTMLDivElement | null = null;
+let mpGameOver = false;
 let mpEscapeMenu: EscapeMenu | null = null;
 let mpDebugHUD: DebugHUD | null = null;
+let mpArenaFrames: ArenaFrames | null = null;
+let mpDeathFrame: DeathFrame | null = null;
 let mpFrameLoopId: number | null = null;
 let mpSelectedTargetId: string | null = null;
 
@@ -58,13 +80,22 @@ let pgDebugPanel: import('./ui/DebugPanel').DebugPanel | null = null;
 let pgActionBar: ActionBar | null = null;
 let pgPlayerFrame: UnitFrame | null = null;
 let pgTargetFrame: UnitFrame | null = null;
+let pgToTFrame: TargetOfTargetFrame | null = null;
 let pgErrorText: ErrorText | null = null;
 let pgCombatText: FloatingCombatText | null = null;
 let pgNameplates: Nameplates | null = null;
-let pgDeathScreen: HTMLDivElement | null = null;
+let pgUnitTooltip: UnitTooltip | null = null;
+let pgDeathFrame: DeathFrame | null = null;
 let pgCastBarContainer: HTMLDivElement | null = null;
 let pgEscapeMenu: EscapeMenu | null = null;
 let pgDebugHUD: DebugHUD | null = null;
+
+// Lobby escape menu
+let lobbyEscapeMenu: EscapeMenu | null = null;
+
+// Shared keybind menu (persists across game modes)
+const keybindMenu = new KeybindMenu();
+document.body.appendChild(keybindMenu.element);
 let pgFrameLoopId: number | null = null;
 let pgResizeHandler: (() => void) | null = null;
 
@@ -86,15 +117,48 @@ function showGameUI(): void {
   canvas.style.display = 'block';
 }
 
+// ── God mode overlay ───────────────────────────────────────────────────
+let godModeOverlay: HTMLDivElement | null = null;
+
+function toggleGodModeOverlay(active: boolean): void {
+  if (active && !godModeOverlay) {
+    godModeOverlay = document.createElement('div');
+    godModeOverlay.textContent = 'GOD MODE ACTIVATED';
+    godModeOverlay.style.cssText = `
+      position: fixed;
+      top: 8%;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 300;
+      pointer-events: none;
+      color: #ffcc00;
+      font-size: 24px;
+      font-weight: bold;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      text-shadow: 0 0 10px rgba(255, 204, 0, 0.8), 2px 2px 4px rgba(0, 0, 0, 0.9);
+      letter-spacing: 3px;
+    `;
+    document.body.appendChild(godModeOverlay);
+  } else if (!active && godModeOverlay) {
+    godModeOverlay.remove();
+    godModeOverlay = null;
+  }
+}
+
 function cleanupCurrentState(): void {
   authScreen?.destroy();
   authScreen = null;
   lobbyScreen?.destroy();
   lobbyScreen = null;
+  lobbyEscapeMenu?.dispose();
+  lobbyEscapeMenu = null;
   gameLobbyScreen?.destroy();
   gameLobbyScreen = null;
+  adminScreen?.destroy();
+  adminScreen = null;
   cleanupMultiplayerUI();
   cleanupPlaygroundUI();
+  toggleGodModeOverlay(false);
 }
 
 function cleanupMultiplayerUI(): void {
@@ -108,20 +172,31 @@ function cleanupMultiplayerUI(): void {
   mpPlayerFrame = null;
   mpTargetFrame?.element.remove();
   mpTargetFrame = null;
+  mpToTFrame?.element.remove();
+  mpToTFrame = null;
   mpErrorText?.element.remove();
   mpErrorText = null;
   mpCombatText?.element.remove();
   mpCombatText = null;
   mpNameplates?.element.remove();
   mpNameplates = null;
+  mpUnitTooltip?.dispose();
+  mpUnitTooltip = null;
   mpCastBarContainer?.remove();
   mpCastBarContainer = null;
   mpGameOverScreen?.remove();
   mpGameOverScreen = null;
+  mpGameOver = false;
+  gameOverBox = null;
+  clearRematchOverlay();
   mpEscapeMenu?.dispose();
   mpEscapeMenu = null;
   mpDebugHUD?.dispose();
   mpDebugHUD = null;
+  mpArenaFrames?.dispose();
+  mpArenaFrames = null;
+  mpDeathFrame?.element.remove();
+  mpDeathFrame = null;
   if (mpFrameLoopId !== null) {
     cancelAnimationFrame(mpFrameLoopId);
     mpFrameLoopId = null;
@@ -148,14 +223,18 @@ function cleanupPlaygroundUI(): void {
   pgPlayerFrame = null;
   pgTargetFrame?.element.remove();
   pgTargetFrame = null;
+  pgToTFrame?.element.remove();
+  pgToTFrame = null;
   pgErrorText?.element.remove();
   pgErrorText = null;
   pgCombatText?.element.remove();
   pgCombatText = null;
   pgNameplates?.element.remove();
   pgNameplates = null;
-  pgDeathScreen?.remove();
-  pgDeathScreen = null;
+  pgUnitTooltip?.dispose();
+  pgUnitTooltip = null;
+  pgDeathFrame?.element.remove();
+  pgDeathFrame = null;
   pgCastBarContainer?.remove();
   pgCastBarContainer = null;
   pgEscapeMenu?.dispose();
@@ -178,12 +257,19 @@ function showAuth(): void {
   hideGameUI();
 
   authScreen = new AuthScreen((result) => {
-    authScreen?.destroy();
-    authScreen = null;
-    network = new NetworkManager(result.token, result.username);
+    sessionStorage.setItem('gtr_username', result.username);
+    network = new NetworkManager(result.username, result.password, result.mode);
     network.onMessage(handleServerMessage);
+    network.onConnectionStateChange((state) => {
+      reconnectOverlay.update(state);
+      if (state.status === 'failed') {
+        network?.disconnect();
+        network = null;
+        showAuth();
+        setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
+      }
+    });
     network.connect();
-    // Will transition to lobby on auth_result
   });
   document.body.appendChild(authScreen.element);
 }
@@ -195,9 +281,83 @@ function showLobby(): void {
   currentState = 'lobby';
   hideGameUI();
 
-  lobbyScreen = new LobbyScreen(network!, localUserId);
+  lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin);
   lobbyScreen.onPlayground = () => startPlayground();
+  lobbyScreen.onLogout = () => {
+    network?.disconnect();
+    network = null;
+    localUserId = '';
+    isAdmin = false;
+    sessionStorage.removeItem('gtr_username');
+    showAuth();
+  };
+  lobbyScreen.onAdmin = () => showAdmin();
+  lobbyScreen.onMenu = () => lobbyEscapeMenu?.open();
   document.body.appendChild(lobbyScreen.element);
+
+  // Lobby escape menu
+  const lobbyMenuButtons: EscapeMenuButton[] = [];
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    lobbyMenuButtons.push({
+      label: 'Playground',
+      onClick: () => lobbyScreen?.onPlayground?.(),
+      color: 'rgba(90, 61, 138, 0.8)',
+      hoverColor: 'rgba(112, 80, 168, 0.9)',
+    });
+  }
+  if (isAdmin) {
+    lobbyMenuButtons.push({
+      label: 'Manage Users',
+      onClick: () => lobbyScreen?.onAdmin?.(),
+      color: 'rgba(138, 90, 32, 0.8)',
+      hoverColor: 'rgba(168, 112, 48, 0.9)',
+    });
+  }
+  lobbyMenuButtons.push({
+    label: 'Change Password',
+    onClick: () => lobbyScreen?.showChangePasswordDialog(),
+    color: 'rgba(60, 60, 100, 0.8)',
+    hoverColor: 'rgba(70, 70, 120, 0.9)',
+  });
+  lobbyMenuButtons.push({
+    label: 'Logout',
+    onClick: () => lobbyScreen?.onLogout?.(),
+    color: 'rgba(160, 50, 50, 0.8)',
+    hoverColor: 'rgba(180, 60, 60, 0.9)',
+  });
+
+  lobbyEscapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {},  // Not used in lobby mode
+    customButtons: lobbyMenuButtons,
+    onKeybinds: () => {
+      lobbyEscapeMenu?.close();
+      keybindMenu.open(() => lobbyEscapeMenu?.open());
+    },
+  });
+  lobbyEscapeMenu.element.style.zIndex = '1050';
+  document.body.appendChild(lobbyEscapeMenu.element);
+
+  // Request fresh lobby data (needed when returning from admin/game screens)
+  network?.send({ type: 'request_lobby_state' });
+}
+
+function showAdmin(): void {
+  lobbyScreen?.element.remove();
+  lobbyEscapeMenu?.dispose();
+  lobbyEscapeMenu = null;
+  adminScreen?.destroy();
+
+  const localDbId = parseInt(localUserId.replace('user_', ''), 10);
+  adminScreen = new AdminScreen(network!, localDbId);
+  adminScreen.onBack = () => {
+    adminScreen?.destroy();
+    adminScreen = null;
+    showLobby();
+  };
+  document.body.appendChild(adminScreen.element);
+
+  // Request user list from server
+  network!.send({ type: 'admin_get_users' });
 }
 
 // ── Game Lobby Screen ──────────────────────────────────────────────────
@@ -205,6 +365,8 @@ function showLobby(): void {
 function showGameLobby(): void {
   // Don't clean up lobby screen fully — just remove it from view
   lobbyScreen?.element.remove();
+  lobbyEscapeMenu?.dispose();
+  lobbyEscapeMenu = null;
   gameLobbyScreen?.destroy();
   currentState = 'game-lobby';
 
@@ -227,12 +389,14 @@ function startMultiplayer(msg: S2C_GameStart): void {
   window.addEventListener('beforeunload', onBeforeUnload);
 
   clientEngine = new ClientEngine(canvas, network!, msg.mapId, msg.localEntityId, msg.entities);
+  clientEngine.isAdmin = isAdmin;
 
   // Tell the server we're loaded and ready
   network!.send({ type: 'client_ready' });
 
   // Wire up server message handlers
   clientEngine.onError = (message) => mpErrorText?.show(message);
+  clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
     const localId = clientEngine!.localId;
@@ -247,6 +411,9 @@ function startMultiplayer(msg: S2C_GameStart): void {
       mpPlayerFrame?.showCombatText(amount, type as any);
     } else if (targetEntityId === mpSelectedTargetId) {
       mpTargetFrame?.showCombatText(amount, type as any);
+    }
+    if (mpArenaFrames?.hasEntity(targetEntityId)) {
+      mpArenaFrames.showCombatText(targetEntityId, amount, type as any);
     }
   };
 
@@ -290,11 +457,114 @@ function startMultiplayer(msg: S2C_GameStart): void {
   window.addEventListener('resize', onMpResize);
 }
 
+function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
+  cleanupCurrentState();
+  currentState = 'multiplayer';
+  showGameUI();
+
+  window.addEventListener('beforeunload', onBeforeUnload);
+
+  clientEngine = new ClientEngine(canvas, network!, msg.mapId, msg.localEntityId, msg.entities);
+  clientEngine.isAdmin = isAdmin;
+
+  network!.send({ type: 'client_ready' });
+
+  // Wire callbacks (same as startMultiplayer)
+  clientEngine.onError = (message) => mpErrorText?.show(message);
+  clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
+
+  clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
+    const localId = clientEngine!.localId;
+    const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
+    if (isLocalInvolved) {
+      const mesh = clientEngine!.getEntityMesh(targetEntityId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawn(mesh, amount, type as any);
+      }
+    }
+    if (targetEntityId === localId) {
+      mpPlayerFrame?.showCombatText(amount, type as any);
+    } else if (targetEntityId === mpSelectedTargetId) {
+      mpTargetFrame?.showCombatText(amount, type as any);
+    }
+    if (mpArenaFrames?.hasEntity(targetEntityId)) {
+      mpArenaFrames.showCombatText(targetEntityId, amount, type as any);
+    }
+  };
+
+  clientEngine.onEnterCombat = (entityId) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '+Combat', '#cc3333');
+    }
+  };
+  clientEngine.onLeaveCombat = (entityId) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '-Combat', '#33cc33');
+    }
+  };
+
+  clientEngine.onBuffApplied = (entityId, buff) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) {
+        const color = buff.type === 'buff' ? '#3388ff' : '#ff6644';
+        mpCombatText.spawnText(mesh, `+${buff.name}`, color);
+      }
+    }
+  };
+  clientEngine.onBuffExpired = (entityId, buff) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawnText(mesh, `-${buff.name}`, '#888888');
+      }
+    }
+  };
+
+  setupMultiplayerUI(msg);
+
+  // Apply full state from rejoin (buffs, world effects, disconnected entities)
+  clientEngine.handleGameStateSnapshot({
+    type: 'game_state_snapshot',
+    tick: 0,
+    timestamp: Date.now(),
+    entities: msg.entities,
+    buffs: msg.buffs,
+    gasClouds: msg.gasClouds,
+    chemicalPools: msg.chemicalPools,
+  });
+
+  for (const entityId of msg.disconnectedEntityIds) {
+    clientEngine.handlePlayerDisconnected(entityId);
+  }
+
+  // Sync arena countdown state
+  if (msg.arenaTimeRemaining !== undefined && msg.arenaTimeRemaining > 0) {
+    // Still in arena preparation — set elapsed to match server's progress
+    const script = clientEngine.mapManager.getScript();
+    const openTime = (script && 'OPEN_TIME' in script) ? (script as any).OPEN_TIME as number : 30;
+    clientEngine.mapManager.setElapsed(openTime - msg.arenaTimeRemaining);
+  } else {
+    // Arena already open (or no arena countdown) — skip countdown entirely
+    clientEngine.mapManager.forceOpenDoors();
+  }
+
+  clientEngine.start();
+  window.addEventListener('resize', onMpResize);
+
+  // If the game ended while we were disconnected, show game over immediately
+  if (msg.gameOver) {
+    showGameOver(msg.gameOver.winningTeam, false);
+  }
+}
+
 function onMpResize(): void {
   clientEngine?.resize(window.innerWidth, window.innerHeight);
 }
 
-function setupMultiplayerUI(msg: S2C_GameStart): void {
+function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEntityId: string }): void {
   if (!clientEngine) return;
 
   const player = clientEngine.playerController;
@@ -316,6 +586,10 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     (target) => { clientEngine!.targetingSystem.setNameplateHover(target); },
   );
   document.body.appendChild(mpNameplates.element);
+
+  // Unit tooltip (bottom-right, on hover)
+  mpUnitTooltip = new UnitTooltip(player);
+  document.body.appendChild(mpUnitTooltip.element);
 
   // Unit frames
   const unitFrameContainer = document.getElementById('unit-frames');
@@ -346,17 +620,43 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     clientEngine!.selectedTargetId = entityId;
     clientEngine!.sendSetTarget(entityId);
   };
-  mpPlayerFrame = new UnitFrame({ getPortrait, onClick: mpSetTarget });
+  mpPlayerFrame = new UnitFrame({
+    getPortrait,
+    onClick: mpSetTarget,
+    onBuffRightClick: (buffId) => {
+      clientEngine?.sendCancelBuff(buffId);
+    },
+  });
   playerFrameContainer.appendChild(mpPlayerFrame.element);
 
   mpTargetFrame = new UnitFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
   targetFrameContainer.appendChild(mpTargetFrame.element);
+
+  mpToTFrame = new TargetOfTargetFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
+  targetFrameContainer.appendChild(mpToTFrame.element);
+
+  // Arena frames (Gladdy-style opponent frames on right side)
+  mpArenaFrames = new ArenaFrames({ localPlayer: player, getPortrait, onClick: mpSetTarget });
+  document.body.appendChild(mpArenaFrames.element);
+  const arenaEntities = msg.entities
+    .filter(e => e.id !== msg.localEntityId)
+    .map(e => {
+      const targetable = makeTargetable(e.id);
+      return targetable ? { entityId: e.id, targetable } : null;
+    })
+    .filter((e): e is { entityId: string; targetable: Targetable } => e !== null);
+  mpArenaFrames.setEntities(arenaEntities);
+
+  // Death frame
+  mpDeathFrame = new DeathFrame();
+  document.body.appendChild(mpDeathFrame.element);
 
   // Action bar - abilities come from shared character data
   const abilities: readonly Ability[] = localCharStats.abilities;
 
   mpActionBar = new ActionBar({
     onActivate: (ability) => {
+      if (clientEngine!.isResting()) clientEngine!.stopResting();
       // Cancel current channel if starting new ability (same as playground)
       const castState = clientEngine!.getLocalCastingState();
       if (castState?.isChannel && clientEngine!.getCooldownRemaining(ability.id) <= 0) {
@@ -365,7 +665,8 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
       clientEngine!.sendAbility(ability.id, mpSelectedTargetId);
     },
     getAbilityStatus: (ability) => {
-      if (player.mana < ability.manaCost) return 'not-enough-resource';
+      const effectiveManaCost = Math.round(ability.manaCost * clientEngine!.getManaCostMultiplier());
+      if (player.mana < effectiveManaCost) return 'not-enough-resource';
       if (ability.requiresHostileTarget) {
         if (!mpSelectedTargetId) return 'no-target';
         const target = clientEngine!.getRemoteEntity(mpSelectedTargetId);
@@ -455,6 +756,19 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
       }
       return false;
     },
+    isRematchEnabled: () => {
+      if (!clientEngine) return false;
+      // Enabled during Arena Preparation (before gates open) or after game over
+      return mpGameOver || clientEngine.getLocalBuffs().some(b => b.id === 'arena-preparation');
+    },
+    onRematch: (mapMode) => {
+      network?.send({ type: 'request_rematch', mapMode });
+    },
+    confirmExit: () => !mpGameOver,
+    onKeybinds: () => {
+      mpEscapeMenu?.close();
+      keybindMenu.open(() => mpEscapeMenu?.open());
+    },
   });
   document.body.appendChild(mpEscapeMenu.element);
 
@@ -482,7 +796,7 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     if (mpPlayerFrame) {
       const pBuffs = clientEngine.getLocalBuffs();
       const pBuffList = pBuffs.filter(b => b.type === 'buff').map(b => ({
-        definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'buff', description: b.description, effects: [] },
+        definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'buff', description: b.description, effects: [], unremovable: b.unremovable },
         remaining: b.remaining,
         shieldRemaining: b.shieldRemaining,
       }));
@@ -497,13 +811,15 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     if (mpSelectedTargetId && mpTargetFrame) {
       const targetTarget = makeTargetable(mpSelectedTargetId);
       if (targetTarget) {
-        const targetE = clientEngine.getRemoteEntity(mpSelectedTargetId);
-        const tBuffs = (targetE?.buffs ?? []).filter(b => b.type === 'buff').map(b => ({
+        // Use local buffs when targeting self, remote entity buffs otherwise
+        const isSelf = mpSelectedTargetId === clientEngine.localId;
+        const rawBuffs = isSelf ? clientEngine.getLocalBuffs() : (clientEngine.getRemoteEntity(mpSelectedTargetId)?.buffs ?? []);
+        const tBuffs = rawBuffs.filter(b => b.type === 'buff').map(b => ({
           definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'buff', description: b.description, effects: [] },
           remaining: b.remaining,
           shieldRemaining: b.shieldRemaining,
         }));
-        const tDebuffs = (targetE?.buffs ?? []).filter(b => b.type === 'debuff').map(b => ({
+        const tDebuffs = rawBuffs.filter(b => b.type === 'debuff').map(b => ({
           definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'debuff', description: b.description, effects: [] },
           remaining: b.remaining,
         }));
@@ -513,6 +829,31 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
       }
     } else if (mpTargetFrame) {
       mpTargetFrame.update(null);
+    }
+
+    // Target of Target frame (hidden when target is self — already shown in player frame)
+    if (mpToTFrame) {
+      let totTargetable: Targetable | null = null;
+      if (mpSelectedTargetId && mpSelectedTargetId !== clientEngine.localId) {
+        const totId = clientEngine.getRemoteEntity(mpSelectedTargetId)?.targetEntityId ?? null;
+        if (totId) totTargetable = makeTargetable(totId);
+      }
+      mpToTFrame.update(totTargetable);
+    }
+
+    // Arena frames (opponent frames on right side) — hidden during arena preparation
+    if (mpArenaFrames) {
+      const inPrep = clientEngine.getLocalBuffs().some(b => b.id === 'arena-preparation');
+      mpArenaFrames.setVisible(!inPrep);
+      mpArenaFrames.setSelectedTarget(mpSelectedTargetId);
+      mpArenaFrames.update(dt, (entityId) => {
+        const e = clientEngine!.getRemoteEntity(entityId);
+        if (!e) return [];
+        return e.buffs.filter(b => b.type === 'debuff').map(b => ({
+          definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: 'debuff' as const, description: b.description, effects: [] },
+          remaining: b.remaining,
+        }));
+      });
     }
 
     mpPlayerFrame?.updateCombatText(dt);
@@ -527,10 +868,38 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     // Nameplates: local player + remote entities
     if (mpNameplates) {
       const remotes = clientEngine.getAllRemoteEntities();
-      const npcsTargetable = remotes
-        .map(e => makeTargetable(e.id))
-        .filter((t): t is Targetable => t !== null);
-      mpNameplates.update(player, npcsTargetable);
+      const debuffMap = new Map<Targetable, { icon: string; remaining: number; duration: number }[]>();
+      const npcsTargetable: Targetable[] = [];
+      for (const e of remotes) {
+        const t = e.targetable;
+        if (t) {
+          npcsTargetable.push(t);
+          const debuffs = e.buffs.filter(b => b.type === 'debuff');
+          if (debuffs.length > 0) {
+            debuffMap.set(t, debuffs.map(b => ({ icon: b.icon, remaining: b.remaining, duration: b.duration })));
+          }
+        }
+      }
+      mpNameplates.update(player, npcsTargetable, (target) => debuffMap.get(target) ?? []);
+    }
+
+    // Unit tooltip (hover)
+    if (mpUnitTooltip) {
+      const hovered = clientEngine.targetingSystem.getHoveredTarget();
+      mpUnitTooltip.update(hovered, (entity) => {
+        // Resolve the hovered entity's target to a name
+        let targetId: string | null = null;
+        if (entity === (player as unknown as Targetable)) {
+          targetId = clientEngine!.selectedTargetId;
+        } else {
+          for (const e of clientEngine!.getAllRemoteEntities()) {
+            if (e.targetable === entity) { targetId = e.targetEntityId; break; }
+          }
+        }
+        if (!targetId) return 'None';
+        const targetEntity = clientEngine!.getEntity(targetId);
+        return targetEntity ? targetEntity.name : 'None';
+      }, dt);
     }
 
     // Cast bar
@@ -552,6 +921,12 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     } else if (mpCastBarContainer) {
       mpCastBarContainer.style.display = 'none';
     }
+
+    // Death frame
+    if (mpDeathFrame) {
+      if (player.dead && !mpDeathFrame.visible) mpDeathFrame.show();
+      else if (!player.dead && mpDeathFrame.visible) mpDeathFrame.hide();
+    }
   }
   mpUpdateFrames();
 }
@@ -563,9 +938,24 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'auth_result':
       if (msg.success) {
         localUserId = msg.userId;
+        isAdmin = msg.isAdmin ?? false;
+        // Update stored username to the original registered casing from the server
+        if (msg.username) {
+          sessionStorage.setItem('gtr_username', msg.username);
+        }
+        authScreen?.destroy();
+        authScreen = null;
         showLobby();
       } else {
-        alert('Auth failed: ' + (msg.error ?? 'Unknown error'));
+        // Show error on auth screen, disconnect so user can retry
+        let errorMsg = msg.error ?? 'Authentication failed';
+        if (msg.bannedUntil && msg.bannedUntil !== 'permanent') {
+          const banEnd = new Date(msg.bannedUntil + 'Z');
+          errorMsg = `You are banned until ${banEnd.toLocaleString()}`;
+        }
+        authScreen?.showError(errorMsg);
+        network?.disconnect();
+        network = null;
       }
       break;
 
@@ -576,6 +966,14 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'lobby_chat':
       lobbyScreen?.addChatMessage(msg.username, msg.message);
+      break;
+
+    case 'user_profile':
+      lobbyScreen?.showProfileDialog(msg.profile);
+      break;
+
+    case 'leaderboard':
+      lobbyScreen?.showLeaderboard(msg.entries);
       break;
 
     case 'game_lobby_state':
@@ -608,6 +1006,10 @@ function handleServerMessage(msg: ServerMessage): void {
       clientEngine?.handleCombatEvent(msg);
       break;
 
+    case 'flinch':
+      clientEngine?.handleFlinch(msg);
+      break;
+
     case 'ability_effect':
       clientEngine?.handleAbilityEffect(msg);
       break;
@@ -637,11 +1039,54 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
 
     case 'game_over':
-      showGameOver(msg.winningTeam);
+      showGameOver(msg.winningTeam, msg.allPlayersPresent);
+      break;
+
+    case 'rematch_challenge':
+      showRematchChallenge(msg.challengerUsername, msg.mapMode, msg.totalPlayers, msg.readyCount);
+      break;
+
+    case 'rematch_ready_update':
+      updateRematchReady(msg.readyCount, msg.totalPlayers);
+      break;
+
+    case 'rematch_failed':
+      handleRematchFailed(msg.reason);
       break;
 
     case 'game_cancelled':
       showLobby();
+      break;
+
+    case 'admin_users_list':
+      adminScreen?.updateUsers(msg.users);
+      break;
+
+    case 'admin_result':
+      if (msg.action === 'reset_password' && msg.success && msg.generatedPassword) {
+        adminScreen?.showResetPasswordResult(msg.generatedPassword);
+      } else if (!msg.success) {
+        console.warn('Admin action failed:', msg.error);
+      }
+      break;
+
+    case 'change_password_result':
+      lobbyScreen?.showChangePasswordResult(msg.success, msg.error);
+      break;
+
+    case 'god_mode_update':
+      clientEngine?.handleGodModeUpdate(msg.entityId, msg.active);
+      break;
+
+    case 'kicked':
+      network?.disconnect();
+      network = null;
+      localUserId = '';
+      isAdmin = false;
+      sessionStorage.removeItem('gtr_username');
+      showAuth();
+      // Show the reason on the auth screen after it renders
+      setTimeout(() => authScreen?.showError(msg.reason), 0);
       break;
 
     case 'error':
@@ -651,49 +1096,313 @@ function handleServerMessage(msg: ServerMessage): void {
         console.warn('Server error:', msg.message);
       }
       break;
+
+    case 'rejoin_game':
+      startMultiplayerRejoin(msg);
+      break;
+
+    case 'player_disconnected':
+      clientEngine?.handlePlayerDisconnected(msg.entityId);
+      mpErrorText?.show(`${msg.username} disconnected`, 3000);
+      break;
+
+    case 'player_reconnected':
+      clientEngine?.handlePlayerReconnected(msg.entityId);
+      mpErrorText?.show(`${msg.username} reconnected`, 3000);
+      break;
+
+    case 'entity_removed':
+      clientEngine?.handleEntityRemoved(msg.entityId);
+      mpArenaFrames?.removeEntity(msg.entityId);
+      if (msg.username) {
+        mpErrorText?.show(`${msg.username} has left the game`, 3000);
+      }
+      break;
   }
 }
 
-function showGameOver(winningTeam: number): void {
+// ── Rematch state ──────────────────────────────────────────────────────
+let rematchOverlay: HTMLDivElement | null = null;
+let rematchReadyText: HTMLDivElement | null = null;
+let gameOverBox: HTMLDivElement | null = null;
+let rematchMapMode: 'random' | 'same' | 'new' = 'random';
+
+const btnStyle = `
+  padding: 12px 32px; font-size: 15px; font-weight: bold;
+  background: rgba(40, 80, 160, 0.8); color: #ddd;
+  border: 1px solid rgba(100, 140, 255, 0.3); border-radius: 4px;
+  cursor: pointer; outline: none;
+`;
+
+function showGameOver(winningTeam: number, allPlayersPresent: boolean): void {
   if (!clientEngine) return;
+  mpGameOver = true;
   const won = clientEngine.playerController.team === winningTeam;
 
   mpGameOverScreen = document.createElement('div');
   mpGameOverScreen.style.cssText = `
     position: fixed; inset: 0; z-index: 900;
     display: flex; align-items: center; justify-content: center;
-    background: rgba(0, 0, 0, 0.6); pointer-events: auto;
+    pointer-events: none;
   `;
 
-  const box = document.createElement('div');
-  box.style.cssText = `
+  gameOverBox = document.createElement('div');
+  gameOverBox.style.cssText = `
     background: linear-gradient(to bottom, rgba(20, 20, 35, 0.95), rgba(10, 10, 20, 0.95));
     border: 1px solid ${won ? 'rgba(80, 200, 100, 0.5)' : 'rgba(200, 80, 80, 0.5)'};
     border-radius: 8px; padding: 40px 50px; text-align: center;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-width: 320px; pointer-events: auto; position: relative;
   `;
+
+  const dismissBtn = document.createElement('button');
+  dismissBtn.textContent = '\u00d7';
+  dismissBtn.style.cssText = `
+    position: absolute; top: 8px; right: 12px; background: none; border: none;
+    color: #888; font-size: 24px; cursor: pointer; outline: none; padding: 4px 8px;
+    line-height: 1;
+  `;
+  dismissBtn.addEventListener('mouseenter', () => { dismissBtn.style.color = '#fff'; });
+  dismissBtn.addEventListener('mouseleave', () => { dismissBtn.style.color = '#888'; });
+  dismissBtn.addEventListener('click', () => {
+    mpGameOverScreen?.remove();
+    mpGameOverScreen = null;
+    gameOverBox = null;
+  });
+  gameOverBox.appendChild(dismissBtn);
 
   const title = document.createElement('div');
   title.textContent = won ? 'Victory!' : 'Defeat';
-  title.style.cssText = `color: ${won ? '#44cc44' : '#cc4444'}; font-size: 36px; font-weight: bold; margin-bottom: 16px;`;
+  title.style.cssText = `color: ${won ? '#44cc44' : '#cc4444'}; font-size: 36px; font-weight: bold; margin-bottom: 24px;`;
+  gameOverBox.appendChild(title);
 
-  const btn = document.createElement('button');
-  btn.textContent = 'Return to Lobby';
-  btn.style.cssText = `
-    padding: 12px 32px; font-size: 15px; font-weight: bold;
-    background: rgba(40, 80, 160, 0.8); color: #ddd;
-    border: 1px solid rgba(100, 140, 255, 0.3); border-radius: 4px;
-    cursor: pointer; outline: none;
-  `;
-  btn.addEventListener('click', () => {
+  // Rematch section (only if all players are still present)
+  if (allPlayersPresent) {
+    const rematchSection = document.createElement('div');
+    rematchSection.style.cssText = 'margin-bottom: 20px;';
+
+    // Map mode toggle
+    const mapModeRow = document.createElement('div');
+    mapModeRow.style.cssText = 'display: flex; gap: 8px; justify-content: center; margin-bottom: 12px;';
+
+    const toggleBtnStyle = (active: boolean) => `
+      padding: 8px 18px; font-size: 13px; font-weight: bold;
+      background: ${active ? 'rgba(60, 120, 200, 0.9)' : 'rgba(40, 40, 60, 0.6)'};
+      color: ${active ? '#fff' : '#888'};
+      border: 1px solid ${active ? 'rgba(100, 160, 255, 0.5)' : 'rgba(80, 80, 100, 0.3)'};
+      border-radius: 4px; cursor: pointer; outline: none; transition: all 0.15s;
+    `;
+
+    const randomBtn = document.createElement('button');
+    randomBtn.textContent = 'Random Map';
+    randomBtn.style.cssText = toggleBtnStyle(true);
+    rematchMapMode = 'random';
+
+    const sameBtn = document.createElement('button');
+    sameBtn.textContent = 'Same Map';
+    sameBtn.style.cssText = toggleBtnStyle(false);
+
+    const newBtn = document.createElement('button');
+    newBtn.textContent = 'New Map';
+    newBtn.style.cssText = toggleBtnStyle(false);
+
+    const updateToggle = (mode: 'random' | 'same' | 'new') => {
+      rematchMapMode = mode;
+      randomBtn.style.cssText = toggleBtnStyle(mode === 'random');
+      sameBtn.style.cssText = toggleBtnStyle(mode === 'same');
+      newBtn.style.cssText = toggleBtnStyle(mode === 'new');
+    };
+
+    randomBtn.addEventListener('click', () => updateToggle('random'));
+    sameBtn.addEventListener('click', () => updateToggle('same'));
+    newBtn.addEventListener('click', () => updateToggle('new'));
+
+    mapModeRow.appendChild(randomBtn);
+    mapModeRow.appendChild(sameBtn);
+    mapModeRow.appendChild(newBtn);
+    rematchSection.appendChild(mapModeRow);
+
+    const rematchBtn = document.createElement('button');
+    rematchBtn.textContent = 'Rematch';
+    rematchBtn.style.cssText = `
+      padding: 12px 32px; font-size: 15px; font-weight: bold;
+      background: rgba(40, 160, 80, 0.8); color: #ddd;
+      border: 1px solid rgba(80, 200, 120, 0.4); border-radius: 4px;
+      cursor: pointer; outline: none; width: 100%;
+    `;
+    rematchBtn.addEventListener('click', () => {
+      network?.send({ type: 'request_rematch', mapMode: rematchMapMode });
+    });
+    rematchSection.appendChild(rematchBtn);
+
+    gameOverBox.appendChild(rematchSection);
+  }
+
+  // Exit to lobby button
+  const lobbyBtn = document.createElement('button');
+  lobbyBtn.textContent = 'Exit Game';
+  lobbyBtn.style.cssText = btnStyle;
+  lobbyBtn.addEventListener('click', () => {
     showLobby();
     network?.send({ type: 'return_to_lobby' });
   });
+  gameOverBox.appendChild(lobbyBtn);
 
-  box.appendChild(title);
-  box.appendChild(btn);
-  mpGameOverScreen.appendChild(box);
+  mpGameOverScreen.appendChild(gameOverBox);
   document.body.appendChild(mpGameOverScreen);
+}
+
+function showRematchChallenge(challengerUsername: string, mapMode: 'random' | 'same' | 'new', totalPlayers: number, readyCount: number): void {
+  clearRematchOverlay();
+
+  rematchOverlay = document.createElement('div');
+  rematchOverlay.style.cssText = `
+    position: fixed; inset: 0; z-index: 950;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.5); pointer-events: auto;
+  `;
+
+  const box = document.createElement('div');
+  box.style.cssText = `
+    background: linear-gradient(to bottom, rgba(20, 20, 40, 0.97), rgba(10, 10, 25, 0.97));
+    border: 1px solid rgba(100, 140, 220, 0.3);
+    border-radius: 8px; padding: 32px 40px; text-align: center;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-width: 300px;
+  `;
+
+  const heading = document.createElement('div');
+  heading.textContent = 'Rematch Challenge';
+  heading.style.cssText = 'color: #ccd; font-size: 22px; font-weight: bold; margin-bottom: 12px;';
+
+  const desc = document.createElement('div');
+  const modeLabel = mapMode === 'random' ? 'Random Map' : mapMode === 'same' ? 'Same Map' : 'New Map';
+  desc.textContent = `${challengerUsername} wants a rematch (${modeLabel})`;
+  desc.style.cssText = 'color: #99a; font-size: 14px; margin-bottom: 16px;';
+
+  rematchReadyText = document.createElement('div');
+  rematchReadyText.textContent = `${readyCount} / ${totalPlayers} ready`;
+  rematchReadyText.style.cssText = 'color: #8cf; font-size: 16px; font-weight: bold; margin-bottom: 20px;';
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display: flex; gap: 12px; justify-content: center;';
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.textContent = 'Accept';
+  acceptBtn.style.cssText = `
+    padding: 10px 28px; font-size: 15px; font-weight: bold;
+    background: rgba(40, 160, 80, 0.8); color: #ddd;
+    border: 1px solid rgba(80, 200, 120, 0.4); border-radius: 4px;
+    cursor: pointer; outline: none;
+  `;
+  acceptBtn.addEventListener('click', () => {
+    network?.send({ type: 'accept_rematch' });
+    acceptBtn.disabled = true;
+    acceptBtn.style.opacity = '0.5';
+    declineBtn.disabled = true;
+    declineBtn.style.opacity = '0.5';
+  });
+
+  const declineBtn = document.createElement('button');
+  declineBtn.textContent = 'Decline';
+  declineBtn.style.cssText = `
+    padding: 10px 28px; font-size: 15px; font-weight: bold;
+    background: rgba(160, 50, 50, 0.8); color: #ddd;
+    border: 1px solid rgba(200, 80, 80, 0.4); border-radius: 4px;
+    cursor: pointer; outline: none;
+  `;
+  declineBtn.addEventListener('click', () => {
+    network?.send({ type: 'decline_rematch' });
+  });
+
+  btnRow.appendChild(acceptBtn);
+  btnRow.appendChild(declineBtn);
+
+  box.appendChild(heading);
+  box.appendChild(desc);
+  box.appendChild(rematchReadyText);
+  box.appendChild(btnRow);
+  rematchOverlay.appendChild(box);
+  document.body.appendChild(rematchOverlay);
+}
+
+function showRematchReadyCheck(readyCount: number, totalPlayers: number): void {
+  clearRematchOverlay();
+
+  rematchOverlay = document.createElement('div');
+  rematchOverlay.style.cssText = `
+    position: fixed; inset: 0; z-index: 950;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.5); pointer-events: auto;
+  `;
+
+  const box = document.createElement('div');
+  box.style.cssText = `
+    background: linear-gradient(to bottom, rgba(20, 20, 40, 0.97), rgba(10, 10, 25, 0.97));
+    border: 1px solid rgba(100, 140, 220, 0.3);
+    border-radius: 8px; padding: 32px 40px; text-align: center;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-width: 280px;
+  `;
+
+  const heading = document.createElement('div');
+  heading.textContent = 'Waiting for players...';
+  heading.style.cssText = 'color: #ccd; font-size: 20px; font-weight: bold; margin-bottom: 16px;';
+
+  rematchReadyText = document.createElement('div');
+  rematchReadyText.textContent = `${readyCount} / ${totalPlayers} ready`;
+  rematchReadyText.style.cssText = 'color: #8cf; font-size: 18px; font-weight: bold;';
+
+  box.appendChild(heading);
+  box.appendChild(rematchReadyText);
+  rematchOverlay.appendChild(box);
+  document.body.appendChild(rematchOverlay);
+}
+
+function updateRematchReady(readyCount: number, totalPlayers: number): void {
+  // If we have the challenge overlay open (other player), update the text
+  if (rematchReadyText) {
+    rematchReadyText.textContent = `${readyCount} / ${totalPlayers} ready`;
+    return;
+  }
+  // Otherwise we're the requester — show the ready check overlay
+  showRematchReadyCheck(readyCount, totalPlayers);
+}
+
+function handleRematchFailed(reason: string): void {
+  clearRematchOverlay();
+
+  // Show a brief failure message in a temporary overlay
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed; inset: 0; z-index: 950;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  `;
+
+  const box = document.createElement('div');
+  box.style.cssText = `
+    background: linear-gradient(to bottom, rgba(30, 15, 15, 0.95), rgba(15, 10, 10, 0.95));
+    border: 1px solid rgba(200, 80, 80, 0.4);
+    border-radius: 8px; padding: 24px 36px; text-align: center;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  `;
+
+  const text = document.createElement('div');
+  text.textContent = reason;
+  text.style.cssText = 'color: #e88; font-size: 16px; font-weight: bold;';
+
+  box.appendChild(text);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  setTimeout(() => overlay.remove(), 3000);
+}
+
+function clearRematchOverlay(): void {
+  rematchOverlay?.remove();
+  rematchOverlay = null;
+  rematchReadyText = null;
 }
 
 // ── Playground Mode ────────────────────────────────────────────────────
@@ -718,6 +1427,7 @@ async function startPlayground(): Promise<void> {
   const { DebugStun, DiscombobulateDebuff, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, yardsToUnits } = await import('./engine/combat/Ability');
 
   const engine = new Engine(canvas);
+  engine.isAdmin = isAdmin;
   pgEngine = engine;
 
   const mapContainer = document.getElementById('map-selector-container')!;
@@ -775,12 +1485,22 @@ async function startPlayground(): Promise<void> {
   const targetFrameContainer = document.getElementById('target-frame-container')!;
   playerFrameContainer.innerHTML = '';
   targetFrameContainer.innerHTML = '';
-  const playerFrame = new UnitFrame({ getPortrait, onClick: setTarget });
+  const playerFrame = new UnitFrame({
+    getPortrait,
+    onClick: setTarget,
+    onBuffRightClick: (buffId) => {
+      engine.buffSystem.remove(engine.playerController, buffId);
+    },
+  });
   pgPlayerFrame = playerFrame;
   playerFrameContainer.appendChild(playerFrame.element);
   const targetFrame = new UnitFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
   pgTargetFrame = targetFrame;
   targetFrameContainer.appendChild(targetFrame.element);
+
+  const totFrame = new TargetOfTargetFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
+  pgToTFrame = totFrame;
+  targetFrameContainer.appendChild(totFrame.element);
 
   const errorText = new ErrorText();
   pgErrorText = errorText;
@@ -795,6 +1515,11 @@ async function startPlayground(): Promise<void> {
   );
   pgNameplates = nameplates;
   document.body.appendChild(nameplates.element);
+
+  // Unit tooltip (bottom-right, on hover)
+  const unitTooltip = new UnitTooltip(engine.playerController);
+  pgUnitTooltip = unitTooltip;
+  document.body.appendChild(unitTooltip.element);
 
   engine.combatSystem.onCombatText = (target, amount, type) => {
     combatText.spawn(target.mesh, amount, type);
@@ -825,25 +1550,17 @@ async function startPlayground(): Promise<void> {
     }
   };
 
-  // Death screen
-  const deathScreen = document.createElement('div');
-  pgDeathScreen = deathScreen;
-  deathScreen.style.cssText = 'position: fixed; top: 35%; left: 50%; transform: translate(-50%, -50%); display: none; z-index: 500; pointer-events: none;';
-  const deathDialog = document.createElement('div');
-  deathDialog.style.cssText = 'pointer-events: auto; background: linear-gradient(to bottom, rgba(30,10,10,0.95), rgba(10,5,5,0.95)); border: 1px solid #aa3333; border-radius: 8px; padding: 30px 40px; text-align: center; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;';
-  const deathTitle = document.createElement('div');
-  deathTitle.textContent = 'You Died';
-  deathTitle.style.cssText = 'color: #cc2222; font-size: 32px; font-weight: bold; margin-bottom: 12px;';
-  const deathSub = document.createElement('div');
-  deathSub.textContent = 'Your character has been slain.';
-  deathSub.style.cssText = 'color: #888; font-size: 14px; margin-bottom: 24px;';
+  // Apply Arena Preparation now that SCT callbacks are wired
+  engine.applyArenaPreparation();
+
+  // Death frame
+  pgDeathFrame = new DeathFrame();
   const respawnBtn = document.createElement('button');
   respawnBtn.textContent = 'Respawn';
-  respawnBtn.style.cssText = 'padding: 10px 32px; font-size: 15px; font-weight: bold; background: rgba(180,60,60,0.85); color: #eee; border: 1px solid #cc4444; border-radius: 4px; cursor: pointer; outline: none;';
-  respawnBtn.addEventListener('click', () => { engine.playerController.respawn(); deathScreen.style.display = 'none'; });
-  deathDialog.append(deathTitle, deathSub, respawnBtn);
-  deathScreen.appendChild(deathDialog);
-  document.body.appendChild(deathScreen);
+  respawnBtn.style.cssText = 'margin-top: 12px; padding: 10px 32px; font-size: 15px; font-weight: bold; background: rgba(180,60,60,0.85); color: #eee; border: 1px solid #cc4444; border-radius: 4px; cursor: pointer; outline: none; pointer-events: auto;';
+  respawnBtn.addEventListener('click', () => { engine.playerController.respawn(); pgDeathFrame?.hide(); });
+  pgDeathFrame.element.querySelector('div')!.appendChild(respawnBtn);
+  document.body.appendChild(pgDeathFrame.element);
 
   // Cast bar
   const castBarContainer = document.createElement('div');
@@ -883,6 +1600,7 @@ async function startPlayground(): Promise<void> {
   // Action bar
   const actionBar = new ActionBar({
     onActivate: (ability) => {
+      if (engine.isResting()) engine.stopResting();
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
       let target: Targetable | null = engine.targetingSystem.currentTarget;
       if (!target && ability.requiresTarget && !ability.requiresHostileTarget) target = engine.playerController;
@@ -897,7 +1615,8 @@ async function startPlayground(): Promise<void> {
     },
     getAbilityStatus: (ability) => {
       const player = engine.playerController;
-      if (player.mana < ability.manaCost) return 'not-enough-resource';
+      const effectiveManaCost = Math.round(ability.manaCost * engine.buffSystem.getManaCostMultiplier(player));
+      if (player.mana < effectiveManaCost) return 'not-enough-resource';
       if (ability.requiresHostileTarget) {
         const target = engine.targetingSystem.currentTarget;
         if (!target || !target.isHostileTo(player) || target.dead) return 'no-target';
@@ -925,10 +1644,15 @@ async function startPlayground(): Promise<void> {
   loadAbilities(engine.playerController.abilities);
   engine.onCharacterChange = (abilities) => loadAbilities(abilities);
   engine.onAutoAttackError = (message) => errorText.show(message);
+  engine.onRestError = (message) => errorText.show(message);
+  engine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   // Escape menu
   const escapeMenu = new EscapeMenu({
-    onReturnToLobby: () => showLobby(),
+    onReturnToLobby: () => {
+      showLobby();
+      network?.send({ type: 'return_to_lobby' });
+    },
     onEscapeWhilePlaying: () => {
       if (engine.isCasting()) {
         engine.cancelCasting();
@@ -941,6 +1665,10 @@ async function startPlayground(): Promise<void> {
       }
       return false;
     },
+    onKeybinds: () => {
+      escapeMenu.close();
+      keybindMenu.open(() => escapeMenu.open());
+    },
   });
   pgEscapeMenu = escapeMenu;
   document.body.appendChild(escapeMenu.element);
@@ -949,7 +1677,7 @@ async function startPlayground(): Promise<void> {
   pgDebugHUD = new DebugHUD(false);
   document.body.appendChild(pgDebugHUD.element);
 
-  let deathScreenShown = false;
+  const deathFrame = pgDeathFrame!;
   let lastFrameTime = performance.now();
   function updateFrames(): void {
     pgFrameLoopId = requestAnimationFrame(updateFrames);
@@ -961,6 +1689,13 @@ async function startPlayground(): Promise<void> {
     playerFrame.update(engine.playerController, bs.getBuffs(engine.playerController), bs.getDebuffs(engine.playerController));
     const ct = engine.targetingSystem.currentTarget;
     targetFrame.update(ct, ct ? bs.getBuffs(ct) : [], ct ? bs.getDebuffs(ct) : []);
+
+    // Target of Target: NPC targets are tracked via autoAttackTarget
+    const tot = ct && ct !== engine.playerController && 'autoAttackTarget' in ct
+      ? (ct as any).autoAttackTarget as Targetable | null
+      : null;
+    totFrame.update(tot);
+
     playerFrame.updateCombatText(dt);
     targetFrame.updateCombatText(dt);
     actionBar.update();
@@ -984,11 +1719,25 @@ async function startPlayground(): Promise<void> {
     }
 
     combatText.update(dt);
-    nameplates.update(engine.playerController, engine.getNpcs());
+    nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
+      return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
+    });
+
+    // Unit tooltip (hover)
+    const hovered = engine.targetingSystem.getHoveredTarget();
+    unitTooltip.update(hovered, (entity) => {
+      if (entity === (engine.playerController as unknown as Targetable)) {
+        return engine.targetingSystem.currentTarget?.name ?? 'None';
+      }
+      // NPC — check autoAttackTarget
+      const npc = engine.getNpcs().find(n => n === entity);
+      return npc?.autoAttackTarget?.name ?? 'None';
+    }, dt);
+
     pgDebugHUD?.update(dt);
 
-    if (engine.playerController.dead && !deathScreenShown) { deathScreenShown = true; deathScreen.style.display = 'block'; }
-    else if (!engine.playerController.dead && deathScreenShown) { deathScreenShown = false; }
+    if (engine.playerController.dead && !deathFrame.visible) deathFrame.show();
+    else if (!engine.playerController.dead && deathFrame.visible) deathFrame.hide();
   }
   updateFrames();
 

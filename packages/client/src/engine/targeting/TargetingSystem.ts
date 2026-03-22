@@ -96,18 +96,10 @@ export class TargetingSystem {
       true
     );
 
-    for (const hit of intersects) {
-      const targetable = this.findTargetable(hit.object);
-      if (targetable) {
-        this.currentTarget = targetable;
-        return;
-      }
-      // Solid environment mesh blocks LOS — stop looking behind it
-      if (this.isEnvironmentBlocker(hit)) break;
-    }
+    const found = this.pickTarget(intersects);
 
     // Clicked on nothing targetable → clear target
-    this.currentTarget = null;
+    this.currentTarget = found;
   }
 
   /** Right-click: set target if found (does NOT clear on miss). Returns the target or null. */
@@ -123,18 +115,11 @@ export class TargetingSystem {
       true
     );
 
-    for (const hit of intersects) {
-      const targetable = this.findTargetable(hit.object);
-      if (targetable) {
-        if (targetable === this.getLocalPlayer()) return null;
-        this.currentTarget = targetable;
-        return targetable;
-      }
-      // Solid environment mesh blocks LOS — stop looking behind it
-      if (this.isEnvironmentBlocker(hit)) break;
+    const found = this.pickTarget(intersects);
+    if (found) {
+      this.currentTarget = found;
     }
-
-    return null;
+    return found;
   }
 
   /** Returns true if the hit is on a solid vertical environment mesh (wall, pillar, door) that blocks targeting LOS. Horizontal surfaces (floors) and non-mesh helpers never block. */
@@ -158,6 +143,26 @@ export class TargetingSystem {
     return false;
   }
 
+  /** Scan raycast hits and return the best target — alive entities are preferred over dead ones. */
+  private pickTarget(intersects: THREE.Intersection[]): Targetable | null {
+    let deadFallback: Targetable | null = null;
+
+    for (const hit of intersects) {
+      const targetable = this.findTargetable(hit.object);
+      if (targetable) {
+        if (targetable === this.getLocalPlayer()) continue;
+        if (targetable.dead) {
+          if (!deadFallback) deadFallback = targetable;
+          continue;
+        }
+        return targetable;
+      }
+      if (this.isEnvironmentBlocker(hit)) break;
+    }
+
+    return deadFallback;
+  }
+
   private findTargetable(obj: THREE.Object3D): Targetable | null {
     let current: THREE.Object3D | null = obj;
     while (current) {
@@ -165,6 +170,43 @@ export class TargetingSystem {
       current = current.parent;
     }
     return null;
+  }
+
+  /** Tab-target: select the nearest alive hostile in front of the player within the given range (world units). */
+  selectNearestHostileInFront(hostiles: Targetable[], maxRange: number): void {
+    const player = this.getLocalPlayer();
+    const playerPos = player.mesh.position;
+    const rotY = player.mesh.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+
+    let best: Targetable | null = null;
+    let bestDist = Infinity;
+
+    for (const entity of hostiles) {
+      if (entity.dead) continue;
+      if (!entity.isHostileTo(player)) continue;
+
+      const toEntity = new THREE.Vector3(
+        entity.mesh.position.x - playerPos.x,
+        0,
+        entity.mesh.position.z - playerPos.z,
+      );
+      const dist = toEntity.length();
+      if (dist > maxRange || dist < 0.01) continue;
+
+      // Must be in the forward hemisphere (180° cone)
+      toEntity.normalize();
+      if (forward.dot(toEntity) <= 0) continue;
+
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = entity;
+      }
+    }
+
+    if (best) {
+      this.currentTarget = best;
+    }
   }
 
   /** Raycast to check if a targetable entity is under the given screen position. */
@@ -176,12 +218,12 @@ export class TargetingSystem {
     this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
 
     const intersects = this.raycaster.intersectObjects(this.scene.children, true);
-    for (const hit of intersects) {
-      const targetable = this.findTargetable(hit.object);
-      if (targetable) return targetable;
-      if (this.isEnvironmentBlocker(hit)) break;
-    }
-    return null;
+    return this.pickTarget(intersects);
+  }
+
+  /** The entity currently under the mouse (nameplate or 3D raycast). */
+  getHoveredTarget(): Targetable | null {
+    return this.nameplateHover ?? this.raycastHover;
   }
 
   /** Update canvas cursor based on whether mouse is hovering a targetable. */
