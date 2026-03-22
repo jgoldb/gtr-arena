@@ -32,6 +32,7 @@ export class UnitFrame {
   private onBuffRightClick: ((buffId: string) => void) | undefined;
   private combatTextEl: HTMLElement;
   private combatTextTimer = -1; // -1 = inactive
+  private disconnectOverlay: HTMLElement;
   private tooltipEl: HTMLElement;
   private tooltipHoveredEl: HTMLElement | null = null;
 
@@ -95,6 +96,16 @@ export class UnitFrame {
       text-align: center;
     `;
     portraitWrap.appendChild(this.skullOverlay);
+
+    this.disconnectOverlay = document.createElement('div');
+    this.disconnectOverlay.style.cssText = `
+      position: absolute;
+      inset: 0;
+      display: none;
+      background: rgba(128, 128, 128, 0.5);
+      border-radius: 2px;
+    `;
+    portraitWrap.appendChild(this.disconnectOverlay);
 
     // Combat text overlay (centered on portrait)
     this.combatTextEl = document.createElement('div');
@@ -488,20 +499,23 @@ export class UnitFrame {
       }
     }
 
+    const isDisconnected = target.disconnected ?? false;
+
     // Skull overlay on portrait when dead
     this.skullOverlay.style.display = target.dead ? 'flex' : 'none';
+    this.disconnectOverlay.style.display = isDisconnected && !target.dead ? 'block' : 'none';
 
     // Name, combat indicator, and model
     this.nameEl.textContent = target.name;
-    this.nameEl.style.color = hostile ? '#ff4444' : target.dead ? '#888' : '#fff';
+    this.nameEl.style.color = isDisconnected ? '#888' : hostile ? '#ff4444' : target.dead ? '#888' : '#fff';
     this.combatIcon.style.display = target.inCombat ? 'inline' : 'none';
     this.modelEl.textContent = target.modelName;
 
-    // HP bar — red for hostile targets, green otherwise
+    // HP bar — red for hostile targets, green otherwise; gray for disconnected
     const hpPct = target.maxHp > 0 ? (target.hp / target.maxHp) * 100 : 0;
     this.hpFill.style.width = `${hpPct}%`;
-    this.hpFill.style.background = hostile ? '#cc2222' : '#22aa22';
-    this.hpBar.style.background = hostile ? '#3a0a0a' : '#0a3a0a';
+    this.hpFill.style.background = isDisconnected ? '#666' : hostile ? '#cc2222' : '#22aa22';
+    this.hpBar.style.background = isDisconnected ? '#333' : hostile ? '#3a0a0a' : '#0a3a0a';
     this.hpText.textContent = `${Math.round(target.hp)} / ${target.maxHp}`;
 
     // Mana bar — always blue

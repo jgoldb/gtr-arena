@@ -22,6 +22,7 @@ export class LobbyManager {
   private users = new Map<string, ConnectedUser>();
   private gameLobbies = new Map<string, GameLobby>();
   private gameSessions = new Map<string, GameSession>();
+  private pendingRejoins = new Map<string, string>(); // userId -> gameSessionId
   private nextGameId = 1;
 
   constructor(auth: AuthManager, db: GtrDatabase) {
@@ -30,6 +31,27 @@ export class LobbyManager {
   }
 
   addUser(userId: string, username: string, socket: WebSocket): void {
+    // Check for pending game rejoin
+    const rejoinSessionId = this.pendingRejoins.get(userId);
+    if (rejoinSessionId) {
+      const session = this.gameSessions.get(rejoinSessionId);
+      if (session && session.rejoinPlayer(userId, socket)) {
+        this.pendingRejoins.delete(userId);
+        this.users.set(userId, {
+          userId,
+          username,
+          socket,
+          status: 'in-game',
+          gameLobbyId: null,
+          gameSessionId: rejoinSessionId,
+        });
+        this.notifyAdminsUserListChanged();
+        return;
+      }
+      // Session gone — fall through to normal lobby join
+      this.pendingRejoins.delete(userId);
+    }
+
     this.users.set(userId, {
       userId,
       username,
@@ -60,11 +82,15 @@ export class LobbyManager {
       this.leaveGameLobby(userId);
     }
 
-    // Handle active game session disconnect
+    // Handle active game session disconnect — grace period, not permanent removal
     if (user.gameSessionId) {
       const session = this.gameSessions.get(user.gameSessionId);
       if (session) {
-        session.removePlayer(userId);
+        session.disconnectPlayer(userId);
+        if (session.hasDisconnectedPlayer(userId)) {
+          // Grace period started — track for rejoin
+          this.pendingRejoins.set(userId, user.gameSessionId);
+        }
         if (session.isEmpty()) {
           session.stop();
           this.gameSessions.delete(user.gameSessionId);
@@ -134,6 +160,7 @@ export class LobbyManager {
               this.gameSessions.delete(user.gameSessionId);
             }
           }
+          this.pendingRejoins.delete(userId);
         }
         user.status = 'online';
         user.gameSessionId = null;
@@ -405,6 +432,13 @@ export class LobbyManager {
     );
 
     session.onRematch = (oldGameId, info) => this.handleRematch(oldGameId, info);
+    session.onGracePeriodExpired = (userId) => {
+      this.pendingRejoins.delete(userId);
+      if (session.isEmpty()) {
+        session.stop();
+        this.gameSessions.delete(gameId);
+      }
+    };
     return session;
   }
 

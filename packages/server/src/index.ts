@@ -72,7 +72,24 @@ const db = new GtrDatabase();
 const auth = new AuthManager(db);
 const lobby = new LobbyManager(auth, db);
 
+// ── Server-side heartbeat: detect dead clients via protocol-level ping/pong ──
+const aliveSockets = new Set<WebSocket>();
+const heartbeatInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!aliveSockets.has(ws)) {
+      ws.terminate();
+      continue;
+    }
+    aliveSockets.delete(ws);
+    ws.ping();
+  }
+}, 30_000);
+wss.on('close', () => clearInterval(heartbeatInterval));
+
 wss.on('connection', (ws: WebSocket) => {
+  aliveSockets.add(ws);
+  ws.on('pong', () => aliveSockets.add(ws));
+
   let userId: string | null = null;
 
   ws.on('message', (data) => {
@@ -80,6 +97,12 @@ wss.on('connection', (ws: WebSocket) => {
     try {
       msg = JSON.parse(data.toString()) as ClientMessage;
     } catch {
+      return;
+    }
+
+    // Heartbeat — respond immediately regardless of auth state
+    if (msg.type === 'ping') {
+      ws.send(JSON.stringify({ type: 'pong' }));
       return;
     }
 

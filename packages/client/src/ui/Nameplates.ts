@@ -120,6 +120,8 @@ export class Nameplates {
       const screenX = (ndc.x * 0.5 + 0.5) * window.innerWidth;
       const screenY = (-ndc.y * 0.5 + 0.5) * window.innerHeight;
 
+      const isDisconnected = target.disconnected ?? false;
+
       if (inRange) {
         // Show full nameplate, hide name label
         entry.plate.style.display = '';
@@ -131,7 +133,7 @@ export class Nameplates {
         // Update HP bar
         const hpPct = Math.max(0, target.hp / target.maxHp) * 100;
         entry.barFill.style.width = `${hpPct}%`;
-        entry.barFill.style.background = hostile ? '#cc2222' : '#22aa22';
+        entry.barFill.style.background = isDisconnected ? '#666' : hostile ? '#cc2222' : '#22aa22';
 
         // Update cast bar
         if (target.castingAbilityName && target.castingTotalTime > 0) {
@@ -151,7 +153,7 @@ export class Nameplates {
         }
 
         // Update name color
-        entry.nameEl.style.color = hostile ? '#ff4444' : '#44ff44';
+        entry.nameEl.style.color = isDisconnected ? '#888' : hostile ? '#ff4444' : '#44ff44';
 
         // Update debuff tray
         const debuffs = getDebuffs?.(target) ?? [];
@@ -166,7 +168,7 @@ export class Nameplates {
           entry.label.style.display = '';
           entry.label.style.left = `${screenX}px`;
           entry.label.style.top = `${screenY}px`;
-          entry.labelName.style.color = hostile ? '#ff4444' : '#44ff44';
+          entry.labelName.style.color = isDisconnected ? '#888' : hostile ? '#ff4444' : '#44ff44';
         }
       }
     }

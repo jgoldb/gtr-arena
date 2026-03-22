@@ -55,6 +55,10 @@ export abstract class ArenaScript implements MapScript {
     this.elapsed = 0;
   }
 
+  setElapsed(elapsed: number): void {
+    this.elapsed = elapsed;
+  }
+
   update(dt: number): void {
     this.elapsed += dt;
     this.updateArena(dt);
@@ -118,7 +122,7 @@ export abstract class ArenaScript implements MapScript {
   forceOpenDoors(): void {
     if (this.opened) return;
     this.elapsed = this.OPEN_TIME;
-    this.triggerOpen();
+    this.triggerOpen(true);
   }
 
   dispose(): void {
@@ -161,12 +165,21 @@ export abstract class ArenaScript implements MapScript {
   // ---------------------------------------------------------------------------
   onDoorsOpen?: () => void;
 
-  private triggerOpen(): void {
+  private triggerOpen(silent = false): void {
     this.opened = true;
     this.openAnimProgress = 0;
 
     this.onOpen();
     this.onDoorsOpen?.();
+
+    // Remove countdown overlay
+    if (this.overlayEl) {
+      this.overlayEl.remove();
+      this.overlayEl = null;
+      this.countdownEl = null;
+    }
+
+    if (silent) return;
 
     // Flash effects
     for (const pos of this.getFlashPositions()) {
@@ -174,13 +187,6 @@ export abstract class ArenaScript implements MapScript {
       flash.position.set(pos.x, pos.y, pos.z);
       this.group.add(flash);
       this.flashLights.push(flash);
-    }
-
-    // Remove countdown overlay
-    if (this.overlayEl) {
-      this.overlayEl.remove();
-      this.overlayEl = null;
-      this.countdownEl = null;
     }
 
     this.showFightText();

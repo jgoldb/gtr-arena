@@ -302,6 +302,42 @@ export interface S2C_Kicked {
   reason: string;
 }
 
+export interface S2C_Pong {
+  type: 'pong';
+}
+
+export interface S2C_RejoinGame {
+  type: 'rejoin_game';
+  gameId: string;
+  mapId: string;
+  entities: EntitySnapshot[];
+  localEntityId: string;
+  buffs: EntityBuffSnapshot[];
+  gasClouds: GasCloudSnapshot[];
+  chemicalPools: ChemicalPoolSnapshot[];
+  disconnectedEntityIds: string[];
+  gameOver?: { winningTeam: number };
+  /** Seconds remaining until arena doors open. Undefined/0 = already open. */
+  arenaTimeRemaining?: number;
+}
+
+export interface S2C_PlayerDisconnected {
+  type: 'player_disconnected';
+  entityId: string;
+  username: string;
+}
+
+export interface S2C_PlayerReconnected {
+  type: 'player_reconnected';
+  entityId: string;
+  username: string;
+}
+
+export interface S2C_EntityRemoved {
+  type: 'entity_removed';
+  entityId: string;
+}
+
 // ── Admin Messages ──────────────────────────────────────────────────────
 
 export interface C2S_AdminGetUsers {
@@ -322,6 +358,10 @@ export interface C2S_AdminBanUser {
 export interface C2S_AdminUnbanUser {
   type: 'admin_unban_user';
   targetUserId: number;
+}
+
+export interface C2S_Ping {
+  type: 'ping';
 }
 
 export interface AdminUserRecord {
@@ -375,6 +415,7 @@ export interface EntityStateDelta {
   castingTotalTime?: number;
   castingIsChannel?: boolean;
   targetEntityId?: string | null;
+  disconnected?: boolean;
 }
 
 /**
@@ -459,7 +500,8 @@ export type ClientMessage =
   | C2S_AdminGetUsers
   | C2S_AdminDeleteUser
   | C2S_AdminBanUser
-  | C2S_AdminUnbanUser;
+  | C2S_AdminUnbanUser
+  | C2S_Ping;
 
 export type ServerMessage =
   | S2C_AuthResult
@@ -490,4 +532,9 @@ export type ServerMessage =
   | S2C_RematchReadyUpdate
   | S2C_RematchFailed
   | S2C_UserProfile
-  | S2C_Leaderboard;
+  | S2C_Leaderboard
+  | S2C_Pong
+  | S2C_RejoinGame
+  | S2C_PlayerDisconnected
+  | S2C_PlayerReconnected
+  | S2C_EntityRemoved;

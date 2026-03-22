@@ -100,6 +100,7 @@ export class ServerEngine {
   private regenSystem: ServerRegenSystem;
 
   // Per-entity state
+  private frozenEntities = new Set<string>();
   private targets = new Map<string, string | null>(); // entityId -> targetEntityId
   private castingStates = new Map<string, CastingState>();
   private autoAttacks = new Map<string, AutoAttackState>();
@@ -143,6 +144,7 @@ export class ServerEngine {
     castingAbilityId: string | null; castingElapsed: number;
     castingTotalTime: number; castingIsChannel: boolean;
     targetEntityId: string | null;
+    disconnected: boolean;
   }>();
   private lastBroadcastBuffs = new Map<string, string>(); // entityId -> buff signature
   // Track world effect IDs + consumed state to only send when actually changed
@@ -233,7 +235,7 @@ export class ServerEngine {
 
   cancelBuff(entityId: string, buffId: string): void {
     const entity = this.getEntity(entityId);
-    if (!entity) return;
+    if (!entity || this.frozenEntities.has(entityId)) return;
     const buffs = this.buffSystem.getBuffs(entity);
     const buff = buffs.find(b => b.definition.id === buffId);
     if (buff && buff.definition.type === 'buff' && !buff.definition.unremovable) {
@@ -241,9 +243,65 @@ export class ServerEngine {
     }
   }
 
+  freezeEntity(entityId: string): void {
+    const entity = this.getEntity(entityId);
+    if (!entity) return;
+    this.frozenEntities.add(entityId);
+    entity.disconnected = true;
+    entity.isMoving = false;
+    this.cancelCasting(entityId);
+    this.stopAutoAttack(entityId);
+    this.cancelResting(entityId);
+    if (entity.charging) {
+      entity.charging = false;
+      this.sweepCharges.delete(entityId);
+    }
+  }
+
+  /** Fully remove an entity from the game world (not a kill). */
+  removeEntity(entityId: string): void {
+    const idx = this.entities.findIndex(e => e.id === entityId);
+    if (idx === -1) return;
+
+    // Clean up all per-entity state
+    this.frozenEntities.delete(entityId);
+    this.castingStates.delete(entityId);
+    this.autoAttacks.delete(entityId);
+    this.sweepCharges.delete(entityId);
+    this.fullRetardAuras.delete(entityId);
+    this.targets.delete(entityId);
+    this.lastBroadcastPosition.delete(entityId);
+    this.lastBroadcastState.delete(entityId);
+    this.lastBroadcastBuffs.delete(entityId);
+
+    // Clear other entities' targets/auto-attacks pointing at this entity
+    for (const [eid, targetId] of this.targets) {
+      if (targetId === entityId) this.targets.set(eid, null);
+    }
+    for (const [eid, state] of this.autoAttacks) {
+      if (state.target.id === entityId) this.autoAttacks.delete(eid);
+    }
+
+    // Remove dots involving this entity
+    this.activeDots = this.activeDots.filter(d => d.target.id !== entityId && d.owner.id !== entityId);
+
+    // Remove buffs
+    const entity = this.entities[idx];
+    this.buffSystem.clearEntity(entity);
+
+    this.entities.splice(idx, 1);
+  }
+
+  unfreezeEntity(entityId: string): void {
+    const entity = this.getEntity(entityId);
+    if (!entity) return;
+    this.frozenEntities.delete(entityId);
+    entity.disconnected = false;
+  }
+
   updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean): void {
     const entity = this.getEntity(entityId);
-    if (!entity || entity.dead) return;
+    if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
     entity.x = x;
     entity.y = y;
     entity.z = z;
@@ -253,6 +311,7 @@ export class ServerEngine {
   }
 
   setTarget(entityId: string, targetEntityId: string | null): void {
+    if (this.frozenEntities.has(entityId)) return;
     this.targets.set(entityId, targetEntityId);
 
     // Stop auto-attack if the player de-targets or switches to a different target
@@ -271,7 +330,7 @@ export class ServerEngine {
   requestAutoAttack(entityId: string, targetEntityId: string): void {
     const entity = this.getEntity(entityId);
     const target = this.getEntity(targetEntityId);
-    if (!entity || !target || entity.dead || target.dead) return;
+    if (!entity || !target || entity.dead || target.dead || this.frozenEntities.has(entityId)) return;
     if (!target.isHostileTo(entity)) return;
 
     const existing = this.autoAttacks.get(entityId);
@@ -289,7 +348,7 @@ export class ServerEngine {
 
   requestAbility(entityId: string, abilityId: string, targetEntityId: string | null): void {
     const entity = this.getEntity(entityId);
-    if (!entity) return;
+    if (!entity || this.frozenEntities.has(entityId)) return;
 
     const ability = entity.abilities.find(a => a.id === abilityId);
     if (!ability) return;
@@ -321,12 +380,13 @@ export class ServerEngine {
   }
 
   cancelCastRequest(entityId: string): void {
+    if (this.frozenEntities.has(entityId)) return;
     this.cancelCasting(entityId);
   }
 
   setResting(entityId: string, resting: boolean): void {
     const entity = this.getEntity(entityId);
-    if (!entity || entity.dead) return;
+    if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
 
     if (resting) {
       if (entity.inCombat) return;
@@ -1057,6 +1117,7 @@ export class ServerEngine {
         castingAbilityId: e.castingAbilityId, castingElapsed: e.castingElapsed,
         castingTotalTime: e.castingTotalTime, castingIsChannel: e.castingIsChannel,
         targetEntityId: e.targetEntityId,
+        disconnected: e.disconnected ?? false,
       });
     }
     for (const b of buffs) {
@@ -1110,6 +1171,7 @@ export class ServerEngine {
           isAutoAttacking: e.isAutoAttacking,
           castingAbilityId, castingElapsed, castingTotalTime, castingIsChannel,
           targetEntityId,
+          disconnected: e.disconnected,
         };
         states.push(delta);
         this.lastBroadcastState.set(e.id, {
@@ -1118,6 +1180,7 @@ export class ServerEngine {
           isAutoAttacking: e.isAutoAttacking,
           castingAbilityId, castingElapsed, castingTotalTime, castingIsChannel,
           targetEntityId,
+          disconnected: e.disconnected,
         });
         continue;
       }
@@ -1147,17 +1210,19 @@ export class ServerEngine {
       if (prev.castingTotalTime !== castingTotalTime) { delta.castingTotalTime = castingTotalTime; prev.castingTotalTime = castingTotalTime; hasChanges = true; }
       if (prev.castingIsChannel !== castingIsChannel) { delta.castingIsChannel = castingIsChannel; prev.castingIsChannel = castingIsChannel; hasChanges = true; }
       if (prev.targetEntityId !== targetEntityId) { delta.targetEntityId = targetEntityId; prev.targetEntityId = targetEntityId; hasChanges = true; }
+      if (prev.disconnected !== e.disconnected) { delta.disconnected = e.disconnected; prev.disconnected = e.disconnected; hasChanges = true; }
 
       if (hasChanges) states.push(delta);
     }
 
     // Buffs: only include entities whose buff list changed in a meaningful way.
-    // Use a lightweight signature (buff ids + shield values) instead of JSON.stringify,
-    // and exclude `remaining` since clients can decrement it locally.
+    // Use a lightweight signature (buff ids + shield values + remaining rounded up)
+    // instead of JSON.stringify. Remaining is rounded to avoid sending every tick,
+    // but still detects duration refreshes (e.g. 0.3s → 8s).
     const allBuffs = this.buildBuffSnapshots();
     const changedBuffs: EntityBuffSnapshot[] = [];
     for (const b of allBuffs) {
-      const sig = b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}`).join(',');
+      const sig = b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}:${Math.ceil(buf.remaining)}`).join(',');
       const prevSig = this.lastBroadcastBuffs.get(b.entityId);
       if (sig !== prevSig) {
         changedBuffs.push(b);
@@ -1225,6 +1290,15 @@ export class ServerEngine {
       radius: cp.radius, elapsed: cp.elapsed, duration: cp.duration,
       activationDelay: cp.activationDelay, consumed: cp.consumed,
     }));
+  }
+
+  /** Returns full current state for a rejoining player. */
+  getFullState(): { buffs: EntityBuffSnapshot[]; gasClouds: GasCloudSnapshot[]; chemicalPools: ChemicalPoolSnapshot[] } {
+    return {
+      buffs: this.buildBuffSnapshots(),
+      gasClouds: this.buildGasCloudSnapshots(),
+      chemicalPools: this.buildChemPoolSnapshots(),
+    };
   }
 
   // ── Win condition ───────────────────────────────────────────────────

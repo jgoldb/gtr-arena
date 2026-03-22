@@ -1,4 +1,4 @@
-import type { ServerMessage, S2C_GameStart } from '@gtr/shared';
+import type { ServerMessage, S2C_GameStart, S2C_RejoinGame } from '@gtr/shared';
 import { AuthScreen } from './screens/AuthScreen';
 import { LobbyScreen } from './screens/LobbyScreen';
 import { GameLobbyScreen } from './screens/GameLobbyScreen';
@@ -12,6 +12,7 @@ import { FloatingCombatText } from './ui/FloatingCombatText';
 import { Nameplates } from './ui/Nameplates';
 import { EscapeMenu } from './ui/EscapeMenu';
 import { DebugHUD } from './ui/DebugHUD';
+import { ReconnectOverlay } from './ui/ReconnectOverlay';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats } from '@gtr/shared';
 import type { Ability } from './engine/combat/Ability';
@@ -45,6 +46,7 @@ let lobbyScreen: LobbyScreen | null = null;
 let gameLobbyScreen: GameLobbyScreen | null = null;
 let adminScreen: AdminScreen | null = null;
 let clientEngine: ClientEngine | null = null;
+const reconnectOverlay = new ReconnectOverlay();
 
 // MP game UI elements
 let mpActionBar: ActionBar | null = null;
@@ -226,8 +228,16 @@ function showAuth(): void {
     sessionStorage.setItem('gtr_username', result.username);
     network = new NetworkManager(result.username, result.password, result.mode);
     network.onMessage(handleServerMessage);
+    network.onConnectionStateChange((state) => {
+      reconnectOverlay.update(state);
+      if (state.status === 'failed') {
+        network?.disconnect();
+        network = null;
+        showAuth();
+        setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
+      }
+    });
     network.connect();
-    // Will transition to lobby on auth_result success, or show error on failure
   });
   document.body.appendChild(authScreen.element);
 }
@@ -364,11 +374,111 @@ function startMultiplayer(msg: S2C_GameStart): void {
   window.addEventListener('resize', onMpResize);
 }
 
+function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
+  cleanupCurrentState();
+  currentState = 'multiplayer';
+  showGameUI();
+
+  window.addEventListener('beforeunload', onBeforeUnload);
+
+  clientEngine = new ClientEngine(canvas, network!, msg.mapId, msg.localEntityId, msg.entities);
+  clientEngine.isAdmin = isAdmin;
+
+  network!.send({ type: 'client_ready' });
+
+  // Wire callbacks (same as startMultiplayer)
+  clientEngine.onError = (message) => mpErrorText?.show(message);
+  clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
+
+  clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
+    const localId = clientEngine!.localId;
+    const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
+    if (isLocalInvolved) {
+      const mesh = clientEngine!.getEntityMesh(targetEntityId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawn(mesh, amount, type as any);
+      }
+    }
+    if (targetEntityId === localId) {
+      mpPlayerFrame?.showCombatText(amount, type as any);
+    } else if (targetEntityId === mpSelectedTargetId) {
+      mpTargetFrame?.showCombatText(amount, type as any);
+    }
+  };
+
+  clientEngine.onEnterCombat = (entityId) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '+Combat', '#cc3333');
+    }
+  };
+  clientEngine.onLeaveCombat = (entityId) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '-Combat', '#33cc33');
+    }
+  };
+
+  clientEngine.onBuffApplied = (entityId, buff) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) {
+        const color = buff.type === 'buff' ? '#3388ff' : '#ff6644';
+        mpCombatText.spawnText(mesh, `+${buff.name}`, color);
+      }
+    }
+  };
+  clientEngine.onBuffExpired = (entityId, buff) => {
+    if (entityId === clientEngine!.localId) {
+      const mesh = clientEngine!.getEntityMesh(entityId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawnText(mesh, `-${buff.name}`, '#888888');
+      }
+    }
+  };
+
+  setupMultiplayerUI(msg);
+
+  // Apply full state from rejoin (buffs, world effects, disconnected entities)
+  clientEngine.handleGameStateSnapshot({
+    type: 'game_state_snapshot',
+    tick: 0,
+    timestamp: Date.now(),
+    entities: msg.entities,
+    buffs: msg.buffs,
+    gasClouds: msg.gasClouds,
+    chemicalPools: msg.chemicalPools,
+  });
+
+  for (const entityId of msg.disconnectedEntityIds) {
+    clientEngine.handlePlayerDisconnected(entityId);
+  }
+
+  // Sync arena countdown state
+  if (msg.arenaTimeRemaining !== undefined && msg.arenaTimeRemaining > 0) {
+    // Still in arena preparation — set elapsed to match server's progress
+    const script = clientEngine.mapManager.getScript();
+    const openTime = (script && 'OPEN_TIME' in script) ? (script as any).OPEN_TIME as number : 30;
+    clientEngine.mapManager.setElapsed(openTime - msg.arenaTimeRemaining);
+  } else {
+    // Arena already open (or no arena countdown) — skip countdown entirely
+    clientEngine.mapManager.forceOpenDoors();
+  }
+
+  clientEngine.start();
+  window.addEventListener('resize', onMpResize);
+
+  // If the game ended while we were disconnected, show game over immediately
+  if (msg.gameOver) {
+    showGameOver(msg.gameOver.winningTeam, false);
+  }
+}
+
 function onMpResize(): void {
   clientEngine?.resize(window.innerWidth, window.innerHeight);
 }
 
-function setupMultiplayerUI(msg: S2C_GameStart): void {
+function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEntityId: string }): void {
   if (!clientEngine) return;
 
   const player = clientEngine.playerController;
@@ -816,6 +926,24 @@ function handleServerMessage(msg: ServerMessage): void {
       } else {
         console.warn('Server error:', msg.message);
       }
+      break;
+
+    case 'rejoin_game':
+      startMultiplayerRejoin(msg);
+      break;
+
+    case 'player_disconnected':
+      clientEngine?.handlePlayerDisconnected(msg.entityId);
+      mpErrorText?.show(`${msg.username} disconnected`, 3000);
+      break;
+
+    case 'player_reconnected':
+      clientEngine?.handlePlayerReconnected(msg.entityId);
+      mpErrorText?.show(`${msg.username} reconnected`, 3000);
+      break;
+
+    case 'entity_removed':
+      clientEngine?.handleEntityRemoved(msg.entityId);
       break;
   }
 }

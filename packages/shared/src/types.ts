@@ -41,6 +41,7 @@ export interface EntitySnapshot {
   castingTotalTime: number;
   castingIsChannel: boolean;
   targetEntityId: string | null;
+  disconnected?: boolean;
 }
 
 export interface EntityBuffSnapshot {

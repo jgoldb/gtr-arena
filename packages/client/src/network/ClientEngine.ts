@@ -44,6 +44,7 @@ interface RemoteEntity {
   buffs: EntityBuffSnapshot['buffs'];
   targetable: Targetable;
   targetEntityId: string | null;
+  disconnected: boolean;
 }
 
 export class ClientEngine {
@@ -219,6 +220,7 @@ export class ClientEngine {
       buffs: [],
       targetable: null!, // Set below
       targetEntityId: snap.targetEntityId,
+      disconnected: snap.disconnected ?? false,
     };
 
     // Create a Targetable wrapper with live getters so it always reflects current state
@@ -256,6 +258,7 @@ export class ClientEngine {
       set castingTotalTime(_v) { /* read-only */ },
       get castingIsChannel() { return entity.castingIsChannel; },
       set castingIsChannel(_v) { /* read-only */ },
+      get disconnected() { return entity.disconnected; },
     };
     entity.targetable = targetable;
     mesh.userData.targetRef = targetable;
@@ -389,6 +392,41 @@ export class ClientEngine {
     });
   }
 
+  handlePlayerDisconnected(entityId: string): void {
+    const entity = this.remoteEntities.get(entityId);
+    if (entity) {
+      entity.disconnected = true;
+      entity.isMoving = false;
+    }
+  }
+
+  handlePlayerReconnected(entityId: string): void {
+    const entity = this.remoteEntities.get(entityId);
+    if (entity) {
+      entity.disconnected = false;
+    }
+  }
+
+  isEntityDisconnected(entityId: string): boolean {
+    return this.remoteEntities.get(entityId)?.disconnected ?? false;
+  }
+
+  /** Remove a remote entity from the game world entirely (grace period expired). */
+  handleEntityRemoved(entityId: string): void {
+    const entity = this.remoteEntities.get(entityId);
+    if (!entity) return;
+
+    // Remove mesh from scene
+    this.scene.remove(entity.mesh);
+
+    // Clear target if we were targeting this entity
+    if (this.selectedTargetId === entityId) {
+      this.selectTarget(null);
+    }
+
+    this.remoteEntities.delete(entityId);
+  }
+
   /** Apply state deltas to local player and remote entities. */
   private applyEntityStateDeltas(deltas: import('@gtr/shared').EntityStateDelta[]): void {
     for (const delta of deltas) {
@@ -398,7 +436,11 @@ export class ClientEngine {
         if (delta.maxHp !== undefined) pc.maxHp = delta.maxHp;
         if (delta.mana !== undefined) pc.mana = delta.mana;
         if (delta.maxMana !== undefined) pc.maxMana = delta.maxMana;
-        if (delta.dead !== undefined) pc.dead = delta.dead;
+        if (delta.dead !== undefined) {
+          if (delta.dead && !pc.dead) pc.die();
+          else if (!delta.dead && pc.dead) pc.respawn();
+          pc.dead = delta.dead;
+        }
         if (delta.inCombat !== undefined) {
           if (delta.inCombat && !pc.inCombat) this.onEnterCombat?.(delta.id);
           else if (!delta.inCombat && pc.inCombat) this.onLeaveCombat?.(delta.id);
@@ -431,6 +473,7 @@ export class ClientEngine {
       if (delta.castingTotalTime !== undefined) entity.castingTotalTime = delta.castingTotalTime;
       if (delta.castingIsChannel !== undefined) entity.castingIsChannel = delta.castingIsChannel;
       if ('targetEntityId' in delta) entity.targetEntityId = delta.targetEntityId!;
+      if (delta.disconnected !== undefined) entity.disconnected = delta.disconnected;
     }
   }
 
@@ -441,6 +484,8 @@ export class ClientEngine {
     pc.maxHp = snap.maxHp;
     pc.mana = snap.mana;
     pc.maxMana = snap.maxMana;
+    if (snap.dead && !pc.dead) pc.die();
+    else if (!snap.dead && pc.dead) pc.respawn();
     pc.dead = snap.dead;
     pc.inCombat = snap.inCombat;
     pc.stunned = snap.stunned;
@@ -470,6 +515,7 @@ export class ClientEngine {
     entity.castingTotalTime = snap.castingTotalTime;
     entity.castingIsChannel = snap.castingIsChannel;
     entity.targetEntityId = snap.targetEntityId;
+    entity.disconnected = snap.disconnected ?? false;
   }
 
   /** Apply buff updates to local player and remote entity visuals. */
