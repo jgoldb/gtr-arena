@@ -27,6 +27,7 @@ export class ServerEntity {
   charging = false;
   isMoving = false;
   isAutoAttacking = false;
+  godMode = false;
 
   // Character stats
   readonly autoAttackDamageMin: number;

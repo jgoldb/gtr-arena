@@ -190,6 +190,18 @@ export class ServerEngine {
     };
   }
 
+  toggleGodMode(entityId: string): boolean {
+    const entity = this.getEntity(entityId);
+    if (!entity) return false;
+    entity.godMode = !entity.godMode;
+    if (entity.godMode) {
+      entity.hp = entity.maxHp;
+      entity.mana = entity.maxMana;
+      entity.dead = false;
+    }
+    return entity.godMode;
+  }
+
   addEntity(entity: ServerEntity): void {
     this.entities.push(entity);
   }
@@ -358,7 +370,8 @@ export class ServerEngine {
 
     // Update buff-driven modifiers
     for (const entity of this.entities) {
-      entity.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(entity);
+      entity.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(entity)
+        * (entity.godMode ? 4 : 1); // God mode: +300% movement speed
       entity.stunned = this.buffSystem.isStunned(entity);
       entity.setDiscombobulated(this.buffSystem.isDiscombobulated(entity));
 
@@ -440,17 +453,19 @@ export class ServerEngine {
     const isChannel = ability.isChannel ?? false;
 
     if (isChannel) {
-      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
-      entity.mana -= effectiveCost;
-      if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
-      this.combatSystem.setCooldown(entity.id, ability.id, ability.cooldown);
-      if (ability.cooldown > 0) {
-        this.onSendToPlayer?.(entity.id, {
-          type: 'cooldown_update',
-          abilityId: ability.id,
-          remaining: ability.cooldown,
-          total: ability.cooldown,
-        } as S2C_CooldownUpdate);
+      if (!entity.godMode) {
+        const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
+        entity.mana -= effectiveCost;
+        if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
+        this.combatSystem.setCooldown(entity.id, ability.id, ability.cooldown);
+        if (ability.cooldown > 0) {
+          this.onSendToPlayer?.(entity.id, {
+            type: 'cooldown_update',
+            abilityId: ability.id,
+            remaining: ability.cooldown,
+            total: ability.cooldown,
+          } as S2C_CooldownUpdate);
+        }
       }
 
       if (target && target.isHostileTo(entity)) {
@@ -469,7 +484,7 @@ export class ServerEngine {
       }
     }
 
-    if (!isChannel) {
+    if (!isChannel && !entity.godMode) {
       this.combatSystem.setCooldown(entity.id, ability.id, ServerEngine.INTERRUPT_COOLDOWN);
       this.onSendToPlayer?.(entity.id, {
         type: 'cooldown_update',
@@ -617,7 +632,7 @@ export class ServerEngine {
     }
 
     state.timer += dt;
-    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(entity);
+    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(entity) * (entity.godMode ? 6 : 1);
     if (state.timer >= entity.autoAttackSpeed / atkSpeedMult) {
       const dx = entity.x - state.target.x;
       const dz = entity.z - state.target.z;
@@ -706,8 +721,8 @@ export class ServerEngine {
       abilityId: ability.id,
     } as S2C_AbilityEffect);
 
-    // Send cooldown update to the entity's player
-    if (ability.cooldown > 0) {
+    // Send cooldown update to the entity's player (skip in god mode)
+    if (ability.cooldown > 0 && !entity.godMode) {
       this.onSendToPlayer?.(entity.id, {
         type: 'cooldown_update',
         abilityId: ability.id,
@@ -804,7 +819,7 @@ export class ServerEngine {
       while (cloud.elapsed >= cloud.nextTickAt && cloud.nextTickAt <= cloud.duration) {
         for (const entity of cloud.affectedTargets) {
           if (entity.dead) continue;
-          const actualDmg = this.combatSystem.processDamageAbsorb(entity, cloud.damagePerTick, cloud.owner);
+          const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, cloud.damagePerTick, cloud.owner);
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
@@ -871,7 +886,7 @@ export class ServerEngine {
         if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
 
         if (entity.isHostileTo(pool.owner)) {
-          const actualDmg = this.combatSystem.processDamageAbsorb(entity, pool.initialDamage, pool.owner);
+          const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, pool.initialDamage, pool.owner);
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
@@ -910,7 +925,7 @@ export class ServerEngine {
 
       while (dot.elapsed >= dot.nextTickAt && dot.nextTickAt <= dot.totalDuration) {
         if (!dot.target.dead) {
-          const actualDmg = this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
+          const actualDmg = dot.target.godMode ? 0 : this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
           dot.target.hp = Math.max(0, dot.target.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({

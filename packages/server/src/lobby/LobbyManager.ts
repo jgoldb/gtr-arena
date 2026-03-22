@@ -111,6 +111,7 @@ export class LobbyManager {
       case 'cancel_cast':
       case 'cancel_buff':
       case 'set_resting':
+      case 'toggle_god_mode':
         if (user.gameSessionId) {
           const session = this.gameSessions.get(user.gameSessionId);
           session?.handleMessage(userId, msg);

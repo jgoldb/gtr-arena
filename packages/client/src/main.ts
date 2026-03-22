@@ -96,6 +96,34 @@ function showGameUI(): void {
   canvas.style.display = 'block';
 }
 
+// ── God mode overlay ───────────────────────────────────────────────────
+let godModeOverlay: HTMLDivElement | null = null;
+
+function toggleGodModeOverlay(active: boolean): void {
+  if (active && !godModeOverlay) {
+    godModeOverlay = document.createElement('div');
+    godModeOverlay.textContent = 'GOD MODE ACTIVATED';
+    godModeOverlay.style.cssText = `
+      position: fixed;
+      top: 8%;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 300;
+      pointer-events: none;
+      color: #ffcc00;
+      font-size: 24px;
+      font-weight: bold;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      text-shadow: 0 0 10px rgba(255, 204, 0, 0.8), 2px 2px 4px rgba(0, 0, 0, 0.9);
+      letter-spacing: 3px;
+    `;
+    document.body.appendChild(godModeOverlay);
+  } else if (!active && godModeOverlay) {
+    godModeOverlay.remove();
+    godModeOverlay = null;
+  }
+}
+
 function cleanupCurrentState(): void {
   authScreen?.destroy();
   authScreen = null;
@@ -107,6 +135,7 @@ function cleanupCurrentState(): void {
   adminScreen = null;
   cleanupMultiplayerUI();
   cleanupPlaygroundUI();
+  toggleGodModeOverlay(false);
 }
 
 function cleanupMultiplayerUI(): void {
@@ -263,12 +292,14 @@ function startMultiplayer(msg: S2C_GameStart): void {
   window.addEventListener('beforeunload', onBeforeUnload);
 
   clientEngine = new ClientEngine(canvas, network!, msg.mapId, msg.localEntityId, msg.entities);
+  clientEngine.isAdmin = isAdmin;
 
   // Tell the server we're loaded and ready
   network!.send({ type: 'client_ready' });
 
   // Wire up server message handlers
   clientEngine.onError = (message) => mpErrorText?.show(message);
+  clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
     const localId = clientEngine!.localId;
@@ -724,6 +755,10 @@ function handleServerMessage(msg: ServerMessage): void {
       }
       break;
 
+    case 'god_mode_update':
+      clientEngine?.handleGodModeUpdate(msg.entityId, msg.active);
+      break;
+
     case 'kicked':
       network?.disconnect();
       network = null;
@@ -809,6 +844,7 @@ async function startPlayground(): Promise<void> {
   const { DebugStun, DiscombobulateDebuff, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, yardsToUnits } = await import('./engine/combat/Ability');
 
   const engine = new Engine(canvas);
+  engine.isAdmin = isAdmin;
   pgEngine = engine;
 
   const mapContainer = document.getElementById('map-selector-container')!;
@@ -1028,6 +1064,7 @@ async function startPlayground(): Promise<void> {
   engine.onCharacterChange = (abilities) => loadAbilities(abilities);
   engine.onAutoAttackError = (message) => errorText.show(message);
   engine.onRestError = (message) => errorText.show(message);
+  engine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   // Escape menu
   const escapeMenu = new EscapeMenu({

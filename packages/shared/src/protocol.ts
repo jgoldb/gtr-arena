@@ -96,6 +96,10 @@ export interface C2S_ReturnToLobby {
   type: 'return_to_lobby';
 }
 
+export interface C2S_ToggleGodMode {
+  type: 'toggle_god_mode';
+}
+
 // ── Server -> Client Messages ───────────────────────────────────────────
 
 export interface S2C_AuthResult {
@@ -352,6 +356,12 @@ export interface S2C_GameStateSnapshot {
   chemicalPools: ChemicalPoolSnapshot[];
 }
 
+export interface S2C_GodModeUpdate {
+  type: 'god_mode_update';
+  entityId: string;
+  active: boolean;
+}
+
 // ── Union types ─────────────────────────────────────────────────────────
 
 export type ClientMessage =
@@ -373,6 +383,7 @@ export type ClientMessage =
   | C2S_CancelBuff
   | C2S_SetResting
   | C2S_ReturnToLobby
+  | C2S_ToggleGodMode
   | C2S_AdminGetUsers
   | C2S_AdminDeleteUser
   | C2S_AdminBanUser
@@ -401,4 +412,5 @@ export type ServerMessage =
   | S2C_GameCancelled
   | S2C_Kicked
   | S2C_AdminUsersList
-  | S2C_AdminResult;
+  | S2C_AdminResult
+  | S2C_GodModeUpdate;

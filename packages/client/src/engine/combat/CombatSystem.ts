@@ -19,10 +19,12 @@ export class CombatSystem {
   private cooldowns = new Map<string, { remaining: number; total: number }>(); // ability id → cooldown state
   private static readonly COMBAT_DURATION = 5; // seconds before leaving combat
   private static readonly MISS_CHANCE = 0.03; // 3% flat miss chance
+  private static readonly GOD_MODE_DAMAGE_MULT = 11; // +1000% damage
   private combatTimers = new Map<Targetable, number>(); // entity → seconds remaining
   private regenSystem: RegenSystem;
   private buffSystem: BuffSystem;
   private collisionSystem: CollisionSystem;
+  private godModeEntities = new Set<Targetable>();
   onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: Targetable) => void;
   onFlinchDamage?: (target: Targetable) => void;
@@ -33,6 +35,15 @@ export class CombatSystem {
     this.regenSystem = regenSystem;
     this.buffSystem = buffSystem;
     this.collisionSystem = collisionSystem;
+  }
+
+  setGodMode(entity: Targetable, active: boolean): void {
+    if (active) this.godModeEntities.add(entity);
+    else this.godModeEntities.delete(entity);
+  }
+
+  isGodMode(entity: Targetable): boolean {
+    return this.godModeEntities.has(entity);
   }
 
   enterCombat(entity: Targetable): void {
@@ -160,7 +171,8 @@ export class CombatSystem {
     if (this.buffSystem.isStunned(attacker)) {
       return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     }
-    if (this.cooldowns.has(ability.id)) {
+    const isGod = this.godModeEntities.has(attacker);
+    if (!isGod && this.cooldowns.has(ability.id)) {
       return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
     }
     if (ability.requiresHostileTarget) {
@@ -168,9 +180,11 @@ export class CombatSystem {
         return { success: false, error: 'no-target', errorMessage: 'No hostile target' };
       }
     }
-    const effectiveManaCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
-    if (attacker.mana < effectiveManaCost) {
-      return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
+    if (!isGod) {
+      const effectiveManaCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
+      if (attacker.mana < effectiveManaCost) {
+        return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
+      }
     }
     if (ability.requiresHostileTarget && target) {
       const dist = this.getDistance(attacker.mesh.position, target.mesh.position);
@@ -217,10 +231,12 @@ export class CombatSystem {
     if (!validation.success) return validation;
 
     // Success — apply effects
-    const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
-    attacker.mana -= effectiveCost;
-    if (effectiveCost > 0) {
-      this.regenSystem.notifyManaUsed(attacker);
+    if (!this.godModeEntities.has(attacker)) {
+      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
+      attacker.mana -= effectiveCost;
+      if (effectiveCost > 0) {
+        this.regenSystem.notifyManaUsed(attacker);
+      }
     }
     if (ability.requiresHostileTarget && target) {
       // Abilities cannot be dodged (only auto-attacks can)
@@ -247,12 +263,13 @@ export class CombatSystem {
         }
 
         // Apply attacker's damage dealt modifier (e.g. Retard Strength)
-        const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+        let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+        if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
         baseDamage = Math.round(baseDamage * damageMult);
 
         const multiplier = outcome === 'crit' ? 2 : 1;
         const damage = baseDamage * multiplier;
-        const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+        const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
         target.hp = Math.max(0, target.hp - actualDamage);
         if (damage > 0) {
           this.onDirectDamageDealt?.(target);
@@ -287,7 +304,9 @@ export class CombatSystem {
       this.buffSystem.apply(attacker, ability.appliesSelfBuff);
     }
 
-    this.setCooldown(ability.id, ability.cooldown);
+    if (!this.godModeEntities.has(attacker)) {
+      this.setCooldown(ability.id, ability.cooldown);
+    }
 
     return { success: true };
   }
@@ -309,13 +328,14 @@ export class CombatSystem {
     }
 
     // Apply attacker's damage dealt modifier
-    const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+    let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+    if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
     const adjustedBase = Math.round(baseDamage * damageMult);
 
     const isCrit = Math.random() < attacker.critChance;
     const multiplier = isCrit ? 2 : 1;
     const damage = Math.round(adjustedBase * multiplier);
-    const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+    const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
     if (damage > 0) {
       this.onDirectDamageDealt?.(target);
@@ -349,11 +369,12 @@ export class CombatSystem {
   applyChannelTickDamage(attacker: Targetable, target: Targetable, tickDamage: number, damageMultiplier = 1): void {
     if (attacker.dead || target.dead) return;
 
-    const adjustedTick = Math.round(tickDamage * damageMultiplier);
+    const godMult = this.godModeEntities.has(attacker) ? CombatSystem.GOD_MODE_DAMAGE_MULT : 1;
+    const adjustedTick = Math.round(tickDamage * damageMultiplier * godMult);
     const isCrit = Math.random() < attacker.critChance;
     const mult = isCrit ? 2 : 1;
     const damage = Math.round(adjustedTick * mult);
-    const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+    const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
     if (damage > 0) {
       this.onDirectDamageDealt?.(target);
@@ -373,7 +394,7 @@ export class CombatSystem {
   /** Process damage through shields. Returns actual HP damage. Handles reflection. */
   processDamageAbsorb(target: Targetable, damage: number, attacker: Targetable | null): number {
     const { remaining, reflectDamage } = this.buffSystem.absorbDamage(target, damage);
-    if (reflectDamage > 0 && attacker && !attacker.dead) {
+    if (reflectDamage > 0 && attacker && !attacker.dead && !this.godModeEntities.has(attacker)) {
       attacker.hp = Math.max(0, attacker.hp - reflectDamage);
       this.onCombatText?.(attacker, reflectDamage, 'damage');
       this.enterCombat(attacker);
@@ -403,9 +424,10 @@ export class CombatSystem {
     } else {
       const critMult = outcome === 'crit' ? 2 : 1;
       const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
-      const damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+      let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+      if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
       const damage = Math.round(baseDamage * buffMult * damageMult * critMult);
-      const actualDamage = this.processDamageAbsorb(target, damage, attacker);
+      const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
       target.hp = Math.max(0, target.hp - actualDamage);
       if (damage > 0) {
         this.onDirectDamageDealt?.(target);

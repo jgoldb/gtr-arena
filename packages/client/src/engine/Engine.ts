@@ -128,9 +128,13 @@ export class Engine {
   private resting = false;
   private rKeyWasDown = false;
   private tabKeyWasDown = false;
+  private gKeyWasDown = false;
+  isAdmin = false;
+  godMode = false;
   onRestError?: (message: string) => void;
   onCharacterChange?: (abilities: readonly Ability[]) => void;
   onAutoAttackError?: (message: string) => void;
+  onGodModeToggle?: (active: boolean) => void;
   private animationFrameId: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -341,12 +345,14 @@ export class Engine {
 
     if (isChannel) {
       // Channels consume mana and start cooldown immediately
-      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(this.playerController));
-      this.playerController.mana -= effectiveCost;
-      if (effectiveCost > 0) {
-        this.regenSystem.notifyManaUsed(this.playerController);
+      if (!this.godMode) {
+        const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(this.playerController));
+        this.playerController.mana -= effectiveCost;
+        if (effectiveCost > 0) {
+          this.regenSystem.notifyManaUsed(this.playerController);
+        }
+        this.combatSystem.setCooldown(ability.id, ability.cooldown);
       }
-      this.combatSystem.setCooldown(ability.id, ability.cooldown);
       // Enter combat for hostile channel targets
       if (target && target.isHostileTo(this.playerController)) {
         this.combatSystem.enterCombat(this.playerController);
@@ -360,7 +366,7 @@ export class Engine {
     }
 
     // Non-channels: start a short interrupt cooldown; on success useAbility overwrites with the real one
-    if (!isChannel) {
+    if (!isChannel && !this.godMode) {
       this.combatSystem.setCooldown(ability.id, Engine.INTERRUPT_COOLDOWN);
     }
 
@@ -617,7 +623,8 @@ export class Engine {
           if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
 
           if (target.isHostileTo(pool.owner)) {
-            const actualPoolDmg = this.combatSystem.processDamageAbsorb(target, pool.initialDamage, pool.owner);
+            const poolGodImmune = this.godMode && target === this.playerController;
+            const actualPoolDmg = poolGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, pool.initialDamage, pool.owner);
             target.hp = Math.max(0, target.hp - actualPoolDmg);
             if (actualPoolDmg > 0) this.combatSystem.onCombatText?.(target, actualPoolDmg, 'damage');
             this.combatSystem.enterCombat(pool.owner);
@@ -664,7 +671,8 @@ export class Engine {
       // Tick damage
       while (dot.elapsed >= dot.nextTickAt && dot.nextTickAt <= dot.totalDuration) {
         if (!dot.target.dead) {
-          const actualDotDmg = this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
+          const dotGodImmune = this.godMode && dot.target === this.playerController;
+          const actualDotDmg = dotGodImmune ? 0 : this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
           dot.target.hp = Math.max(0, dot.target.hp - actualDotDmg);
           if (actualDotDmg > 0) this.combatSystem.onCombatText?.(dot.target, actualDotDmg, 'damage');
           this.combatSystem.enterCombat(dot.target);
@@ -734,7 +742,8 @@ export class Engine {
       while (cloud.elapsed >= cloud.nextTickAt && cloud.nextTickAt <= cloud.duration) {
         for (const target of cloud.affectedTargets) {
           if (target.dead) continue;
-          const actualCloudDmg = this.combatSystem.processDamageAbsorb(target, cloud.damagePerTick, cloud.owner);
+          const cloudGodImmune = this.godMode && target === this.playerController;
+          const actualCloudDmg = cloudGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, cloud.damagePerTick, cloud.owner);
           target.hp = Math.max(0, target.hp - actualCloudDmg);
           if (actualCloudDmg > 0) this.combatSystem.onCombatText?.(target, actualCloudDmg, 'damage');
           this.combatSystem.enterCombat(target);
@@ -1038,7 +1047,7 @@ export class Engine {
 
     this.autoAttackTimer += dt;
 
-    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(player);
+    const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(player) * (this.godMode ? 6 : 1);
     if (this.autoAttackTimer >= player.autoAttackSpeed / atkSpeedMult) {
       // Check range
       const dx = player.mesh.position.x - target.mesh.position.x;
@@ -1103,7 +1112,8 @@ export class Engine {
     this.updateAutoAttack(deltaTime);
 
     // Update buff-driven modifiers before player update
-    this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController);
+    this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController)
+      * (this.godMode ? 4 : 1); // God mode: +300% movement speed
     this.playerController.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(this.playerController, 'crash-out'));
     this.playerController.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(this.playerController, 'retard-strength'));
     this.playerController.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(this.playerController, 'full-retard'));
@@ -1125,6 +1135,20 @@ export class Engine {
       this.targetingSystem.selectNearestHostileInFront(this.npcs, yardsToUnits(30));
     }
     this.tabKeyWasDown = tabDown;
+
+    // God mode toggle — "G" key (admin only)
+    const gKeyDown = this.input.isKeyDown('KeyG');
+    if (gKeyDown && !this.gKeyWasDown && this.isAdmin) {
+      this.godMode = !this.godMode;
+      this.combatSystem.setGodMode(this.playerController, this.godMode);
+      if (this.godMode) {
+        // Restore HP/mana to full
+        this.playerController.hp = this.playerController.maxHp;
+        this.playerController.mana = this.playerController.maxMana;
+      }
+      this.onGodModeToggle?.(this.godMode);
+    }
+    this.gKeyWasDown = gKeyDown;
 
     // Cancel resting on movement
     if (this.resting) {

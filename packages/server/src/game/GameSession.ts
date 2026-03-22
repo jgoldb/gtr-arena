@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, MapInfo } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, MapInfo } from '@gtr/shared';
 import { MAPS } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
@@ -200,6 +200,16 @@ export class GameSession {
         break;
       case 'set_resting':
         this.engine.setResting(entityId, msg.resting);
+        break;
+      case 'toggle_god_mode':
+        if (this.auth.getIsAdmin(userId)) {
+          const active = this.engine.toggleGodMode(entityId);
+          this.broadcast({
+            type: 'god_mode_update',
+            entityId,
+            active,
+          } as S2C_GodModeUpdate);
+        }
         break;
     }
   }

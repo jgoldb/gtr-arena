@@ -110,7 +110,13 @@ export class ClientEngine {
   private resting = false;
   private rKeyWasDown = false;
   private tabKeyWasDown = false;
+  private gKeyWasDown = false;
   private restingSentAt = 0; // timestamp when resting was requested, to ignore stale server updates
+
+  // God mode (admin only)
+  isAdmin = false;
+  godMode = false;
+  onGodModeToggle?: (active: boolean) => void;
 
   // Event callbacks for UI
   onCombatText?: (sourceEntityId: string, targetEntityId: string, amount: number, type: string) => void;
@@ -629,6 +635,13 @@ export class ClientEngine {
     return this.localEntityId;
   }
 
+  handleGodModeUpdate(entityId: string, active: boolean): void {
+    if (entityId === this.localEntityId) {
+      this.godMode = active;
+      this.onGodModeToggle?.(active);
+    }
+  }
+
   /** Look up entity ID from a Targetable reference */
   private findEntityIdByTargetable(target: Targetable | null): string | null {
     if (!target) return null;
@@ -722,6 +735,9 @@ export class ClientEngine {
   };
 
   private update(dt: number): void {
+    // God mode: +300% movement speed
+    this.playerController.movementSpeedModifier = this.godMode ? 4 : 1;
+
     // Update local player using the real PlayerController (same as playground)
     this.playerController.update(dt);
 
@@ -765,6 +781,13 @@ export class ClientEngine {
       }
     }
     this.rKeyWasDown = rKeyDown;
+
+    // God mode toggle — "G" key (admin only, sends to server)
+    const gKeyDown = this.input.isKeyDown('KeyG');
+    if (gKeyDown && !this.gKeyWasDown && this.isAdmin) {
+      this.network.send({ type: 'toggle_god_mode' });
+    }
+    this.gKeyWasDown = gKeyDown;
 
     // Cancel resting on movement or jump
     if (this.resting) {
