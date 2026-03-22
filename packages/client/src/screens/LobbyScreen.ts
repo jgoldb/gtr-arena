@@ -391,10 +391,18 @@ export class LobbyScreen {
       info.appendChild(hostLine);
       info.appendChild(metaLine);
 
-      const joinBtn = this.makeButton('Join', '#2a6e3c', '#348a4c');
-      joinBtn.addEventListener('click', () => {
-        this.network.send({ type: 'join_game', gameId: game.gameId });
-      });
+      const isFull = game.playerCount >= game.maxPlayers;
+      const joinBtn = this.makeButton('Join', isFull ? '#3a3a4a' : '#2a6e3c', isFull ? '#3a3a4a' : '#348a4c');
+      if (isFull) {
+        joinBtn.textContent = 'Full';
+        joinBtn.style.cursor = 'default';
+        joinBtn.style.opacity = '0.5';
+        joinBtn.style.pointerEvents = 'none';
+      } else {
+        joinBtn.addEventListener('click', () => {
+          this.network.send({ type: 'join_game', gameId: game.gameId });
+        });
+      }
 
       row.appendChild(info);
       row.appendChild(joinBtn);

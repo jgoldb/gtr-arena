@@ -75,6 +75,35 @@ export class GameLobby {
     return { success: true };
   }
 
+  swapPlayerTeam(draggedUserId: string, newTeam: number, droppedOnUserId?: string): { success: boolean; error?: string } {
+    if (newTeam !== 0 && newTeam !== 1) return { success: false, error: 'Invalid team' };
+
+    const dragged = this.players.find(p => p.userId === draggedUserId);
+    if (!dragged) return { success: false, error: 'Player not found' };
+    if (dragged.team === newTeam) return { success: true };
+
+    const maxPerTeam = getMaxPlayers(this.format) / 2;
+    const targetTeamCount = this.players.filter(p => p.team === newTeam).length;
+
+    if (droppedOnUserId) {
+      // Swap two players between teams
+      const target = this.players.find(p => p.userId === droppedOnUserId);
+      if (!target) return { success: false, error: 'Target player not found' };
+      if (target.team === dragged.team) return { success: false, error: 'Players are on the same team' };
+      const tmpTeam = dragged.team;
+      dragged.team = target.team;
+      target.team = tmpTeam;
+      return { success: true };
+    }
+
+    // No swap target — move only if team has room
+    if (targetTeamCount >= maxPerTeam) {
+      return { success: false, error: 'Team is full — drop on a player to swap' };
+    }
+    dragged.team = newTeam;
+    return { success: true };
+  }
+
   canStart(): { success: boolean; error?: string } {
     const maxPlayers = getMaxPlayers(this.format);
     if (this.players.length !== maxPlayers) {

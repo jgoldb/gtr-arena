@@ -28,7 +28,8 @@
       "Bash(grep -n \"applyArenaPreparation\\\\|removeArenaPreparation\\\\|onDoorsOpen\\\\|forceOpenDoors\" /c/Users/Joey/Repos/gtr/packages/server/src/game/*.ts)",
       "Bash(grep:*)",
       "Bash(wc:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(ls:*)"
     ]
   }
 }

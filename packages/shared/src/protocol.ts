@@ -126,6 +126,13 @@ export interface C2S_ToggleGodMode {
   type: 'toggle_god_mode';
 }
 
+export interface C2S_SwapTeam {
+  type: 'swap_team';
+  draggedUserId: string;
+  droppedOnUserId?: string;
+  newTeam: number;
+}
+
 // ── Server -> Client Messages ───────────────────────────────────────────
 
 export interface S2C_AuthResult {
@@ -336,6 +343,7 @@ export interface S2C_PlayerReconnected {
 export interface S2C_EntityRemoved {
   type: 'entity_removed';
   entityId: string;
+  username?: string;
 }
 
 // ── Admin Messages ──────────────────────────────────────────────────────
@@ -497,6 +505,7 @@ export type ClientMessage =
   | C2S_AcceptRematch
   | C2S_DeclineRematch
   | C2S_ToggleGodMode
+  | C2S_SwapTeam
   | C2S_AdminGetUsers
   | C2S_AdminDeleteUser
   | C2S_AdminBanUser

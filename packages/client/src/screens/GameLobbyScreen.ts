@@ -7,7 +7,6 @@ export class GameLobbyScreen {
   private network: NetworkManager;
   private localUserId: string;
   private playersEl: HTMLDivElement;
-  private startBtn: HTMLButtonElement;
   private leaveBtn: HTMLButtonElement;
   private charListEl: HTMLDivElement;
   private statusEl: HTMLDivElement;
@@ -160,23 +159,8 @@ export class GameLobbyScreen {
       this.network.send({ type: 'lock_in' });
     });
 
-    this.startBtn = document.createElement('button');
-    this.startBtn.className = 'glby-btn';
-    this.startBtn.textContent = 'Start Game';
-    this.startBtn.style.cssText = `
-      padding: 10px 28px; font-size: 13px; font-weight: 700;
-      background: linear-gradient(135deg, #2a5090, #3a6cc0);
-      color: rgba(220,225,240,0.95);
-      border: 1px solid rgba(100,160,255,0.2); border-radius: 6px;
-      cursor: pointer; outline: none; display: none;
-    `;
-    this.startBtn.addEventListener('click', () => {
-      this.network.send({ type: 'start_game' });
-    });
-
     btnRow.appendChild(this.leaveBtn);
     btnRow.appendChild(lockInBtn);
-    btnRow.appendChild(this.startBtn);
 
     box.appendChild(this.statusEl);
     box.appendChild(charSection);
@@ -290,8 +274,12 @@ export class GameLobbyScreen {
     this.playersEl.innerHTML = '';
     const team0 = this.players.filter(p => p.team === 0);
     const team1 = this.players.filter(p => p.team === 1);
+    const isHost = this.localUserId === this.hostUserId;
 
-    const renderTeam = (team: GameLobbyPlayer[], label: string, color: string) => {
+    const renderTeam = (team: GameLobbyPlayer[], teamIndex: number, label: string, color: string) => {
+      const teamContainer = document.createElement('div');
+      teamContainer.dataset.team = String(teamIndex);
+
       const header = document.createElement('div');
       header.style.cssText = `
         display: flex; align-items: center; gap: 8px;
@@ -302,21 +290,58 @@ export class GameLobbyScreen {
       dot.style.cssText = `width: 6px; height: 6px; border-radius: 50%; background: ${color};`;
       header.appendChild(dot);
       header.appendChild(document.createTextNode(label));
-      this.playersEl.appendChild(header);
+      teamContainer.appendChild(header);
 
       for (const p of team) {
         const row = document.createElement('div');
+        row.dataset.userId = p.userId;
         row.style.cssText = `
           display: flex; justify-content: space-between; align-items: center;
           padding: 8px 12px; margin-bottom: 4px;
           background: rgba(14,18,32,0.6); border-radius: 5px;
           border-left: 3px solid ${p.lockedIn ? 'rgba(80,200,120,0.5)' : 'rgba(80,90,120,0.15)'};
+          ${isHost ? 'cursor: grab;' : ''}
+          transition: background 0.15s ease, transform 0.15s ease;
         `;
+
+        if (isHost) {
+          row.draggable = true;
+          row.addEventListener('dragstart', (e) => {
+            e.dataTransfer!.setData('text/plain', p.userId);
+            e.dataTransfer!.effectAllowed = 'move';
+            row.style.opacity = '0.5';
+          });
+          row.addEventListener('dragend', () => {
+            row.style.opacity = '1';
+          });
+          // Each player row is also a drop target for swapping
+          row.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer!.dropEffect = 'move';
+            row.style.background = 'rgba(100,120,200,0.2)';
+          });
+          row.addEventListener('dragleave', () => {
+            row.style.background = 'rgba(14,18,32,0.6)';
+          });
+          row.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            row.style.background = 'rgba(14,18,32,0.6)';
+            const draggedUserId = e.dataTransfer!.getData('text/plain');
+            if (draggedUserId && draggedUserId !== p.userId) {
+              const draggedPlayer = this.players.find(pl => pl.userId === draggedUserId);
+              if (draggedPlayer && draggedPlayer.team !== p.team) {
+                this.network.send({ type: 'swap_team', draggedUserId, droppedOnUserId: p.userId, newTeam: p.team });
+              }
+            }
+          });
+        }
 
         const nameSpan = document.createElement('span');
         nameSpan.style.cssText = `font-size: 13px; font-weight: ${p.userId === this.localUserId ? '600' : '400'}; color: #bbc4dd;`;
-        const isHost = p.userId === this.hostUserId ? ' (Host)' : '';
-        nameSpan.textContent = `${this.escapeHtml(p.username)}${isHost}`;
+        const hostLabel = p.userId === this.hostUserId ? ' (Host)' : '';
+        nameSpan.textContent = `${this.escapeHtml(p.username)}${hostLabel}`;
 
         const rightSide = document.createElement('div');
         rightSide.style.cssText = 'display: flex; align-items: center; gap: 8px;';
@@ -342,20 +367,42 @@ export class GameLobbyScreen {
 
         row.appendChild(nameSpan);
         row.appendChild(rightSide);
-        this.playersEl.appendChild(row);
+        teamContainer.appendChild(row);
       }
+
+      // Drop zone for the whole team area
+      if (isHost) {
+        teamContainer.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer!.dropEffect = 'move';
+          teamContainer.style.background = 'rgba(100,120,200,0.08)';
+          teamContainer.style.borderRadius = '6px';
+        });
+        teamContainer.addEventListener('dragleave', () => {
+          teamContainer.style.background = '';
+        });
+        teamContainer.addEventListener('drop', (e) => {
+          e.preventDefault();
+          teamContainer.style.background = '';
+          const draggedUserId = e.dataTransfer!.getData('text/plain');
+          if (draggedUserId) {
+            const draggedPlayer = this.players.find(pl => pl.userId === draggedUserId);
+            if (draggedPlayer && draggedPlayer.team !== teamIndex) {
+              this.network.send({ type: 'swap_team', draggedUserId, newTeam: teamIndex });
+            }
+          }
+        });
+      }
+
+      this.playersEl.appendChild(teamContainer);
     };
 
-    renderTeam(team0, 'TEAM 1', 'rgba(100,160,255,0.6)');
-    if (team1.length > 0) {
-      const spacer = document.createElement('div');
-      spacer.style.cssText = 'height: 12px;';
-      this.playersEl.appendChild(spacer);
-      renderTeam(team1, 'TEAM 2', 'rgba(255,130,100,0.6)');
-    }
+    renderTeam(team0, 0, 'TEAM 1', 'rgba(100,160,255,0.6)');
+    const spacer = document.createElement('div');
+    spacer.style.cssText = 'height: 12px;';
+    this.playersEl.appendChild(spacer);
+    renderTeam(team1, 1, 'TEAM 2', 'rgba(255,130,100,0.6)');
 
-    // Show/hide start button (only for host)
-    this.startBtn.style.display = this.hostUserId === this.localUserId ? 'block' : 'none';
   }
 
   private escapeHtml(text: string): string {

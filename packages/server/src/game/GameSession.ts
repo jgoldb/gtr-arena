@@ -265,7 +265,7 @@ export class GameSession {
     }
   }
 
-  /** Explicit leave (return to lobby). Permanently removes the player. */
+  /** Explicit leave (return to lobby). Immediately removes the player's entity. */
   removePlayer(userId: string): void {
     // Clear any grace period
     const dc = this.disconnectedPlayers.get(userId);
@@ -287,6 +287,14 @@ export class GameSession {
 
     if (this.stopped && !this.gameOver) return;
     if (this.gameOver) return;
+
+    // Immediately remove the entity from the game world
+    const entityId = this.entityIdByUserId.get(userId);
+    const player = this.players.find(p => p.userId === userId);
+    if (entityId) {
+      this.engine.removeEntity(entityId);
+      this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
+    }
 
     this.checkTeamForfeit();
   }
@@ -321,7 +329,7 @@ export class GameSession {
       this.disconnectedPlayers.delete(userId);
       // Remove the entity from the game world entirely (not a kill)
       this.engine.removeEntity(entityId);
-      this.broadcast({ type: 'entity_removed', entityId } as S2C_EntityRemoved);
+      this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
       this.onGracePeriodExpired?.(userId);
       this.checkTeamForfeit();
     }, GameSession.DISCONNECT_GRACE_PERIOD_MS);

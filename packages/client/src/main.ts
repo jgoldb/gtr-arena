@@ -944,6 +944,9 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'entity_removed':
       clientEngine?.handleEntityRemoved(msg.entityId);
+      if (msg.username) {
+        mpErrorText?.show(`${msg.username} has left the game`, 3000);
+      }
       break;
   }
 }

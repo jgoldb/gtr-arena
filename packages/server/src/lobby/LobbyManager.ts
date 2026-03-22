@@ -128,6 +128,9 @@ export class LobbyManager {
       case 'start_game':
         this.handleStartGame(userId);
         break;
+      case 'swap_team':
+        this.handleSwapTeam(userId, msg.draggedUserId, msg.newTeam, msg.droppedOnUserId);
+        break;
       // In-game messages are routed to GameSession
       case 'client_ready':
       case 'player_state':
@@ -318,6 +321,32 @@ export class LobbyManager {
     }
 
     this.broadcastGameLobbyState(lobby);
+
+    // Auto-start when all players are locked in
+    if (lobby.canStart().success) {
+      this.startGame(lobby);
+    }
+  }
+
+  private handleSwapTeam(userId: string, draggedUserId: string, newTeam: number, droppedOnUserId?: string): void {
+    const user = this.users.get(userId);
+    if (!user?.gameLobbyId) return;
+
+    const lobby = this.gameLobbies.get(user.gameLobbyId);
+    if (!lobby) return;
+
+    if (lobby.hostUserId !== userId) {
+      this.send(user.socket, { type: 'error', message: 'Only the host can rearrange teams' });
+      return;
+    }
+
+    const result = lobby.swapPlayerTeam(draggedUserId, newTeam, droppedOnUserId);
+    if (!result.success) {
+      this.send(user.socket, { type: 'error', message: result.error! });
+      return;
+    }
+
+    this.broadcastGameLobbyState(lobby);
   }
 
   private handleStartGame(userId: string): void {
@@ -327,17 +356,16 @@ export class LobbyManager {
     const lobby = this.gameLobbies.get(user.gameLobbyId);
     if (!lobby) return;
 
-    if (lobby.hostUserId !== userId) {
-      this.send(user.socket, { type: 'error', message: 'Only the host can start the game' });
-      return;
-    }
-
     const validation = lobby.canStart();
     if (!validation.success) {
       this.send(user.socket, { type: 'error', message: validation.error! });
       return;
     }
 
+    this.startGame(lobby);
+  }
+
+  private startGame(lobby: GameLobby): void {
     // Create game session
     const players = lobby.getPlayers();
     const playerSockets = new Map<string, WebSocket>();
