@@ -57,6 +57,7 @@ let mpCastBarContainer: HTMLDivElement | null = null;
 let mpCastBarFill: HTMLDivElement | null = null;
 let mpCastBarHeader: HTMLDivElement | null = null;
 let mpGameOverScreen: HTMLDivElement | null = null;
+let mpGameOver = false;
 let mpEscapeMenu: EscapeMenu | null = null;
 let mpDebugHUD: DebugHUD | null = null;
 let mpFrameLoopId: number | null = null;
@@ -159,6 +160,7 @@ function cleanupMultiplayerUI(): void {
   mpCastBarContainer = null;
   mpGameOverScreen?.remove();
   mpGameOverScreen = null;
+  mpGameOver = false;
   gameOverBox = null;
   clearRematchOverlay();
   mpEscapeMenu?.dispose();
@@ -537,13 +539,13 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     },
     isRematchEnabled: () => {
       if (!clientEngine) return false;
-      // Enabled only during Arena Preparation (before gates open)
-      return clientEngine.getLocalBuffs().some(b => b.id === 'arena-preparation');
+      // Enabled during Arena Preparation (before gates open) or after game over
+      return mpGameOver || clientEngine.getLocalBuffs().some(b => b.id === 'arena-preparation');
     },
     onRematch: (mapMode) => {
       network?.send({ type: 'request_rematch', mapMode });
     },
-    confirmExit: true,
+    confirmExit: () => !mpGameOver,
   });
   document.body.appendChild(mpEscapeMenu.element);
 
@@ -833,13 +835,14 @@ const btnStyle = `
 
 function showGameOver(winningTeam: number, allPlayersPresent: boolean): void {
   if (!clientEngine) return;
+  mpGameOver = true;
   const won = clientEngine.playerController.team === winningTeam;
 
   mpGameOverScreen = document.createElement('div');
   mpGameOverScreen.style.cssText = `
     position: fixed; inset: 0; z-index: 900;
     display: flex; align-items: center; justify-content: center;
-    background: rgba(0, 0, 0, 0.6); pointer-events: auto;
+    pointer-events: none;
   `;
 
   gameOverBox = document.createElement('div');
@@ -848,8 +851,24 @@ function showGameOver(winningTeam: number, allPlayersPresent: boolean): void {
     border: 1px solid ${won ? 'rgba(80, 200, 100, 0.5)' : 'rgba(200, 80, 80, 0.5)'};
     border-radius: 8px; padding: 40px 50px; text-align: center;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    min-width: 320px;
+    min-width: 320px; pointer-events: auto; position: relative;
   `;
+
+  const dismissBtn = document.createElement('button');
+  dismissBtn.textContent = '\u00d7';
+  dismissBtn.style.cssText = `
+    position: absolute; top: 8px; right: 12px; background: none; border: none;
+    color: #888; font-size: 24px; cursor: pointer; outline: none; padding: 4px 8px;
+    line-height: 1;
+  `;
+  dismissBtn.addEventListener('mouseenter', () => { dismissBtn.style.color = '#fff'; });
+  dismissBtn.addEventListener('mouseleave', () => { dismissBtn.style.color = '#888'; });
+  dismissBtn.addEventListener('click', () => {
+    mpGameOverScreen?.remove();
+    mpGameOverScreen = null;
+    gameOverBox = null;
+  });
+  gameOverBox.appendChild(dismissBtn);
 
   const title = document.createElement('div');
   title.textContent = won ? 'Victory!' : 'Defeat';
@@ -932,7 +951,7 @@ function showGameOver(winningTeam: number, allPlayersPresent: boolean): void {
   document.body.appendChild(mpGameOverScreen);
 }
 
-function showRematchChallenge(challengerUsername: string, mapMode: 'random' | 'new', totalPlayers: number, readyCount: number): void {
+function showRematchChallenge(challengerUsername: string, mapMode: 'random' | 'same' | 'new', totalPlayers: number, readyCount: number): void {
   clearRematchOverlay();
 
   rematchOverlay = document.createElement('div');

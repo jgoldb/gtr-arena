@@ -318,9 +318,6 @@ export class GameSession {
 
     // Record stats for ALL players (including disconnected ones)
     this.recordStats(winningTeam);
-
-    this.stop();
-    this.onGameOver(this.gameId);
   }
 
   /** Record win/loss stats for every player in this game. Called once at game end. */

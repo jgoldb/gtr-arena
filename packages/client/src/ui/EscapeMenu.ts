@@ -6,8 +6,8 @@ export interface EscapeMenuCallbacks {
   isRematchEnabled?: () => boolean;
   /** Called when the player clicks the rematch button. */
   onRematch?: (mapMode: 'random' | 'same' | 'new') => void;
-  /** If true, show a confirmation before exiting. */
-  confirmExit?: boolean;
+  /** If true (or returns true), show a confirmation before exiting. */
+  confirmExit?: boolean | (() => boolean);
 }
 
 export class EscapeMenu {
@@ -77,7 +77,10 @@ export class EscapeMenu {
       if (!this.confirmRow) exitBtn.style.background = 'rgba(160, 50, 50, 0.8)';
     });
     exitBtn.addEventListener('click', () => {
-      if (this.callbacks.confirmExit) {
+      const confirm = typeof this.callbacks.confirmExit === 'function'
+        ? this.callbacks.confirmExit()
+        : this.callbacks.confirmExit;
+      if (confirm) {
         this.showExitConfirm();
       } else {
         this.close();
@@ -175,7 +178,7 @@ export class EscapeMenu {
       border-radius: 4px; cursor: not-allowed;
     `;
     const disabledText = document.createElement('div');
-    disabledText.textContent = 'Only available before gates open';
+    disabledText.textContent = 'Available before gates open or after game ends';
     disabledText.style.cssText = 'color: #667; font-size: 12px; font-weight: bold;';
     this.rematchDisabledOverlay.appendChild(disabledText);
 

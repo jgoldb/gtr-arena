@@ -26,7 +26,9 @@
       "Bash(find /c/Users/Joey/Repos/gtr -type f \\\\\\(-name .env* -o -name package.json \\\\\\))",
       "Bash(find /c/Users/Joey/Repos/gtr -type f -name *.db -o -name *.sqlite)",
       "Bash(grep -n \"applyArenaPreparation\\\\|removeArenaPreparation\\\\|onDoorsOpen\\\\|forceOpenDoors\" /c/Users/Joey/Repos/gtr/packages/server/src/game/*.ts)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

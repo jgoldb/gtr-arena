@@ -89,7 +89,15 @@ export class AuthScreen {
       });
     }
 
-    const animateBg = () => {
+    let lastDrawTime = 0;
+    const FRAME_INTERVAL = 66; // ~15fps — plenty for slow ambient motion
+
+    const animateBg = (now: number) => {
+      this.animationFrameId = requestAnimationFrame(animateBg);
+      if (document.hidden) return;
+      if (now - lastDrawTime < FRAME_INTERVAL) return;
+      lastDrawTime = now;
+
       ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -140,7 +148,6 @@ export class AuthScreen {
       }
 
       ctx.globalAlpha = 1;
-      this.animationFrameId = requestAnimationFrame(animateBg);
     };
     this.animationFrameId = requestAnimationFrame(animateBg);
 

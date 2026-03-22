@@ -242,7 +242,15 @@ export class LobbyScreen {
       });
     }
 
-    const draw = () => {
+    let lastDrawTime = 0;
+    const FRAME_INTERVAL = 66; // ~15fps — plenty for slow ambient motion
+
+    const draw = (now: number) => {
+      this.animFrameId = requestAnimationFrame(draw);
+      if (document.hidden) return;
+      if (now - lastDrawTime < FRAME_INTERVAL) return;
+      lastDrawTime = now;
+
       ctx.fillStyle = 'rgba(5, 5, 10, 0.12)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -261,16 +269,18 @@ export class LobbyScreen {
         ctx.fill();
       }
 
-      // Subtle connecting lines between nearby particles
+      // Subtle connecting lines between nearby particles (check ~20% of pairs per frame)
       ctx.globalAlpha = 0.03;
       ctx.strokeStyle = '#6688cc';
       ctx.lineWidth = 0.5;
-      for (let i = 0; i < particles.length; i++) {
-        for (let j = i + 1; j < particles.length; j++) {
+      const len = particles.length;
+      const step = 5; // only check every 5th pair — rotates which pairs are drawn
+      const offset = (Math.floor(now / FRAME_INTERVAL)) % step;
+      for (let i = offset; i < len; i += step) {
+        for (let j = i + 1; j < len; j += step) {
           const dx = particles[i].x - particles[j].x;
           const dy = particles[i].y - particles[j].y;
-          const dist = dx * dx + dy * dy;
-          if (dist < 15000) {
+          if (dx * dx + dy * dy < 15000) {
             ctx.beginPath();
             ctx.moveTo(particles[i].x, particles[i].y);
             ctx.lineTo(particles[j].x, particles[j].y);
@@ -280,7 +290,6 @@ export class LobbyScreen {
       }
 
       ctx.globalAlpha = 1;
-      this.animFrameId = requestAnimationFrame(draw);
     };
     this.animFrameId = requestAnimationFrame(draw);
   }

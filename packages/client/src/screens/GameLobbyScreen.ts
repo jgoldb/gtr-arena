@@ -208,7 +208,15 @@ export class GameLobbyScreen {
       });
     }
 
-    const draw = () => {
+    let lastDrawTime = 0;
+    const FRAME_INTERVAL = 66; // ~15fps — plenty for slow ambient motion
+
+    const draw = (now: number) => {
+      this.animFrameId = requestAnimationFrame(draw);
+      if (document.hidden) return;
+      if (now - lastDrawTime < FRAME_INTERVAL) return;
+      lastDrawTime = now;
+
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -229,7 +237,6 @@ export class GameLobbyScreen {
       }
 
       ctx.globalAlpha = 1;
-      this.animFrameId = requestAnimationFrame(draw);
     };
     this.animFrameId = requestAnimationFrame(draw);
   }

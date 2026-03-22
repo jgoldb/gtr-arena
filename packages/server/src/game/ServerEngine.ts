@@ -152,6 +152,7 @@ export class ServerEngine {
   onBroadcast?: (msg: ServerMessage) => void;
   onSendToPlayer?: (entityId: string, msg: ServerMessage) => void;
   onGameOver?: (winningTeam: number) => void;
+  private gameOverFired = false;
 
   constructor(obstacles: import('@gtr/shared').ObstacleConfig[]) {
     this.collision = new CollisionSystem();
@@ -1229,6 +1230,7 @@ export class ServerEngine {
   // ── Win condition ───────────────────────────────────────────────────
 
   private checkWinCondition(): void {
+    if (this.gameOverFired) return;
     const teams = new Set(this.entities.map(e => e.team));
     for (const team of teams) {
       const teamEntities = this.entities.filter(e => e.team === team);
@@ -1236,8 +1238,8 @@ export class ServerEngine {
         // This team is eliminated - the other team wins
         const winningTeam = this.entities.find(e => e.team !== team && !e.dead)?.team;
         if (winningTeam !== undefined) {
+          this.gameOverFired = true;
           this.onGameOver?.(winningTeam);
-          this.stop();
         }
         return;
       }
