@@ -151,7 +151,7 @@ export class ServerCombatSystem {
     if (attacker.dead) {
       return { success: false, error: 'dead', errorMessage: 'You are dead' };
     }
-    if (target?.dead) {
+    if (target?.dead && (ability.requiresHostileTarget || ability.requiresTarget)) {
       return { success: false, error: 'dead', errorMessage: 'Target is dead' };
     }
     if (this.buffSystem.isStunned(attacker)) {

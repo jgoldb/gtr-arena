@@ -286,7 +286,6 @@ export class GameSession {
     }
 
     if (this.stopped && !this.gameOver) return;
-    if (this.gameOver) return;
 
     // Immediately remove the entity from the game world
     const entityId = this.entityIdByUserId.get(userId);
@@ -296,7 +295,9 @@ export class GameSession {
       this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
     }
 
-    this.checkTeamForfeit();
+    if (!this.gameOver) {
+      this.checkTeamForfeit();
+    }
   }
 
   /** WebSocket closed — start grace period for reconnection. */
@@ -312,16 +313,24 @@ export class GameSession {
     }
 
     if (this.stopped && !this.gameOver) return;
-    if (this.gameOver) return;
 
-    // Check full-team forfeit first (instant, no grace period)
-    if (this.checkTeamForfeit()) return;
-
-    // Start grace period
     const entityId = this.entityIdByUserId.get(userId);
     if (!entityId) return;
     const player = this.players.find(p => p.userId === userId);
     if (!player) return;
+
+    // Dead players or post-game disconnects: remove immediately, no grace period
+    const entity = this.engine.getEntity(entityId);
+    if (entity?.dead || this.gameOver) {
+      this.engine.removeEntity(entityId);
+      this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
+      this.onGracePeriodExpired?.(userId);
+      if (!this.gameOver) this.checkTeamForfeit();
+      return;
+    }
+
+    // Check full-team forfeit first (instant, no grace period)
+    if (this.checkTeamForfeit()) return;
 
     this.engine.freezeEntity(entityId);
 
