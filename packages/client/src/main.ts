@@ -159,6 +159,8 @@ function cleanupMultiplayerUI(): void {
   mpCastBarContainer = null;
   mpGameOverScreen?.remove();
   mpGameOverScreen = null;
+  gameOverBox = null;
+  clearRematchOverlay();
   mpEscapeMenu?.dispose();
   mpEscapeMenu = null;
   mpDebugHUD?.dispose();
@@ -247,6 +249,9 @@ function showLobby(): void {
   };
   lobbyScreen.onAdmin = () => showAdmin();
   document.body.appendChild(lobbyScreen.element);
+
+  // Request fresh lobby data (needed when returning from admin/game screens)
+  network?.send({ type: 'request_lobby_state' });
 }
 
 function showAdmin(): void {
@@ -530,6 +535,15 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
       }
       return false;
     },
+    isRematchEnabled: () => {
+      if (!clientEngine) return false;
+      // Enabled only during Arena Preparation (before gates open)
+      return clientEngine.getLocalBuffs().some(b => b.id === 'arena-preparation');
+    },
+    onRematch: (mapMode) => {
+      network?.send({ type: 'request_rematch', mapMode });
+    },
+    confirmExit: true,
   });
   document.body.appendChild(mpEscapeMenu.element);
 
@@ -679,6 +693,14 @@ function handleServerMessage(msg: ServerMessage): void {
       lobbyScreen?.addChatMessage(msg.username, msg.message);
       break;
 
+    case 'user_profile':
+      lobbyScreen?.showProfileDialog(msg.profile);
+      break;
+
+    case 'leaderboard':
+      lobbyScreen?.showLeaderboard(msg.entries);
+      break;
+
     case 'game_lobby_state':
       if (currentState !== 'game-lobby') showGameLobby();
       gameLobbyScreen?.update({
@@ -742,7 +764,19 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
 
     case 'game_over':
-      showGameOver(msg.winningTeam);
+      showGameOver(msg.winningTeam, msg.allPlayersPresent);
+      break;
+
+    case 'rematch_challenge':
+      showRematchChallenge(msg.challengerUsername, msg.mapMode, msg.totalPlayers, msg.readyCount);
+      break;
+
+    case 'rematch_ready_update':
+      updateRematchReady(msg.readyCount, msg.totalPlayers);
+      break;
+
+    case 'rematch_failed':
+      handleRematchFailed(msg.reason);
       break;
 
     case 'game_cancelled':
@@ -784,7 +818,20 @@ function handleServerMessage(msg: ServerMessage): void {
   }
 }
 
-function showGameOver(winningTeam: number): void {
+// ── Rematch state ──────────────────────────────────────────────────────
+let rematchOverlay: HTMLDivElement | null = null;
+let rematchReadyText: HTMLDivElement | null = null;
+let gameOverBox: HTMLDivElement | null = null;
+let rematchMapMode: 'random' | 'same' | 'new' = 'random';
+
+const btnStyle = `
+  padding: 12px 32px; font-size: 15px; font-weight: bold;
+  background: rgba(40, 80, 160, 0.8); color: #ddd;
+  border: 1px solid rgba(100, 140, 255, 0.3); border-radius: 4px;
+  cursor: pointer; outline: none;
+`;
+
+function showGameOver(winningTeam: number, allPlayersPresent: boolean): void {
   if (!clientEngine) return;
   const won = clientEngine.playerController.team === winningTeam;
 
@@ -795,35 +842,247 @@ function showGameOver(winningTeam: number): void {
     background: rgba(0, 0, 0, 0.6); pointer-events: auto;
   `;
 
-  const box = document.createElement('div');
-  box.style.cssText = `
+  gameOverBox = document.createElement('div');
+  gameOverBox.style.cssText = `
     background: linear-gradient(to bottom, rgba(20, 20, 35, 0.95), rgba(10, 10, 20, 0.95));
     border: 1px solid ${won ? 'rgba(80, 200, 100, 0.5)' : 'rgba(200, 80, 80, 0.5)'};
     border-radius: 8px; padding: 40px 50px; text-align: center;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-width: 320px;
   `;
 
   const title = document.createElement('div');
   title.textContent = won ? 'Victory!' : 'Defeat';
-  title.style.cssText = `color: ${won ? '#44cc44' : '#cc4444'}; font-size: 36px; font-weight: bold; margin-bottom: 16px;`;
+  title.style.cssText = `color: ${won ? '#44cc44' : '#cc4444'}; font-size: 36px; font-weight: bold; margin-bottom: 24px;`;
+  gameOverBox.appendChild(title);
 
-  const btn = document.createElement('button');
-  btn.textContent = 'Return to Lobby';
-  btn.style.cssText = `
-    padding: 12px 32px; font-size: 15px; font-weight: bold;
-    background: rgba(40, 80, 160, 0.8); color: #ddd;
-    border: 1px solid rgba(100, 140, 255, 0.3); border-radius: 4px;
-    cursor: pointer; outline: none;
-  `;
-  btn.addEventListener('click', () => {
+  // Rematch section (only if all players are still present)
+  if (allPlayersPresent) {
+    const rematchSection = document.createElement('div');
+    rematchSection.style.cssText = 'margin-bottom: 20px;';
+
+    // Map mode toggle
+    const mapModeRow = document.createElement('div');
+    mapModeRow.style.cssText = 'display: flex; gap: 8px; justify-content: center; margin-bottom: 12px;';
+
+    const toggleBtnStyle = (active: boolean) => `
+      padding: 8px 18px; font-size: 13px; font-weight: bold;
+      background: ${active ? 'rgba(60, 120, 200, 0.9)' : 'rgba(40, 40, 60, 0.6)'};
+      color: ${active ? '#fff' : '#888'};
+      border: 1px solid ${active ? 'rgba(100, 160, 255, 0.5)' : 'rgba(80, 80, 100, 0.3)'};
+      border-radius: 4px; cursor: pointer; outline: none; transition: all 0.15s;
+    `;
+
+    const randomBtn = document.createElement('button');
+    randomBtn.textContent = 'Random Map';
+    randomBtn.style.cssText = toggleBtnStyle(true);
+    rematchMapMode = 'random';
+
+    const sameBtn = document.createElement('button');
+    sameBtn.textContent = 'Same Map';
+    sameBtn.style.cssText = toggleBtnStyle(false);
+
+    const newBtn = document.createElement('button');
+    newBtn.textContent = 'New Map';
+    newBtn.style.cssText = toggleBtnStyle(false);
+
+    const updateToggle = (mode: 'random' | 'same' | 'new') => {
+      rematchMapMode = mode;
+      randomBtn.style.cssText = toggleBtnStyle(mode === 'random');
+      sameBtn.style.cssText = toggleBtnStyle(mode === 'same');
+      newBtn.style.cssText = toggleBtnStyle(mode === 'new');
+    };
+
+    randomBtn.addEventListener('click', () => updateToggle('random'));
+    sameBtn.addEventListener('click', () => updateToggle('same'));
+    newBtn.addEventListener('click', () => updateToggle('new'));
+
+    mapModeRow.appendChild(randomBtn);
+    mapModeRow.appendChild(sameBtn);
+    mapModeRow.appendChild(newBtn);
+    rematchSection.appendChild(mapModeRow);
+
+    const rematchBtn = document.createElement('button');
+    rematchBtn.textContent = 'Rematch';
+    rematchBtn.style.cssText = `
+      padding: 12px 32px; font-size: 15px; font-weight: bold;
+      background: rgba(40, 160, 80, 0.8); color: #ddd;
+      border: 1px solid rgba(80, 200, 120, 0.4); border-radius: 4px;
+      cursor: pointer; outline: none; width: 100%;
+    `;
+    rematchBtn.addEventListener('click', () => {
+      network?.send({ type: 'request_rematch', mapMode: rematchMapMode });
+    });
+    rematchSection.appendChild(rematchBtn);
+
+    gameOverBox.appendChild(rematchSection);
+  }
+
+  // Exit to lobby button
+  const lobbyBtn = document.createElement('button');
+  lobbyBtn.textContent = 'Exit Game';
+  lobbyBtn.style.cssText = btnStyle;
+  lobbyBtn.addEventListener('click', () => {
     showLobby();
     network?.send({ type: 'return_to_lobby' });
   });
+  gameOverBox.appendChild(lobbyBtn);
 
-  box.appendChild(title);
-  box.appendChild(btn);
-  mpGameOverScreen.appendChild(box);
+  mpGameOverScreen.appendChild(gameOverBox);
   document.body.appendChild(mpGameOverScreen);
+}
+
+function showRematchChallenge(challengerUsername: string, mapMode: 'random' | 'new', totalPlayers: number, readyCount: number): void {
+  clearRematchOverlay();
+
+  rematchOverlay = document.createElement('div');
+  rematchOverlay.style.cssText = `
+    position: fixed; inset: 0; z-index: 950;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.5); pointer-events: auto;
+  `;
+
+  const box = document.createElement('div');
+  box.style.cssText = `
+    background: linear-gradient(to bottom, rgba(20, 20, 40, 0.97), rgba(10, 10, 25, 0.97));
+    border: 1px solid rgba(100, 140, 220, 0.3);
+    border-radius: 8px; padding: 32px 40px; text-align: center;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-width: 300px;
+  `;
+
+  const heading = document.createElement('div');
+  heading.textContent = 'Rematch Challenge';
+  heading.style.cssText = 'color: #ccd; font-size: 22px; font-weight: bold; margin-bottom: 12px;';
+
+  const desc = document.createElement('div');
+  const modeLabel = mapMode === 'random' ? 'Random Map' : mapMode === 'same' ? 'Same Map' : 'New Map';
+  desc.textContent = `${challengerUsername} wants a rematch (${modeLabel})`;
+  desc.style.cssText = 'color: #99a; font-size: 14px; margin-bottom: 16px;';
+
+  rematchReadyText = document.createElement('div');
+  rematchReadyText.textContent = `${readyCount} / ${totalPlayers} ready`;
+  rematchReadyText.style.cssText = 'color: #8cf; font-size: 16px; font-weight: bold; margin-bottom: 20px;';
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display: flex; gap: 12px; justify-content: center;';
+
+  const acceptBtn = document.createElement('button');
+  acceptBtn.textContent = 'Accept';
+  acceptBtn.style.cssText = `
+    padding: 10px 28px; font-size: 15px; font-weight: bold;
+    background: rgba(40, 160, 80, 0.8); color: #ddd;
+    border: 1px solid rgba(80, 200, 120, 0.4); border-radius: 4px;
+    cursor: pointer; outline: none;
+  `;
+  acceptBtn.addEventListener('click', () => {
+    network?.send({ type: 'accept_rematch' });
+    acceptBtn.disabled = true;
+    acceptBtn.style.opacity = '0.5';
+    declineBtn.disabled = true;
+    declineBtn.style.opacity = '0.5';
+  });
+
+  const declineBtn = document.createElement('button');
+  declineBtn.textContent = 'Decline';
+  declineBtn.style.cssText = `
+    padding: 10px 28px; font-size: 15px; font-weight: bold;
+    background: rgba(160, 50, 50, 0.8); color: #ddd;
+    border: 1px solid rgba(200, 80, 80, 0.4); border-radius: 4px;
+    cursor: pointer; outline: none;
+  `;
+  declineBtn.addEventListener('click', () => {
+    network?.send({ type: 'decline_rematch' });
+  });
+
+  btnRow.appendChild(acceptBtn);
+  btnRow.appendChild(declineBtn);
+
+  box.appendChild(heading);
+  box.appendChild(desc);
+  box.appendChild(rematchReadyText);
+  box.appendChild(btnRow);
+  rematchOverlay.appendChild(box);
+  document.body.appendChild(rematchOverlay);
+}
+
+function showRematchReadyCheck(readyCount: number, totalPlayers: number): void {
+  clearRematchOverlay();
+
+  rematchOverlay = document.createElement('div');
+  rematchOverlay.style.cssText = `
+    position: fixed; inset: 0; z-index: 950;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.5); pointer-events: auto;
+  `;
+
+  const box = document.createElement('div');
+  box.style.cssText = `
+    background: linear-gradient(to bottom, rgba(20, 20, 40, 0.97), rgba(10, 10, 25, 0.97));
+    border: 1px solid rgba(100, 140, 220, 0.3);
+    border-radius: 8px; padding: 32px 40px; text-align: center;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    min-width: 280px;
+  `;
+
+  const heading = document.createElement('div');
+  heading.textContent = 'Waiting for players...';
+  heading.style.cssText = 'color: #ccd; font-size: 20px; font-weight: bold; margin-bottom: 16px;';
+
+  rematchReadyText = document.createElement('div');
+  rematchReadyText.textContent = `${readyCount} / ${totalPlayers} ready`;
+  rematchReadyText.style.cssText = 'color: #8cf; font-size: 18px; font-weight: bold;';
+
+  box.appendChild(heading);
+  box.appendChild(rematchReadyText);
+  rematchOverlay.appendChild(box);
+  document.body.appendChild(rematchOverlay);
+}
+
+function updateRematchReady(readyCount: number, totalPlayers: number): void {
+  // If we have the challenge overlay open (other player), update the text
+  if (rematchReadyText) {
+    rematchReadyText.textContent = `${readyCount} / ${totalPlayers} ready`;
+    return;
+  }
+  // Otherwise we're the requester — show the ready check overlay
+  showRematchReadyCheck(readyCount, totalPlayers);
+}
+
+function handleRematchFailed(reason: string): void {
+  clearRematchOverlay();
+
+  // Show a brief failure message in a temporary overlay
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed; inset: 0; z-index: 950;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  `;
+
+  const box = document.createElement('div');
+  box.style.cssText = `
+    background: linear-gradient(to bottom, rgba(30, 15, 15, 0.95), rgba(15, 10, 10, 0.95));
+    border: 1px solid rgba(200, 80, 80, 0.4);
+    border-radius: 8px; padding: 24px 36px; text-align: center;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  `;
+
+  const text = document.createElement('div');
+  text.textContent = reason;
+  text.style.cssText = 'color: #e88; font-size: 16px; font-weight: bold;';
+
+  box.appendChild(text);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  setTimeout(() => overlay.remove(), 3000);
+}
+
+function clearRematchOverlay(): void {
+  rematchOverlay?.remove();
+  rematchOverlay = null;
+  rematchReadyText = null;
 }
 
 // ── Playground Mode ────────────────────────────────────────────────────

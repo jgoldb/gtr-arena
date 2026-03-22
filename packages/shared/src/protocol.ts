@@ -96,6 +96,32 @@ export interface C2S_ReturnToLobby {
   type: 'return_to_lobby';
 }
 
+export interface C2S_RequestLobbyState {
+  type: 'request_lobby_state';
+}
+
+export interface C2S_InspectUser {
+  type: 'inspect_user';
+  targetUserId: string;
+}
+
+export interface C2S_GetLeaderboard {
+  type: 'get_leaderboard';
+}
+
+export interface C2S_RequestRematch {
+  type: 'request_rematch';
+  mapMode: 'random' | 'same' | 'new';
+}
+
+export interface C2S_AcceptRematch {
+  type: 'accept_rematch';
+}
+
+export interface C2S_DeclineRematch {
+  type: 'decline_rematch';
+}
+
 export interface C2S_ToggleGodMode {
   type: 'toggle_god_mode';
 }
@@ -215,6 +241,45 @@ export interface S2C_EntityDied {
 export interface S2C_GameOver {
   type: 'game_over';
   winningTeam: number;
+  /** Whether all original players are still connected (enables rematch option). */
+  allPlayersPresent: boolean;
+}
+
+export interface S2C_RematchChallenge {
+  type: 'rematch_challenge';
+  challengerUsername: string;
+  mapMode: 'random' | 'same' | 'new';
+  totalPlayers: number;
+  readyCount: number;
+}
+
+export interface S2C_RematchReadyUpdate {
+  type: 'rematch_ready_update';
+  readyCount: number;
+  totalPlayers: number;
+}
+
+export interface S2C_RematchFailed {
+  type: 'rematch_failed';
+  reason: string;
+}
+
+export interface UserProfileData {
+  username: string;
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+  createdAt: string;
+}
+
+export interface S2C_UserProfile {
+  type: 'user_profile';
+  profile: UserProfileData;
+}
+
+export interface S2C_Leaderboard {
+  type: 'leaderboard';
+  entries: UserProfileData[];
 }
 
 export interface S2C_ErrorMessage {
@@ -384,6 +449,12 @@ export type ClientMessage =
   | C2S_CancelBuff
   | C2S_SetResting
   | C2S_ReturnToLobby
+  | C2S_RequestLobbyState
+  | C2S_InspectUser
+  | C2S_GetLeaderboard
+  | C2S_RequestRematch
+  | C2S_AcceptRematch
+  | C2S_DeclineRematch
   | C2S_ToggleGodMode
   | C2S_AdminGetUsers
   | C2S_AdminDeleteUser
@@ -414,4 +485,9 @@ export type ServerMessage =
   | S2C_Kicked
   | S2C_AdminUsersList
   | S2C_AdminResult
-  | S2C_GodModeUpdate;
+  | S2C_GodModeUpdate
+  | S2C_RematchChallenge
+  | S2C_RematchReadyUpdate
+  | S2C_RematchFailed
+  | S2C_UserProfile
+  | S2C_Leaderboard;

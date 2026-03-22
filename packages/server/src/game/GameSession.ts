@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, MapInfo } from '@gtr/shared';
-import { MAPS } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, MapInfo } from '@gtr/shared';
+import { MAPS, MAP_LIST } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
 import type { AuthManager } from '../auth/AuthManager.js';
@@ -13,8 +13,16 @@ interface SessionPlayer {
   characterId: CharacterId;
 }
 
+export interface RematchInfo {
+  mapId: string;
+  format: GameFormat;
+  players: readonly SessionPlayer[];
+  sockets: Map<string, WebSocket>;
+}
+
 export class GameSession {
   readonly gameId: string;
+  readonly format: GameFormat;
   private readonly mapId: string;
   private readonly mapInfo: MapInfo | undefined;
   private engine: ServerEngine;
@@ -25,18 +33,27 @@ export class GameSession {
   private auth: AuthManager;
   private db: GtrDatabase;
   private onGameOver: (gameId: string) => void;
+  onRematch: ((gameId: string, info: RematchInfo) => void) | null = null;
   private stopped = false;
+  private gameOver = false;
   private statsRecorded = false;
   private readyPlayers = new Set<string>();
   private readyTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private arenaOpenTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private arenaPreparationActive = false;
   private countdownStarted = false;
   private static readonly READY_TIMEOUT_MS = 10_000; // max wait for slow clients
   private static readonly COUNTDOWN_SECONDS = 3;
 
+  // Rematch state
+  private rematchRequester: string | null = null;
+  private rematchMapMode: 'random' | 'same' | 'new' | null = null;
+  private rematchAccepted = new Set<string>();
+
   constructor(
     gameId: string,
     mapId: string,
-    _format: GameFormat,
+    format: GameFormat,
     players: readonly { userId: string; username: string; team: number; characterId: CharacterId | null }[],
     sockets: Map<string, WebSocket>,
     auth: AuthManager,
@@ -44,6 +61,7 @@ export class GameSession {
     onGameOver: (gameId: string) => void,
   ) {
     this.gameId = gameId;
+    this.format = format;
     this.sockets = sockets;
     this.auth = auth;
     this.db = db;
@@ -146,12 +164,15 @@ export class GameSession {
 
     // Start the engine tick loop immediately so game state (including buffs) is
     // broadcast to clients during the preparation period.
+    this.arenaPreparationActive = true;
     this.engine.applyArenaPreparation();
     this.engine.start();
 
     // Remove the buff when the arena doors open (arenaOpenTime from map config).
     const arenaOpenTime = this.mapInfo?.arenaOpenTime ?? 30;
-    setTimeout(() => {
+    this.arenaOpenTimeoutId = setTimeout(() => {
+      this.arenaPreparationActive = false;
+      this.arenaOpenTimeoutId = null;
       if (!this.stopped) {
         this.engine.removeArenaPreparation();
       }
@@ -160,14 +181,33 @@ export class GameSession {
 
   stop(): void {
     this.stopped = true;
+    this.arenaPreparationActive = false;
     this.engine.stop();
     if (this.readyTimeoutId) {
       clearTimeout(this.readyTimeoutId);
       this.readyTimeoutId = null;
     }
+    if (this.arenaOpenTimeoutId) {
+      clearTimeout(this.arenaOpenTimeoutId);
+      this.arenaOpenTimeoutId = null;
+    }
   }
 
   handleMessage(userId: string, msg: ClientMessage): void {
+    // Rematch messages are handled even after game over
+    if (msg.type === 'request_rematch') {
+      this.handleRematchRequest(userId, msg.mapMode);
+      return;
+    }
+    if (msg.type === 'accept_rematch') {
+      this.handleRematchAccept(userId);
+      return;
+    }
+    if (msg.type === 'decline_rematch') {
+      this.handleRematchDecline(userId);
+      return;
+    }
+
     if (msg.type === 'client_ready') {
       this.markReady(userId);
       return;
@@ -216,7 +256,18 @@ export class GameSession {
 
   removePlayer(userId: string): void {
     this.sockets.delete(userId);
-    if (this.stopped) return;
+
+    // If someone leaves during a pending rematch, cancel it
+    if (this.rematchRequester) {
+      this.resetRematch();
+      this.broadcast({
+        type: 'rematch_failed',
+        reason: 'A player left the game',
+      } as S2C_RematchFailed);
+    }
+
+    if (this.stopped && !this.gameOver) return;
+    if (this.gameOver) return;
 
     // Check if any team has 0 connected players — if so, the other team wins
     const connectedUserIds = new Set(this.sockets.keys());
@@ -235,6 +286,11 @@ export class GameSession {
     }
   }
 
+  /** Whether all original players are still connected after game over. */
+  get allPlayersPresent(): boolean {
+    return this.players.every(p => this.sockets.has(p.userId));
+  }
+
   isEmpty(): boolean {
     return this.sockets.size === 0;
   }
@@ -244,7 +300,9 @@ export class GameSession {
   }
 
   private handleGameOver(winningTeam: number): void {
-    const msg: S2C_GameOver = { type: 'game_over', winningTeam };
+    this.gameOver = true;
+    const allPresent = this.allPlayersPresent;
+    const msg: S2C_GameOver = { type: 'game_over', winningTeam, allPlayersPresent: allPresent };
     this.broadcast(msg);
 
     // Notify entity deaths
@@ -276,6 +334,123 @@ export class GameSession {
       const won = p.team === winningTeam;
       this.db.recordGameResult(dbId, p.characterId, won);
     }
+  }
+
+  // ── Rematch ──────────────────────────────────────────────────────────
+
+  private handleRematchRequest(userId: string, mapMode: 'random' | 'same' | 'new'): void {
+    // Allow rematch during arena preparation (pre-game) or after game over
+    if (!this.arenaPreparationActive && !this.gameOver) return;
+    if (!this.allPlayersPresent) {
+      this.sendToUser(userId, { type: 'rematch_failed', reason: 'Not all players are present' } as S2C_RematchFailed);
+      return;
+    }
+    if (this.rematchRequester) {
+      this.sendToUser(userId, { type: 'error', message: 'A rematch is already in progress' });
+      return;
+    }
+
+    const requester = this.players.find(p => p.userId === userId);
+    if (!requester) return;
+
+    this.rematchRequester = userId;
+    this.rematchMapMode = mapMode;
+    this.rematchAccepted.clear();
+    this.rematchAccepted.add(userId);
+
+    const total = this.players.length;
+
+    // If 1v1, the requester is the only one who needs to accept — check immediately
+    if (total === this.rematchAccepted.size) {
+      this.executeRematch();
+      return;
+    }
+
+    // Notify all OTHER players about the challenge
+    const challenge: S2C_RematchChallenge = {
+      type: 'rematch_challenge',
+      challengerUsername: requester.username,
+      mapMode,
+      totalPlayers: total,
+      readyCount: 1,
+    };
+    for (const p of this.players) {
+      if (p.userId !== userId) {
+        this.sendToUser(p.userId, challenge);
+      }
+    }
+
+    // Send ready update to the requester too so they see the ready check
+    this.sendToUser(userId, {
+      type: 'rematch_ready_update',
+      readyCount: 1,
+      totalPlayers: total,
+    } as S2C_RematchReadyUpdate);
+  }
+
+  private handleRematchAccept(userId: string): void {
+    if (!this.rematchRequester) return;
+    if (this.rematchAccepted.has(userId)) return;
+
+    this.rematchAccepted.add(userId);
+    const total = this.players.length;
+
+    // Broadcast updated ready count to all players
+    const update: S2C_RematchReadyUpdate = {
+      type: 'rematch_ready_update',
+      readyCount: this.rematchAccepted.size,
+      totalPlayers: total,
+    };
+    this.broadcast(update);
+
+    if (this.rematchAccepted.size === total) {
+      this.executeRematch();
+    }
+  }
+
+  private handleRematchDecline(userId: string): void {
+    if (!this.rematchRequester) return;
+
+    const decliner = this.players.find(p => p.userId === userId);
+    const name = decliner?.username ?? 'A player';
+    this.resetRematch();
+    this.broadcast({
+      type: 'rematch_failed',
+      reason: `${name} declined the rematch`,
+    } as S2C_RematchFailed);
+  }
+
+  private executeRematch(): void {
+    const mapMode = this.rematchMapMode!;
+    let newMapId: string;
+
+    if (mapMode === 'same') {
+      newMapId = this.mapId;
+    } else if (mapMode === 'random') {
+      const mapIds = MAP_LIST.map(m => m.id);
+      newMapId = mapIds[Math.floor(Math.random() * mapIds.length)];
+    } else {
+      // 'new' — iterate to the next map
+      const mapIds = MAP_LIST.map(m => m.id);
+      const currentIdx = mapIds.indexOf(this.mapId);
+      newMapId = mapIds[(currentIdx + 1) % mapIds.length];
+    }
+
+    const info: RematchInfo = {
+      mapId: newMapId,
+      format: this.format,
+      players: this.players,
+      sockets: new Map(this.sockets),
+    };
+
+    this.resetRematch();
+    this.onRematch?.(this.gameId, info);
+  }
+
+  private resetRematch(): void {
+    this.rematchRequester = null;
+    this.rematchMapMode = null;
+    this.rematchAccepted.clear();
   }
 
   private broadcast(msg: ServerMessage): void {

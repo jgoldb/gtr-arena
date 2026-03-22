@@ -1,8 +1,9 @@
 import type { WebSocket } from 'ws';
-import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled, S2C_AdminUsersList, S2C_AdminResult } from '@gtr/shared';
+import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled, S2C_AdminUsersList, S2C_AdminResult, S2C_UserProfile, S2C_Leaderboard, UserProfileData } from '@gtr/shared';
 import type { LobbyUser, LobbyGameInfo } from '@gtr/shared';
 import { GameLobby } from './GameLobby.js';
 import { GameSession } from '../game/GameSession.js';
+import type { RematchInfo } from '../game/GameSession.js';
 import type { AuthManager } from '../auth/AuthManager.js';
 import type { GtrDatabase } from '../db/Database.js';
 
@@ -112,10 +113,16 @@ export class LobbyManager {
       case 'cancel_buff':
       case 'set_resting':
       case 'toggle_god_mode':
+      case 'request_rematch':
+      case 'accept_rematch':
+      case 'decline_rematch':
         if (user.gameSessionId) {
           const session = this.gameSessions.get(user.gameSessionId);
           session?.handleMessage(userId, msg);
         }
+        break;
+      case 'request_lobby_state':
+        this.sendLobbyState(user);
         break;
       case 'return_to_lobby':
         if (user.gameSessionId) {
@@ -131,6 +138,14 @@ export class LobbyManager {
         user.status = 'online';
         user.gameSessionId = null;
         this.broadcastLobbyState();
+        break;
+
+      // Profile / Leaderboard
+      case 'inspect_user':
+        this.handleInspectUser(userId, msg.targetUserId);
+        break;
+      case 'get_leaderboard':
+        this.handleGetLeaderboard(userId);
         break;
 
       // Admin messages
@@ -309,26 +324,113 @@ export class LobbyManager {
       }
     }
 
-    const session = new GameSession(
-      lobby.gameId,
-      lobby.mapId,
-      lobby.format,
-      players,
-      playerSockets,
-      this.auth,
-      this.db,
-      // onGameOver callback — just stop the session engine.
-      // Players remain in 'in-game' status until they individually send 'return_to_lobby'.
-      (gameId: string) => {
-        this.gameSessions.delete(gameId);
-      }
-    );
+    const session = this.createSession(lobby.gameId, lobby.mapId, lobby.format, players, playerSockets);
 
     this.gameSessions.set(lobby.gameId, session);
     this.gameLobbies.delete(lobby.gameId);
 
     session.start();
     this.broadcastLobbyState();
+  }
+
+  // ── Profile / Leaderboard ─────────────────────────────────────────────
+
+  private handleInspectUser(userId: string, targetUserId: string): void {
+    const user = this.users.get(userId);
+    if (!user) return;
+
+    // targetUserId is the socket-level ID like "user_123" — extract DB id
+    const dbId = this.auth.getDbId(targetUserId);
+    if (dbId == null) {
+      this.send(user.socket, { type: 'error', message: 'User not found' });
+      return;
+    }
+
+    const rows = this.db.getAllUsersWithStats();
+    const row = rows.find(r => r.id === dbId);
+    if (!row) {
+      this.send(user.socket, { type: 'error', message: 'User not found' });
+      return;
+    }
+
+    const msg: S2C_UserProfile = {
+      type: 'user_profile',
+      profile: {
+        username: row.username,
+        gamesPlayed: row.games_played,
+        wins: row.wins,
+        losses: row.losses,
+        createdAt: row.created_at,
+      },
+    };
+    this.send(user.socket, msg);
+  }
+
+  private handleGetLeaderboard(userId: string): void {
+    const user = this.users.get(userId);
+    if (!user) return;
+
+    const rows = this.db.getAllUsersWithStats();
+    const entries: UserProfileData[] = rows.map(r => ({
+      username: r.username,
+      gamesPlayed: r.games_played,
+      wins: r.wins,
+      losses: r.losses,
+      createdAt: r.created_at,
+    }));
+
+    const msg: S2C_Leaderboard = { type: 'leaderboard', entries };
+    this.send(user.socket, msg);
+  }
+
+  // ── Session creation ─────────────────────────────────────────────────
+
+  private createSession(
+    gameId: string,
+    mapId: string,
+    format: import('@gtr/shared').GameFormat,
+    players: readonly { userId: string; username: string; team: number; characterId: import('@gtr/shared').CharacterId | null }[],
+    sockets: Map<string, import('ws').WebSocket>,
+  ): GameSession {
+    const session = new GameSession(
+      gameId,
+      mapId,
+      format,
+      players,
+      sockets,
+      this.auth,
+      this.db,
+      // onGameOver — session stays alive for rematch; only cleaned up when empty
+      (_gameId: string) => {},
+    );
+
+    session.onRematch = (oldGameId, info) => this.handleRematch(oldGameId, info);
+    return session;
+  }
+
+  private handleRematch(oldGameId: string, info: RematchInfo): void {
+    // Clean up old session
+    const oldSession = this.gameSessions.get(oldGameId);
+    if (oldSession) {
+      oldSession.stop();
+      this.gameSessions.delete(oldGameId);
+    }
+
+    // Create new game session with same players
+    const newGameId = `game_${this.nextGameId++}`;
+    const newSession = this.createSession(newGameId, info.mapId, info.format, info.players, info.sockets);
+
+    // Update user records to point to the new session
+    for (const p of info.players) {
+      const user = this.users.get(p.userId);
+      if (user) {
+        user.gameSessionId = newGameId;
+        user.status = 'in-game';
+      }
+    }
+
+    this.gameSessions.set(newGameId, newSession);
+    newSession.start();
   }
 
   // ── Admin ────────────────────────────────────────────────────────────
