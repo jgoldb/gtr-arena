@@ -15,6 +15,7 @@ import { UnitTooltip } from './ui/UnitTooltip';
 import { EscapeMenu } from './ui/EscapeMenu';
 import { DebugHUD } from './ui/DebugHUD';
 import { ReconnectOverlay } from './ui/ReconnectOverlay';
+import { ArenaFrames } from './ui/ArenaFrames';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats } from '@gtr/shared';
 import type { Ability } from './engine/combat/Ability';
@@ -66,6 +67,7 @@ let mpGameOverScreen: HTMLDivElement | null = null;
 let mpGameOver = false;
 let mpEscapeMenu: EscapeMenu | null = null;
 let mpDebugHUD: DebugHUD | null = null;
+let mpArenaFrames: ArenaFrames | null = null;
 let mpFrameLoopId: number | null = null;
 let mpSelectedTargetId: string | null = null;
 
@@ -179,6 +181,8 @@ function cleanupMultiplayerUI(): void {
   mpEscapeMenu = null;
   mpDebugHUD?.dispose();
   mpDebugHUD = null;
+  mpArenaFrames?.dispose();
+  mpArenaFrames = null;
   if (mpFrameLoopId !== null) {
     cancelAnimationFrame(mpFrameLoopId);
     mpFrameLoopId = null;
@@ -347,6 +351,9 @@ function startMultiplayer(msg: S2C_GameStart): void {
     } else if (targetEntityId === mpSelectedTargetId) {
       mpTargetFrame?.showCombatText(amount, type as any);
     }
+    if (mpArenaFrames?.hasEntity(targetEntityId)) {
+      mpArenaFrames.showCombatText(targetEntityId, amount, type as any);
+    }
   };
 
   clientEngine.onEnterCombat = (entityId) => {
@@ -418,6 +425,9 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
       mpPlayerFrame?.showCombatText(amount, type as any);
     } else if (targetEntityId === mpSelectedTargetId) {
       mpTargetFrame?.showCombatText(amount, type as any);
+    }
+    if (mpArenaFrames?.hasEntity(targetEntityId)) {
+      mpArenaFrames.showCombatText(targetEntityId, amount, type as any);
     }
   };
 
@@ -563,6 +573,18 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
 
   mpToTFrame = new TargetOfTargetFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
   targetFrameContainer.appendChild(mpToTFrame.element);
+
+  // Arena frames (Gladdy-style opponent frames on right side)
+  mpArenaFrames = new ArenaFrames({ localPlayer: player, getPortrait, onClick: mpSetTarget });
+  document.body.appendChild(mpArenaFrames.element);
+  const arenaEntities = msg.entities
+    .filter(e => e.id !== msg.localEntityId)
+    .map(e => {
+      const targetable = makeTargetable(e.id);
+      return targetable ? { entityId: e.id, targetable } : null;
+    })
+    .filter((e): e is { entityId: string; targetable: Targetable } => e !== null);
+  mpArenaFrames.setEntities(arenaEntities);
 
   // Action bar - abilities come from shared character data
   const abilities: readonly Ability[] = localCharStats.abilities;
@@ -748,6 +770,21 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
         if (totId) totTargetable = makeTargetable(totId);
       }
       mpToTFrame.update(totTargetable);
+    }
+
+    // Arena frames (opponent frames on right side) — hidden during arena preparation
+    if (mpArenaFrames) {
+      const inPrep = clientEngine.getLocalBuffs().some(b => b.id === 'arena-preparation');
+      mpArenaFrames.setVisible(!inPrep);
+      mpArenaFrames.setSelectedTarget(mpSelectedTargetId);
+      mpArenaFrames.update(dt, (entityId) => {
+        const e = clientEngine!.getRemoteEntity(entityId);
+        if (!e) return [];
+        return e.buffs.filter(b => b.type === 'debuff').map(b => ({
+          definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: 'debuff' as const, description: b.description, effects: [] },
+          remaining: b.remaining,
+        }));
+      });
     }
 
     mpPlayerFrame?.updateCombatText(dt);
@@ -1001,6 +1038,7 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'entity_removed':
       clientEngine?.handleEntityRemoved(msg.entityId);
+      mpArenaFrames?.removeEntity(msg.entityId);
       if (msg.username) {
         mpErrorText?.show(`${msg.username} has left the game`, 3000);
       }

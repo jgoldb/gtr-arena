@@ -29,7 +29,9 @@
       "Bash(grep:*)",
       "Bash(wc:*)",
       "Bash(git stash:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(find /c/Users/Joey/Repos/gtr -name *.html -type f)",
+      "Bash(find /c/Users/Joey/Repos/gtr -name *.css -type f)"
     ]
   }
 }
