@@ -1,3 +1,5 @@
 fly.toml
 node_modules
 .git
+dist
+packages/server
