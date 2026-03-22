@@ -1,7 +1,7 @@
 import type { Ability, BuffDefinition } from '@gtr/shared';
 import type { EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot } from '@gtr/shared';
 import type {
-  S2C_CombatEvent, S2C_AbilityEffect, S2C_CooldownUpdate,
+  S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_EntityDied,
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
   EntityPositionData, EntityStateDelta,
@@ -172,6 +172,10 @@ export class ServerEngine {
       } as S2C_CombatEvent);
     };
 
+    this.combatSystem.onFlinchDamage = (target) => {
+      this.pendingEvents.push({ type: 'flinch', entityId: target.id } as S2C_Flinch);
+    };
+
     this.combatSystem.onDirectDamageDealt = (target) => {
       this.cancelResting(target.id);
       const casting = this.castingStates.get(target.id);
@@ -211,6 +215,16 @@ export class ServerEngine {
   removeArenaPreparation(): void {
     for (const entity of this.entities) {
       this.buffSystem.remove(entity, ArenaPreparationBuff.id);
+    }
+  }
+
+  cancelBuff(entityId: string, buffId: string): void {
+    const entity = this.getEntity(entityId);
+    if (!entity) return;
+    const buffs = this.buffSystem.getBuffs(entity);
+    const buff = buffs.find(b => b.definition.id === buffId);
+    if (buff && buff.definition.type === 'buff' && !buff.definition.unremovable) {
+      this.buffSystem.remove(entity, buffId);
     }
   }
 
@@ -487,6 +501,7 @@ export class ServerEngine {
         type: isFriendly ? 'buff' : 'debuff',
         description: ability.description,
         effects: [],
+        unremovable: true,
       });
     }
   }
@@ -1174,6 +1189,7 @@ export class ServerEngine {
         description: b.definition.description,
         shieldRemaining: b.shieldRemaining,
         effects: b.definition.effects.length > 0 ? b.definition.effects : undefined,
+        unremovable: b.definition.unremovable || undefined,
       })),
     }));
   }

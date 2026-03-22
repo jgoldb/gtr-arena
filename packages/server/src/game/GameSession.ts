@@ -186,6 +186,9 @@ export class GameSession {
       case 'cancel_cast':
         this.engine.cancelCastRequest(entityId);
         break;
+      case 'cancel_buff':
+        this.engine.cancelBuff(entityId, msg.buffId);
+        break;
       case 'set_resting':
         this.engine.setResting(entityId, msg.resting);
         break;

@@ -19,6 +19,13 @@ import type { Targetable } from './engine/types';
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas element not found');
 
+// Prevent browser context menu during gameplay
+document.addEventListener('contextmenu', (e) => {
+  if (currentState === 'playground' || currentState === 'multiplayer') {
+    e.preventDefault();
+  }
+});
+
 // Pre-render character face portraits
 const portraits = renderPortraits();
 const getPortrait = (modelName: string) => portraits.get(modelName);
@@ -346,7 +353,13 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     clientEngine!.selectedTargetId = entityId;
     clientEngine!.sendSetTarget(entityId);
   };
-  mpPlayerFrame = new UnitFrame({ getPortrait, onClick: mpSetTarget });
+  mpPlayerFrame = new UnitFrame({
+    getPortrait,
+    onClick: mpSetTarget,
+    onBuffRightClick: (buffId) => {
+      clientEngine?.sendCancelBuff(buffId);
+    },
+  });
   playerFrameContainer.appendChild(mpPlayerFrame.element);
 
   mpTargetFrame = new UnitFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
@@ -484,7 +497,7 @@ function setupMultiplayerUI(msg: S2C_GameStart): void {
     if (mpPlayerFrame) {
       const pBuffs = clientEngine.getLocalBuffs();
       const pBuffList = pBuffs.filter(b => b.type === 'buff').map(b => ({
-        definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'buff', description: b.description, effects: [] },
+        definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'buff', description: b.description, effects: [], unremovable: b.unremovable },
         remaining: b.remaining,
         shieldRemaining: b.shieldRemaining,
       }));
@@ -619,6 +632,10 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'combat_event':
       clientEngine?.handleCombatEvent(msg);
+      break;
+
+    case 'flinch':
+      clientEngine?.handleFlinch(msg);
       break;
 
     case 'ability_effect':
@@ -788,7 +805,13 @@ async function startPlayground(): Promise<void> {
   const targetFrameContainer = document.getElementById('target-frame-container')!;
   playerFrameContainer.innerHTML = '';
   targetFrameContainer.innerHTML = '';
-  const playerFrame = new UnitFrame({ getPortrait, onClick: setTarget });
+  const playerFrame = new UnitFrame({
+    getPortrait,
+    onClick: setTarget,
+    onBuffRightClick: (buffId) => {
+      engine.buffSystem.remove(engine.playerController, buffId);
+    },
+  });
   pgPlayerFrame = playerFrame;
   playerFrameContainer.appendChild(playerFrame.element);
   const targetFrame = new UnitFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });

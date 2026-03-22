@@ -30,6 +30,7 @@ export class ServerCombatSystem {
 
   onCombatText?: (source: ServerEntity, target: ServerEntity, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: ServerEntity) => void;
+  onFlinchDamage?: (target: ServerEntity) => void;
 
   constructor(regenSystem: ServerRegenSystem, buffSystem: ServerBuffSystem, collision: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -238,7 +239,10 @@ export class ServerCombatSystem {
         const damage = baseDamage * multiplier;
         const actualDamage = this.processDamageAbsorb(target, damage, attacker);
         target.hp = Math.max(0, target.hp - actualDamage);
-        if (damage > 0) this.onDirectDamageDealt?.(target);
+        if (damage > 0) {
+          this.onDirectDamageDealt?.(target);
+          this.onFlinchDamage?.(target);
+        }
         if (actualDamage > 0) {
           this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
         }
@@ -287,7 +291,10 @@ export class ServerCombatSystem {
     const damage = Math.round(adjustedBase * multiplier);
     const actualDamage = this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
-    if (damage > 0) this.onDirectDamageDealt?.(target);
+    if (damage > 0) {
+      this.onDirectDamageDealt?.(target);
+      this.onFlinchDamage?.(target);
+    }
     if (actualDamage > 0) {
       this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage');
     }
@@ -359,7 +366,10 @@ export class ServerCombatSystem {
       const damage = Math.round(baseDamage * buffMult * damageMult * critMult);
       const actualDamage = this.processDamageAbsorb(target, damage, attacker);
       target.hp = Math.max(0, target.hp - actualDamage);
-      if (damage > 0) this.onDirectDamageDealt?.(target);
+      if (damage > 0) {
+        this.onDirectDamageDealt?.(target);
+        this.onFlinchDamage?.(target);
+      }
       if (actualDamage > 0) {
         this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
       }

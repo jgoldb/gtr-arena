@@ -5,6 +5,7 @@ import { CharacterModel } from './characters/CharacterModel';
 import { createCharacter, CharacterId } from './characters';
 import type { Ability } from '../combat/Ability';
 import type { Targetable } from '../types';
+import { createTargetingHitArea } from '../targeting/targetingHitArea';
 
 export class PlayerController implements Targetable {
   readonly mesh: THREE.Group;
@@ -53,6 +54,7 @@ export class PlayerController implements Targetable {
     this.mesh.userData.targetRef = this;
     this.characterModel = createCharacter('janitor');
     this.mesh.add(this.characterModel.group);
+    this.mesh.add(createTargetingHitArea());
     this.applyModelStats();
     scene.add(this.mesh);
 
@@ -116,6 +118,10 @@ export class PlayerController implements Targetable {
 
   triggerAbilityAnimation(abilityId: string, targetWorldPos?: THREE.Vector3): void {
     this.characterModel.triggerAbilityAnimation(abilityId, targetWorldPos);
+  }
+
+  triggerFlinch(): void {
+    this.characterModel.triggerFlinch();
   }
 
   setAbilityBuffActive(buffId: string, active: boolean): void {

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { EntitySnapshot, EntityBuffSnapshot } from '@gtr/shared';
 import type {
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
-  S2C_CombatEvent, S2C_AbilityEffect, S2C_CooldownUpdate,
+  S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
@@ -326,6 +326,7 @@ export class ClientEngine {
   private handleBundledEvent(event: import('@gtr/shared').GameTickEvent): void {
     switch (event.type) {
       case 'combat_event': this.handleCombatEvent(event); break;
+      case 'flinch': this.handleFlinch(event); break;
       case 'ability_effect': this.handleAbilityEffect(event); break;
       case 'cooldown_update': this.handleCooldownUpdate(event); break;
       case 'auto_attack_swing': this.handleAutoAttackSwing(event); break;
@@ -528,6 +529,15 @@ export class ClientEngine {
     }
   }
 
+  handleFlinch(msg: S2C_Flinch): void {
+    if (msg.entityId === this.localEntityId) {
+      this.playerController.triggerFlinch();
+    } else {
+      const entity = this.remoteEntities.get(msg.entityId);
+      if (entity) entity.model.triggerFlinch();
+    }
+  }
+
   handleAutoAttackSwing(msg: S2C_AutoAttackSwing): void {
     if (msg.entityId === this.localEntityId) {
       this.playerController.triggerSwing();
@@ -660,6 +670,10 @@ export class ClientEngine {
 
   sendCancelCast(): void {
     this.network.send({ type: 'cancel_cast' });
+  }
+
+  sendCancelBuff(buffId: string): void {
+    this.network.send({ type: 'cancel_buff', buffId });
   }
 
   // ── Resting ─────────────────────────────────────────────────────────

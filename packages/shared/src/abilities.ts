@@ -24,6 +24,7 @@ export interface BuffDefinition {
   readonly effects: readonly BuffEffect[];
   readonly shieldAmount?: number;         // absorption shield HP
   readonly shieldReflectPercent?: number;  // % of incoming damage reflected to attacker
+  readonly unremovable?: boolean;          // true = cannot be right-click cancelled by player
 }
 
 // ── Ability type ────────────────────────────────────────────────────────
@@ -176,6 +177,7 @@ export const ArenaPreparationBuff: BuffDefinition = {
   type: 'buff',
   description: 'Preparing for arena combat. Mana cost of all abilities reduced by 100%.',
   effects: [{ type: 'manaCostPercent', value: -100 }],
+  unremovable: true,
 };
 
 // ── Ability definitions ─────────────────────────────────────────────────

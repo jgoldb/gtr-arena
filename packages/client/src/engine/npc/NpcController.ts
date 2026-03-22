@@ -81,6 +81,10 @@ export class NpcController implements Targetable {
     this.characterModel.setStunned(active);
   }
 
+  triggerFlinch(): void {
+    this.characterModel.triggerFlinch();
+  }
+
   die(): void {
     if (this.dead) return;
     this.dead = true;

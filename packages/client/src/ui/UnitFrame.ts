@@ -5,6 +5,7 @@ export interface UnitFrameOptions {
   localPlayer?: Targetable;
   getPortrait?: (modelName: string) => string | undefined;
   onClick?: (target: Targetable) => void;
+  onBuffRightClick?: (buffId: string) => void;
 }
 
 export class UnitFrame {
@@ -28,6 +29,7 @@ export class UnitFrame {
   private lastModelName = '';
   private currentTarget: Targetable | null = null;
   private onClick: ((target: Targetable) => void) | undefined;
+  private onBuffRightClick: ((buffId: string) => void) | undefined;
   private combatTextEl: HTMLElement;
   private combatTextTimer = -1; // -1 = inactive
   private tooltipEl: HTMLElement;
@@ -37,6 +39,7 @@ export class UnitFrame {
     this.localPlayer = options?.localPlayer;
     this.getPortrait = options?.getPortrait;
     this.onClick = options?.onClick;
+    this.onBuffRightClick = options?.onBuffRightClick;
 
     this.element = document.createElement('div');
     this.element.style.cssText = `
@@ -240,7 +243,7 @@ export class UnitFrame {
       background: rgba(80, 80, 100, 0.8);
       border-radius: 2px;
       overflow: hidden;
-      cursor: default;
+      cursor: pointer;
       ${isDebuff ? 'border: 1.5px solid #cc2222;' : 'border: 1px solid rgba(255,255,255,0.2);'}
     `;
 
@@ -283,6 +286,18 @@ export class UnitFrame {
         this.tooltipEl.style.display = 'none';
       }
     });
+
+    // Right-click to cancel buffs (not debuffs)
+    if (!isDebuff) {
+      icon.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const aura = (icon as any)._aura as ActiveBuff | undefined;
+        if (aura && !aura.definition.unremovable && this.onBuffRightClick) {
+          this.onBuffRightClick(aura.definition.id);
+        }
+      });
+    }
 
     return icon;
   }

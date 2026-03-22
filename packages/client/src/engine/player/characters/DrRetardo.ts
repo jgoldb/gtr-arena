@@ -654,10 +654,18 @@ export class DrRetardo extends CharacterModel {
           if (mat.emissive) {
             // Store original emissive to restore later
             if (mat.userData.rsOrigEmissiveR === undefined) {
-              mat.userData.rsOrigEmissiveR = mat.emissive.r;
-              mat.userData.rsOrigEmissiveG = mat.emissive.g;
-              mat.userData.rsOrigEmissiveB = mat.emissive.b;
-              mat.userData.rsOrigEmissiveIntensity = mat.emissiveIntensity;
+              // If FR already stored true originals, copy from there
+              if (mat.userData.frOrigEmissiveR !== undefined) {
+                mat.userData.rsOrigEmissiveR = mat.userData.frOrigEmissiveR;
+                mat.userData.rsOrigEmissiveG = mat.userData.frOrigEmissiveG;
+                mat.userData.rsOrigEmissiveB = mat.userData.frOrigEmissiveB;
+                mat.userData.rsOrigEmissiveIntensity = mat.userData.frOrigEmissiveIntensity;
+              } else {
+                mat.userData.rsOrigEmissiveR = mat.emissive.r;
+                mat.userData.rsOrigEmissiveG = mat.emissive.g;
+                mat.userData.rsOrigEmissiveB = mat.emissive.b;
+                mat.userData.rsOrigEmissiveIntensity = mat.emissiveIntensity;
+              }
             }
             // Blend toward radioactive green
             mat.emissive.r = mat.userData.rsOrigEmissiveR * (1 - w) + 0.2 * w;
@@ -704,12 +712,20 @@ export class DrRetardo extends CharacterModel {
         if (child instanceof THREE.Mesh) {
           const mat = child.material as THREE.MeshStandardMaterial;
           if (mat.emissive) {
-            // Store originals if not already stored by retard strength
+            // Store originals for restoration
             if (mat.userData.frOrigEmissiveR === undefined) {
-              mat.userData.frOrigEmissiveR = mat.emissive.r;
-              mat.userData.frOrigEmissiveG = mat.emissive.g;
-              mat.userData.frOrigEmissiveB = mat.emissive.b;
-              mat.userData.frOrigEmissiveIntensity = mat.emissiveIntensity;
+              // If RS already stored true originals, copy from there
+              if (mat.userData.rsOrigEmissiveR !== undefined) {
+                mat.userData.frOrigEmissiveR = mat.userData.rsOrigEmissiveR;
+                mat.userData.frOrigEmissiveG = mat.userData.rsOrigEmissiveG;
+                mat.userData.frOrigEmissiveB = mat.userData.rsOrigEmissiveB;
+                mat.userData.frOrigEmissiveIntensity = mat.userData.rsOrigEmissiveIntensity;
+              } else {
+                mat.userData.frOrigEmissiveR = mat.emissive.r;
+                mat.userData.frOrigEmissiveG = mat.emissive.g;
+                mat.userData.frOrigEmissiveB = mat.emissive.b;
+                mat.userData.frOrigEmissiveIntensity = mat.emissiveIntensity;
+              }
             }
             // Blend toward noxious yellow-brown
             mat.emissive.r = mat.userData.frOrigEmissiveR * (1 - w) + 0.7 * w;

@@ -90,6 +90,7 @@ export class LobbyManager {
       case 'auto_attack':
       case 'stop_auto_attack':
       case 'cancel_cast':
+      case 'cancel_buff':
       case 'set_resting':
         if (user.gameSessionId) {
           const session = this.gameSessions.get(user.gameSessionId);

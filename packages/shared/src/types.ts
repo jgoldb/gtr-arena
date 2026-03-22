@@ -45,7 +45,7 @@ export interface EntitySnapshot {
 
 export interface EntityBuffSnapshot {
   entityId: string;
-  buffs: { id: string; name: string; icon: string; type: 'buff' | 'debuff'; remaining: number; duration: number; description: string; shieldRemaining?: number; effects?: readonly { type: string; value: number }[] }[];
+  buffs: { id: string; name: string; icon: string; type: 'buff' | 'debuff'; remaining: number; duration: number; description: string; shieldRemaining?: number; effects?: readonly { type: string; value: number }[]; unremovable?: boolean }[];
 }
 
 export interface GasCloudSnapshot {

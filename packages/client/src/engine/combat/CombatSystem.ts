@@ -25,6 +25,7 @@ export class CombatSystem {
   private collisionSystem: CollisionSystem;
   onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: Targetable) => void;
+  onFlinchDamage?: (target: Targetable) => void;
   onEnterCombat?: (entity: Targetable) => void;
   onLeaveCombat?: (entity: Targetable) => void;
 
@@ -255,6 +256,7 @@ export class CombatSystem {
         target.hp = Math.max(0, target.hp - actualDamage);
         if (damage > 0) {
           this.onDirectDamageDealt?.(target);
+          this.onFlinchDamage?.(target);
         }
         if (actualDamage > 0) {
           this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
@@ -317,6 +319,7 @@ export class CombatSystem {
     target.hp = Math.max(0, target.hp - actualDamage);
     if (damage > 0) {
       this.onDirectDamageDealt?.(target);
+      this.onFlinchDamage?.(target);
     }
     if (actualDamage > 0) {
       this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
@@ -404,7 +407,10 @@ export class CombatSystem {
       const damage = Math.round(baseDamage * buffMult * damageMult * critMult);
       const actualDamage = this.processDamageAbsorb(target, damage, attacker);
       target.hp = Math.max(0, target.hp - actualDamage);
-      if (damage > 0) this.onDirectDamageDealt?.(target);
+      if (damage > 0) {
+        this.onDirectDamageDealt?.(target);
+        this.onFlinchDamage?.(target);
+      }
       if (actualDamage > 0) {
         this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
       }

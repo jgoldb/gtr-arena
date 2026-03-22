@@ -78,6 +78,10 @@ export abstract class CharacterModel {
   protected restingWeight = 0;
   protected restingTime = 0;
 
+  // Flinch animation state (hit reaction)
+  private static readonly FLINCH_DURATION = 0.25;
+  protected flinchTime = -1; // -1 = not playing
+
   // Death animation
   private static readonly DEATH_DURATION = 1.5;
   protected deathTime = -1; // -1 = alive, >= 0 = seconds since death
@@ -161,6 +165,10 @@ export abstract class CharacterModel {
     this.abilityAnimTime = 0;
     this.abilityAnimId = abilityId;
     this.abilityTargetPos = targetWorldPos ?? null;
+  }
+
+  triggerFlinch(): void {
+    this.flinchTime = 0;
   }
 
   get isSwinging(): boolean {
@@ -334,6 +342,16 @@ export abstract class CharacterModel {
       }
     }
 
+    // --- Flinch layer (additive, short recoil on hit) ---
+    if (this.flinchTime >= 0) {
+      this.flinchTime += dt;
+      const t = Math.min(1, this.flinchTime / CharacterModel.FLINCH_DURATION);
+      this.animateFlinch(t);
+      if (t >= 1) {
+        this.flinchTime = -1;
+      }
+    }
+
     // --- Cast animation layer (driven by Engine during cast bar) ---
     if (this.castAnimActive) {
       this.animateCasting(this.castAnimId, this.castAnimProgress);
@@ -396,6 +414,25 @@ export abstract class CharacterModel {
   protected animateAbilityUse(_abilityId: string, _t: number): void {}
   protected animateCasting(_abilityId: string, _t: number): void {}
   protected animateChanneling(_abilityId: string, _t: number): void {}
+
+  protected animateFlinch(t: number): void {
+    // Quick recoil: sharp peak at ~20% then ease out
+    const impact = t < 0.2 ? t / 0.2 : Math.max(0, 1 - (t - 0.2) / 0.8);
+    const ease = impact * impact * (3 - 2 * impact); // smoothstep
+
+    // Body recoils backward with slight lateral twist
+    this.bodyGroup.rotation.x -= ease * 0.2;
+    this.bodyGroup.rotation.z += ease * 0.08;
+
+    // Head snaps back
+    this.headGroup.rotation.x -= ease * 0.15;
+
+    // Arms flare out
+    this.leftArmGroup.rotation.z -= ease * 0.15;
+    this.rightArmGroup.rotation.z += ease * 0.15;
+    this.leftArmGroup.rotation.x -= ease * 0.1;
+    this.rightArmGroup.rotation.x -= ease * 0.1;
+  }
 
   protected animateResting(time: number, weight: number): void {
     const w = weight;

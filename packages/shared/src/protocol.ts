@@ -86,6 +86,11 @@ export interface C2S_SetResting {
   resting: boolean;
 }
 
+export interface C2S_CancelBuff {
+  type: 'cancel_buff';
+  buffId: string;
+}
+
 export interface C2S_ReturnToLobby {
   type: 'return_to_lobby';
 }
@@ -148,6 +153,11 @@ export interface S2C_CombatEvent {
   targetEntityId: string;
   amount: number;
   combatType: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge';
+}
+
+export interface S2C_Flinch {
+  type: 'flinch';
+  entityId: string;
 }
 
 export interface S2C_AbilityEffect {
@@ -255,6 +265,7 @@ export interface EntityStateDelta {
 /** Discrete event bundled into the tick update to reduce WebSocket frames. */
 export type GameTickEvent =
   | S2C_CombatEvent
+  | S2C_Flinch
   | S2C_AbilityEffect
   | S2C_CooldownUpdate
   | S2C_AutoAttackSwing
@@ -307,6 +318,7 @@ export type ClientMessage =
   | C2S_AutoAttack
   | C2S_StopAutoAttack
   | C2S_CancelCast
+  | C2S_CancelBuff
   | C2S_SetResting
   | C2S_ReturnToLobby;
 
@@ -320,6 +332,7 @@ export type ServerMessage =
   | S2C_GameStateUpdate
   | S2C_GameStateSnapshot
   | S2C_CombatEvent
+  | S2C_Flinch
   | S2C_AbilityEffect
   | S2C_CooldownUpdate
   | S2C_AutoAttackSwing

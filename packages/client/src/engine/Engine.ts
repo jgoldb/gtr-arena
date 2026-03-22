@@ -196,6 +196,17 @@ export class Engine {
       }
     };
 
+    // Flinch animation on direct damage (not DoT/channel ticks)
+    this.combatSystem.onFlinchDamage = (target) => {
+      if (target === this.playerController) {
+        this.playerController.triggerFlinch();
+      } else {
+        for (const npc of this.npcs) {
+          if (npc === target) { npc.triggerFlinch(); break; }
+        }
+      }
+    };
+
   }
 
   start(): void {
@@ -376,6 +387,7 @@ export class Engine {
         type: isFriendly ? 'buff' : 'debuff',
         description: ability.description,
         effects: [],
+        unremovable: true,
       });
       // Set initial remaining to channel duration
       this.updateChannelAuraRemaining();
