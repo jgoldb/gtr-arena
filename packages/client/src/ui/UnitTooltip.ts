@@ -8,6 +8,7 @@ export class UnitTooltip {
   private targetEl: HTMLElement;
   private hpBarFill: HTMLElement;
   private hpBarBg: HTMLElement;
+  private deadEl: HTMLElement;
   private localPlayer: Targetable | undefined;
   private lastTarget: Targetable | null = null;
 
@@ -44,10 +45,21 @@ export class UnitTooltip {
     `;
     this.element.appendChild(this.card);
 
+    // Top row — name + dead indicator
+    const topRow = document.createElement('div');
+    topRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;';
+    this.card.appendChild(topRow);
+
     // Player name
     this.nameEl = document.createElement('div');
-    this.nameEl.style.cssText = 'font-size: 13px; font-weight: bold; color: #fff; margin-bottom: 2px;';
-    this.card.appendChild(this.nameEl);
+    this.nameEl.style.cssText = 'font-size: 13px; font-weight: bold; color: #fff;';
+    topRow.appendChild(this.nameEl);
+
+    // Dead indicator
+    this.deadEl = document.createElement('div');
+    this.deadEl.style.cssText = 'font-size: 11px; font-weight: bold; color: #cc2222; display: none;';
+    this.deadEl.textContent = 'Dead';
+    topRow.appendChild(this.deadEl);
 
     // Character / model name
     this.modelEl = document.createElement('div');
@@ -134,6 +146,9 @@ export class UnitTooltip {
     // Name — colored by hostility
     this.nameEl.textContent = target.name;
     this.nameEl.style.color = hostile ? '#ff4444' : '#44ff44';
+
+    // Dead indicator
+    this.deadEl.style.display = target.dead ? '' : 'none';
 
     // Character model name
     this.modelEl.textContent = target.modelName;
