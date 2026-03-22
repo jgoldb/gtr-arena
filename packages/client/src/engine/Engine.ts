@@ -22,6 +22,7 @@ import {
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   disposeGroup,
 } from './effects/VisualEffects';
+import { keybindManager } from '../ui/KeybindManager';
 
 interface ActiveGasCloud extends GasCloudVisual {
   center: THREE.Vector3;
@@ -1120,8 +1121,8 @@ export class Engine {
     this.playerController.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(this.playerController, 'retard-strength'));
     this.playerController.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(this.playerController, 'full-retard'));
 
-    // Resting toggle — "R" key
-    const rKeyDown = this.input.isKeyDown('KeyR');
+    // Resting toggle
+    const rKeyDown = this.input.isKeyDown(keybindManager.getCode('rest'));
     if (rKeyDown && !this.rKeyWasDown) {
       if (this.resting) {
         this.stopResting();
@@ -1138,8 +1139,8 @@ export class Engine {
     }
     this.tabKeyWasDown = tabDown;
 
-    // F key — target the target's target
-    const fDown = this.input.isKeyDown('KeyF');
+    // Target of target key
+    const fDown = this.input.isKeyDown(keybindManager.getCode('target_of_target'));
     if (fDown && !this.fKeyWasDown) {
       const ct = this.targetingSystem.currentTarget;
       if (ct && 'autoAttackTarget' in ct) {
@@ -1168,10 +1169,10 @@ export class Engine {
 
     // Cancel resting on movement
     if (this.resting) {
-      const wDown = this.input.isKeyDown('KeyW');
-      const sDown = this.input.isKeyDown('KeyS');
-      const aDown = this.input.isKeyDown('KeyA');
-      const dDown = this.input.isKeyDown('KeyD');
+      const wDown = this.input.isKeyDown(keybindManager.getCode('move_forward'));
+      const sDown = this.input.isKeyDown(keybindManager.getCode('move_backward'));
+      const aDown = this.input.isKeyDown(keybindManager.getCode('move_left'));
+      const dDown = this.input.isKeyDown(keybindManager.getCode('move_right'));
       const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
       const jumping = this.input.isKeyDown('Space');
       if (wDown || sDown || aDown || dDown || bothMouse || jumping) {

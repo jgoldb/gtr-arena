@@ -12,7 +12,8 @@ import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
 import { Nameplates } from './ui/Nameplates';
 import { UnitTooltip } from './ui/UnitTooltip';
-import { EscapeMenu } from './ui/EscapeMenu';
+import { EscapeMenu, type EscapeMenuButton } from './ui/EscapeMenu';
+import { KeybindMenu } from './ui/KeybindMenu';
 import { DebugHUD } from './ui/DebugHUD';
 import { ReconnectOverlay } from './ui/ReconnectOverlay';
 import { ArenaFrames } from './ui/ArenaFrames';
@@ -88,6 +89,13 @@ let pgDeathFrame: DeathFrame | null = null;
 let pgCastBarContainer: HTMLDivElement | null = null;
 let pgEscapeMenu: EscapeMenu | null = null;
 let pgDebugHUD: DebugHUD | null = null;
+
+// Lobby escape menu
+let lobbyEscapeMenu: EscapeMenu | null = null;
+
+// Shared keybind menu (persists across game modes)
+const keybindMenu = new KeybindMenu();
+document.body.appendChild(keybindMenu.element);
 let pgFrameLoopId: number | null = null;
 let pgResizeHandler: (() => void) | null = null;
 
@@ -142,6 +150,8 @@ function cleanupCurrentState(): void {
   authScreen = null;
   lobbyScreen?.destroy();
   lobbyScreen = null;
+  lobbyEscapeMenu?.dispose();
+  lobbyEscapeMenu = null;
   gameLobbyScreen?.destroy();
   gameLobbyScreen = null;
   adminScreen?.destroy();
@@ -282,7 +292,50 @@ function showLobby(): void {
     showAuth();
   };
   lobbyScreen.onAdmin = () => showAdmin();
+  lobbyScreen.onMenu = () => lobbyEscapeMenu?.open();
   document.body.appendChild(lobbyScreen.element);
+
+  // Lobby escape menu
+  const lobbyMenuButtons: EscapeMenuButton[] = [];
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    lobbyMenuButtons.push({
+      label: 'Playground',
+      onClick: () => lobbyScreen?.onPlayground?.(),
+      color: 'rgba(90, 61, 138, 0.8)',
+      hoverColor: 'rgba(112, 80, 168, 0.9)',
+    });
+  }
+  if (isAdmin) {
+    lobbyMenuButtons.push({
+      label: 'Manage Users',
+      onClick: () => lobbyScreen?.onAdmin?.(),
+      color: 'rgba(138, 90, 32, 0.8)',
+      hoverColor: 'rgba(168, 112, 48, 0.9)',
+    });
+  }
+  lobbyMenuButtons.push({
+    label: 'Change Password',
+    onClick: () => lobbyScreen?.showChangePasswordDialog(),
+    color: 'rgba(60, 60, 100, 0.8)',
+    hoverColor: 'rgba(70, 70, 120, 0.9)',
+  });
+  lobbyMenuButtons.push({
+    label: 'Logout',
+    onClick: () => lobbyScreen?.onLogout?.(),
+    color: 'rgba(160, 50, 50, 0.8)',
+    hoverColor: 'rgba(180, 60, 60, 0.9)',
+  });
+
+  lobbyEscapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {},  // Not used in lobby mode
+    customButtons: lobbyMenuButtons,
+    onKeybinds: () => {
+      lobbyEscapeMenu?.close();
+      keybindMenu.open(() => lobbyEscapeMenu?.open());
+    },
+  });
+  lobbyEscapeMenu.element.style.zIndex = '1050';
+  document.body.appendChild(lobbyEscapeMenu.element);
 
   // Request fresh lobby data (needed when returning from admin/game screens)
   network?.send({ type: 'request_lobby_state' });
@@ -290,6 +343,8 @@ function showLobby(): void {
 
 function showAdmin(): void {
   lobbyScreen?.element.remove();
+  lobbyEscapeMenu?.dispose();
+  lobbyEscapeMenu = null;
   adminScreen?.destroy();
 
   const localDbId = parseInt(localUserId.replace('user_', ''), 10);
@@ -310,6 +365,8 @@ function showAdmin(): void {
 function showGameLobby(): void {
   // Don't clean up lobby screen fully — just remove it from view
   lobbyScreen?.element.remove();
+  lobbyEscapeMenu?.dispose();
+  lobbyEscapeMenu = null;
   gameLobbyScreen?.destroy();
   currentState = 'game-lobby';
 
@@ -708,6 +765,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       network?.send({ type: 'request_rematch', mapMode });
     },
     confirmExit: () => !mpGameOver,
+    onKeybinds: () => {
+      mpEscapeMenu?.close();
+      keybindMenu.open(() => mpEscapeMenu?.open());
+    },
   });
   document.body.appendChild(mpEscapeMenu.element);
 
@@ -1603,6 +1664,10 @@ async function startPlayground(): Promise<void> {
         return true;
       }
       return false;
+    },
+    onKeybinds: () => {
+      escapeMenu.close();
+      keybindMenu.open(() => escapeMenu.open());
     },
   });
   pgEscapeMenu = escapeMenu;

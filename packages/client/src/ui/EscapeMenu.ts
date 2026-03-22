@@ -1,3 +1,10 @@
+export interface EscapeMenuButton {
+  label: string;
+  onClick: () => void;
+  color?: string;
+  hoverColor?: string;
+}
+
 export interface EscapeMenuCallbacks {
   onReturnToLobby: () => void;
   /** If provided, called when Escape is pressed while menu is closed. Return true to suppress opening the menu. */
@@ -8,6 +15,10 @@ export interface EscapeMenuCallbacks {
   onRematch?: (mapMode: 'random' | 'same' | 'new') => void;
   /** If true (or returns true), show a confirmation before exiting. */
   confirmExit?: boolean | (() => boolean);
+  /** Called when the player clicks the Keybinds button. */
+  onKeybinds?: () => void;
+  /** If provided, these buttons replace the default Exit Game button. */
+  customButtons?: EscapeMenuButton[];
 }
 
 export class EscapeMenu {
@@ -15,7 +26,7 @@ export class EscapeMenu {
   private box: HTMLElement;
   private _isOpen = false;
   private rematchPollId: ReturnType<typeof setInterval> | null = null;
-  private exitBtn!: HTMLButtonElement;
+  private exitBtn: HTMLButtonElement | null = null;
   private confirmRow: HTMLDivElement | null = null;
 
   // Rematch UI elements
@@ -60,37 +71,82 @@ export class EscapeMenu {
       this.box.appendChild(this.rematchSection!);
     }
 
-    // Exit Game button
-    this.exitBtn = document.createElement('button');
-    const exitBtn = this.exitBtn;
-    exitBtn.textContent = 'Exit Game';
-    exitBtn.style.cssText = `
-      display: block; width: 100%;
-      padding: 10px 24px; font-size: 14px;
-      background: rgba(160, 50, 50, 0.8); color: #ddd;
-      border: 1px solid rgba(200, 80, 80, 0.3); border-radius: 4px;
-      cursor: pointer; outline: none;
-      font-family: inherit;
-    `;
-    exitBtn.addEventListener('mouseenter', () => {
-      if (!this.confirmRow) exitBtn.style.background = 'rgba(180, 60, 60, 0.9)';
-    });
-    exitBtn.addEventListener('mouseleave', () => {
-      if (!this.confirmRow) exitBtn.style.background = 'rgba(160, 50, 50, 0.8)';
-    });
-    exitBtn.addEventListener('click', () => {
-      const confirm = typeof this.callbacks.confirmExit === 'function'
-        ? this.callbacks.confirmExit()
-        : this.callbacks.confirmExit;
-      if (confirm) {
-        this.showExitConfirm();
-      } else {
-        this.close();
-        this.callbacks.onReturnToLobby();
-      }
-    });
+    // Keybinds button
+    if (callbacks.onKeybinds) {
+      const keybindsBtn = document.createElement('button');
+      keybindsBtn.textContent = 'Keybinds';
+      keybindsBtn.style.cssText = `
+        display: block; width: 100%;
+        padding: 10px 24px; font-size: 14px;
+        background: rgba(60, 60, 100, 0.8); color: #ddd;
+        border: 1px solid rgba(100, 100, 160, 0.3); border-radius: 4px;
+        cursor: pointer; outline: none;
+        font-family: inherit;
+        margin-bottom: 10px;
+      `;
+      keybindsBtn.addEventListener('mouseenter', () => {
+        keybindsBtn.style.background = 'rgba(70, 70, 120, 0.9)';
+      });
+      keybindsBtn.addEventListener('mouseleave', () => {
+        keybindsBtn.style.background = 'rgba(60, 60, 100, 0.8)';
+      });
+      keybindsBtn.addEventListener('click', () => {
+        callbacks.onKeybinds!();
+      });
+      this.box.appendChild(keybindsBtn);
+    }
 
-    this.box.appendChild(exitBtn);
+    if (callbacks.customButtons) {
+      // Custom button mode (e.g. lobby menu)
+      for (let i = 0; i < callbacks.customButtons.length; i++) {
+        const btnDef = callbacks.customButtons[i];
+        const btn = this.makeMenuButton(
+          btnDef.label,
+          btnDef.color ?? 'rgba(60, 60, 100, 0.8)',
+          btnDef.hoverColor ?? 'rgba(70, 70, 120, 0.9)',
+        );
+        if (i === callbacks.customButtons.length - 1) {
+          btn.style.marginBottom = '0';
+        }
+        btn.addEventListener('click', () => {
+          this.close();
+          btnDef.onClick();
+        });
+        this.box.appendChild(btn);
+      }
+    } else {
+      // Default: Exit Game button
+      this.exitBtn = document.createElement('button');
+      const exitBtn = this.exitBtn;
+      exitBtn.textContent = 'Exit Game';
+      exitBtn.style.cssText = `
+        display: block; width: 100%;
+        padding: 10px 24px; font-size: 14px;
+        background: rgba(160, 50, 50, 0.8); color: #ddd;
+        border: 1px solid rgba(200, 80, 80, 0.3); border-radius: 4px;
+        cursor: pointer; outline: none;
+        font-family: inherit;
+      `;
+      exitBtn.addEventListener('mouseenter', () => {
+        if (!this.confirmRow) exitBtn.style.background = 'rgba(180, 60, 60, 0.9)';
+      });
+      exitBtn.addEventListener('mouseleave', () => {
+        if (!this.confirmRow) exitBtn.style.background = 'rgba(160, 50, 50, 0.8)';
+      });
+      exitBtn.addEventListener('click', () => {
+        const confirm = typeof this.callbacks.confirmExit === 'function'
+          ? this.callbacks.confirmExit()
+          : this.callbacks.confirmExit;
+        if (confirm) {
+          this.showExitConfirm();
+        } else {
+          this.close();
+          this.callbacks.onReturnToLobby();
+        }
+      });
+
+      this.box.appendChild(exitBtn);
+    }
     this.element.appendChild(this.box);
 
     // Close when clicking backdrop (not the panel)
@@ -226,10 +282,10 @@ export class EscapeMenu {
   private showExitConfirm(): void {
     if (this.confirmRow) return;
 
-    this.exitBtn.style.background = 'rgba(80, 50, 50, 0.5)';
-    this.exitBtn.style.color = '#666';
-    this.exitBtn.style.cursor = 'default';
-    this.exitBtn.style.borderColor = 'rgba(100, 60, 60, 0.2)';
+    this.exitBtn!.style.background = 'rgba(80, 50, 50, 0.5)';
+    this.exitBtn!.style.color = '#666';
+    this.exitBtn!.style.cursor = 'default';
+    this.exitBtn!.style.borderColor = 'rgba(100, 60, 60, 0.2)';
 
     this.confirmRow = document.createElement('div');
     this.confirmRow.style.cssText = 'margin-top: 10px; text-align: center;';
@@ -272,10 +328,29 @@ export class EscapeMenu {
   private hideExitConfirm(): void {
     this.confirmRow?.remove();
     this.confirmRow = null;
-    this.exitBtn.style.background = 'rgba(160, 50, 50, 0.8)';
-    this.exitBtn.style.color = '#ddd';
-    this.exitBtn.style.cursor = 'pointer';
-    this.exitBtn.style.borderColor = 'rgba(200, 80, 80, 0.3)';
+    if (this.exitBtn) {
+      this.exitBtn.style.background = 'rgba(160, 50, 50, 0.8)';
+      this.exitBtn.style.color = '#ddd';
+      this.exitBtn.style.cursor = 'pointer';
+      this.exitBtn.style.borderColor = 'rgba(200, 80, 80, 0.3)';
+    }
+  }
+
+  private makeMenuButton(text: string, bg: string, hoverBg: string): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.textContent = text;
+    btn.style.cssText = `
+      display: block; width: 100%;
+      padding: 10px 24px; font-size: 14px;
+      background: ${bg}; color: #ddd;
+      border: 1px solid rgba(100, 100, 160, 0.3); border-radius: 4px;
+      cursor: pointer; outline: none;
+      font-family: inherit;
+      margin-bottom: 10px;
+    `;
+    btn.addEventListener('mouseenter', () => { btn.style.background = hoverBg; });
+    btn.addEventListener('mouseleave', () => { btn.style.background = bg; });
+    return btn;
   }
 
   dispose(): void {

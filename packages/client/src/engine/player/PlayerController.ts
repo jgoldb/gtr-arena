@@ -6,6 +6,7 @@ import { createCharacter, CharacterId } from './characters';
 import type { Ability } from '../combat/Ability';
 import type { Targetable } from '../types';
 import { createTargetingHitArea } from '../targeting/targetingHitArea';
+import { keybindManager } from '../../ui/KeybindManager';
 
 export class PlayerController implements Targetable {
   readonly mesh: THREE.Group;
@@ -168,7 +169,12 @@ export class PlayerController implements Targetable {
   }
 
   private generateKeyScramble(): void {
-    const keys = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
+    const keys = [
+      keybindManager.getCode('move_forward'),
+      keybindManager.getCode('move_left'),
+      keybindManager.getCode('move_backward'),
+      keybindManager.getCode('move_right'),
+    ];
     let shuffled: string[];
     do {
       shuffled = [...keys];
@@ -301,10 +307,14 @@ export class PlayerController implements Targetable {
     // Both mouse buttons held = virtual W key press (scrambled by discombobulate)
     const bothMouseHeld = leftHeld && rightHeld;
 
-    const wDown = this.input.isKeyDown(this.getMovementKey('KeyW')) || (bothMouseHeld && this.getMovementKey('KeyW') === 'KeyW');
-    const sDown = this.input.isKeyDown(this.getMovementKey('KeyS')) || (bothMouseHeld && this.getMovementKey('KeyS') === 'KeyW');
-    const dDown = this.input.isKeyDown(this.getMovementKey('KeyD')) || (bothMouseHeld && this.getMovementKey('KeyD') === 'KeyW');
-    const aDown = this.input.isKeyDown(this.getMovementKey('KeyA')) || (bothMouseHeld && this.getMovementKey('KeyA') === 'KeyW');
+    const fwdCode = keybindManager.getCode('move_forward');
+    const bwdCode = keybindManager.getCode('move_backward');
+    const leftCode = keybindManager.getCode('move_left');
+    const rightCode = keybindManager.getCode('move_right');
+    const wDown = this.input.isKeyDown(this.getMovementKey(fwdCode)) || (bothMouseHeld && this.getMovementKey(fwdCode) === fwdCode);
+    const sDown = this.input.isKeyDown(this.getMovementKey(bwdCode)) || (bothMouseHeld && this.getMovementKey(bwdCode) === fwdCode);
+    const dDown = this.input.isKeyDown(this.getMovementKey(rightCode)) || (bothMouseHeld && this.getMovementKey(rightCode) === fwdCode);
+    const aDown = this.input.isKeyDown(this.getMovementKey(leftCode)) || (bothMouseHeld && this.getMovementKey(leftCode) === fwdCode);
     if (this.godMode && rightHeld) {
       // 3D flight: W/S follows camera pitch, A/D strafes horizontally
       const elevation = this.cameraElevationGetter();

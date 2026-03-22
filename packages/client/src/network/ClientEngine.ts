@@ -27,6 +27,7 @@ import {
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   disposeGroup,
 } from '../engine/effects/VisualEffects';
+import { keybindManager } from '../ui/KeybindManager';
 
 interface RemoteEntity {
   id: string;
@@ -828,8 +829,8 @@ export class ClientEngine {
       this.playerController.setChannelAnimation(null, 0);
     }
 
-    // Resting toggle — "R" key
-    const rKeyDown = this.input.isKeyDown('KeyR');
+    // Resting toggle
+    const rKeyDown = this.input.isKeyDown(keybindManager.getCode('rest'));
     if (rKeyDown && !this.rKeyWasDown) {
       if (this.resting) {
         this.stopResting();
@@ -848,10 +849,10 @@ export class ClientEngine {
 
     // Cancel resting on movement or jump
     if (this.resting) {
-      const wDown = this.input.isKeyDown('KeyW');
-      const sDown = this.input.isKeyDown('KeyS');
-      const aDown = this.input.isKeyDown('KeyA');
-      const dDown = this.input.isKeyDown('KeyD');
+      const wDown = this.input.isKeyDown(keybindManager.getCode('move_forward'));
+      const sDown = this.input.isKeyDown(keybindManager.getCode('move_backward'));
+      const aDown = this.input.isKeyDown(keybindManager.getCode('move_left'));
+      const dDown = this.input.isKeyDown(keybindManager.getCode('move_right'));
       const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
       const jumping = this.input.isKeyDown('Space');
       if (wDown || sDown || aDown || dDown || bothMouse || jumping) {
@@ -1004,8 +1005,8 @@ export class ClientEngine {
     }
     this.tabKeyWasDown = tabDown;
 
-    // F key — target the target's target
-    const fDown = this.input.isKeyDown('KeyF');
+    // Target of target key
+    const fDown = this.input.isKeyDown(keybindManager.getCode('target_of_target'));
     if (fDown && !this.fKeyWasDown && this.selectedTargetId) {
       const isSelf = this.selectedTargetId === this.localEntityId;
       const totId = isSelf

@@ -1,5 +1,6 @@
 import { YARDS_TO_UNITS, type Ability } from '../engine/combat/Ability';
 import type { CombatSystem } from '../engine/combat/CombatSystem';
+import { keybindManager } from './KeybindManager';
 
 export interface ActionBarSlot {
   ability: Ability | null;
@@ -16,37 +17,39 @@ export interface ActionBarCallbacks {
   isDisabled?: () => boolean;
 }
 
-const DEFAULT_KEYBINDS: { label: string; code: string }[] = [
-  { label: '1', code: 'Digit1' },
-  { label: '2', code: 'Digit2' },
-  { label: '3', code: 'Digit3' },
-  { label: '4', code: 'Digit4' },
-  { label: '5', code: 'Digit5' },
-  { label: '6', code: 'Digit6' },
+/** Action IDs in the KeybindManager that correspond to action bar slot indices */
+const SLOT_ACTION_IDS = [
+  'action_1', 'action_2', 'action_3', 'action_4',
+  'action_5', 'action_6', 'action_7', 'action_8',
 ];
 
 export class ActionBar {
   readonly element: HTMLElement;
   private slots: ActionBarSlot[] = [];
   private slotElements: HTMLElement[] = [];
+  private keybindLabelEls: HTMLElement[] = [];
   private cooldownOverlays: HTMLElement[] = [];
   private cooldownTexts: HTMLElement[] = [];
   private statusOverlays: HTMLElement[] = [];
   private tooltipEl: HTMLElement;
   private callbacks: ActionBarCallbacks;
   private dragSourceIndex: number | null = null;
+  private unsubKeybinds: (() => void) | null = null;
 
   constructor(callbacks: ActionBarCallbacks) {
     this.callbacks = callbacks;
 
-    // Initialize 6 slots with default keybinds
-    for (let i = 0; i < 6; i++) {
+    // Initialize slots from keybind manager
+    for (let i = 0; i < SLOT_ACTION_IDS.length; i++) {
       this.slots.push({
         ability: null,
-        keybind: DEFAULT_KEYBINDS[i].label,
-        keyCode: DEFAULT_KEYBINDS[i].code,
+        keybind: keybindManager.getDisplayLabel(SLOT_ACTION_IDS[i]),
+        keyCode: keybindManager.getCode(SLOT_ACTION_IDS[i]),
       });
     }
+
+    // Re-sync when keybinds change
+    this.unsubKeybinds = keybindManager.onChange(() => this.refreshKeybinds());
 
     // Shared tooltip element (positioned on hover, avoids per-slot clipping)
     this.tooltipEl = document.createElement('div');
@@ -83,7 +86,7 @@ export class ActionBar {
       user-select: none;
     `;
 
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < SLOT_ACTION_IDS.length; i++) {
       const slot = this.createSlotElement(i);
       this.element.appendChild(slot);
     }
@@ -247,6 +250,7 @@ export class ActionBar {
     `;
     keybindEl.textContent = this.slots[index].keybind;
     container.appendChild(keybindEl);
+    this.keybindLabelEls.push(keybindEl);
 
     // Tooltip hover
     container.addEventListener('mouseenter', () => {
@@ -397,7 +401,18 @@ export class ActionBar {
     }
   };
 
+  private refreshKeybinds(): void {
+    for (let i = 0; i < SLOT_ACTION_IDS.length; i++) {
+      this.slots[i].keybind = keybindManager.getDisplayLabel(SLOT_ACTION_IDS[i]);
+      this.slots[i].keyCode = keybindManager.getCode(SLOT_ACTION_IDS[i]);
+      if (this.keybindLabelEls[i]) {
+        this.keybindLabelEls[i].textContent = this.slots[i].keybind;
+      }
+    }
+  }
+
   dispose(): void {
+    this.unsubKeybinds?.();
     window.removeEventListener('keydown', this.onKeyDown);
     this.tooltipEl.remove();
     this.element.remove();

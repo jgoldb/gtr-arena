@@ -15,6 +15,8 @@ export class LobbyScreen {
   onPlayground?: () => void;
   onLogout?: () => void;
   onAdmin?: () => void;
+  onChangePassword?: () => void;
+  onMenu?: () => void;
 
   constructor(network: NetworkManager, localUserId: string, isAdmin = false) {
     this.network = network;
@@ -154,25 +156,9 @@ export class LobbyScreen {
     });
     btnRow.appendChild(leaderboardBtn);
 
-    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-      const playgroundBtn = this.makeButton('Playground', '#5a3d8a', '#7050a8');
-      playgroundBtn.addEventListener('click', () => this.onPlayground?.());
-      btnRow.appendChild(playgroundBtn);
-    }
-
-    if (isAdmin) {
-      const adminBtn = this.makeButton('Admin', '#8a5a20', '#a87030');
-      adminBtn.addEventListener('click', () => this.onAdmin?.());
-      btnRow.appendChild(adminBtn);
-    }
-
-    const changePwBtn = this.makeButton('Change PW', '#3a4a5a', '#4a5e72');
-    changePwBtn.addEventListener('click', () => this.showChangePasswordDialog());
-    btnRow.appendChild(changePwBtn);
-
-    const logoutBtn = this.makeButton('Logout', '#6e2d2d', '#8a3a3a');
-    logoutBtn.addEventListener('click', () => this.onLogout?.());
-    btnRow.appendChild(logoutBtn);
+    const menuBtn = this.makeButton('Menu', '#3a3a50', '#4a4a66');
+    menuBtn.addEventListener('click', () => this.onMenu?.());
+    btnRow.appendChild(menuBtn);
 
     topBar.appendChild(titleArea);
     topBar.appendChild(btnRow);
@@ -230,7 +216,17 @@ export class LobbyScreen {
     const ctx = canvas.getContext('2d')!;
     const particles: { x: number; y: number; vx: number; vy: number; size: number; alpha: number; color: string }[] = [];
 
-    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+    const resize = () => {
+      const oldW = canvas.width || 1;
+      const oldH = canvas.height || 1;
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      // Scale particle positions proportionally so they don't bunch up
+      for (const p of particles) {
+        p.x = (p.x / oldW) * canvas.width;
+        p.y = (p.y / oldH) * canvas.height;
+      }
+    };
     resize();
     window.addEventListener('resize', resize);
 
@@ -546,7 +542,7 @@ export class LobbyScreen {
 
   // ── Change Password Dialog ──────────────────────────────────────
 
-  private showChangePasswordDialog(): void {
+  showChangePasswordDialog(): void {
     const overlay = document.createElement('div');
     overlay.style.cssText = `
       position: fixed; inset: 0; z-index: 1100;
