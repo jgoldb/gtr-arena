@@ -107,6 +107,10 @@ export class ClientEngine {
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
 
+  // Entities fading out before removal
+  private static readonly ENTITY_FADE_DURATION = 1.5;
+  private fadingEntities = new Map<string, { model: CharacterModel; mesh: THREE.Group; elapsed: number }>();
+
   // Resting state
   private resting = false;
   private rKeyWasDown = false;
@@ -418,13 +422,17 @@ export class ClientEngine {
     const entity = this.remoteEntities.get(entityId);
     if (!entity) return;
 
-    // Remove mesh from scene
-    this.scene.remove(entity.mesh);
-
     // Clear target if we were targeting this entity
     if (this.selectedTargetId === entityId) {
       this.selectTarget(null);
     }
+
+    // Start fade-out — mesh stays in scene until fade completes
+    this.fadingEntities.set(entityId, {
+      model: entity.model,
+      mesh: entity.mesh,
+      elapsed: 0,
+    });
 
     this.remoteEntities.delete(entityId);
   }
@@ -937,6 +945,18 @@ export class ClientEngine {
         speedMultiplier: 1,
         strafeDirection: 0,
       });
+    }
+
+    // Update fading-out entities
+    for (const [id, fading] of this.fadingEntities) {
+      fading.elapsed += dt;
+      const t = fading.elapsed / ClientEngine.ENTITY_FADE_DURATION;
+      if (t >= 1) {
+        this.scene.remove(fading.mesh);
+        this.fadingEntities.delete(id);
+      } else {
+        fading.model.setOpacity(1 - t);
+      }
     }
 
     // Update gas cloud visuals

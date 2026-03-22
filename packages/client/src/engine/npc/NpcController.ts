@@ -29,6 +29,7 @@ export class NpcController implements Targetable {
   castingTotalTime = 0;
   castingIsChannel = false;
   private static readonly DESPAWN_DELAY = 10;
+  private static readonly FADE_DURATION = 2;
   private deathTimer = 0;
   private characterModel: CharacterModel;
 
@@ -101,6 +102,12 @@ export class NpcController implements Targetable {
   update(dt: number): void {
     if (this.dead) {
       this.deathTimer += dt;
+      // Fade out during the last FADE_DURATION seconds before despawn
+      const fadeStart = NpcController.DESPAWN_DELAY - NpcController.FADE_DURATION;
+      if (this.deathTimer >= fadeStart) {
+        const t = (this.deathTimer - fadeStart) / NpcController.FADE_DURATION;
+        this.characterModel.setOpacity(Math.max(0, 1 - t));
+      }
       this.characterModel.update(dt, IDLE_INPUT);
       return;
     }

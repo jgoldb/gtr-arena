@@ -99,6 +99,7 @@ export class TargetingSystem {
     for (const hit of intersects) {
       const targetable = this.findTargetable(hit.object);
       if (targetable) {
+        if (targetable === this.getLocalPlayer()) continue;
         this.currentTarget = targetable;
         return;
       }
@@ -126,7 +127,7 @@ export class TargetingSystem {
     for (const hit of intersects) {
       const targetable = this.findTargetable(hit.object);
       if (targetable) {
-        if (targetable === this.getLocalPlayer()) return null;
+        if (targetable === this.getLocalPlayer()) continue;
         this.currentTarget = targetable;
         return targetable;
       }
@@ -215,7 +216,10 @@ export class TargetingSystem {
     const intersects = this.raycaster.intersectObjects(this.scene.children, true);
     for (const hit of intersects) {
       const targetable = this.findTargetable(hit.object);
-      if (targetable) return targetable;
+      if (targetable) {
+        if (targetable === this.getLocalPlayer()) continue;
+        return targetable;
+      }
       if (this.isEnvironmentBlocker(hit)) break;
     }
     return null;
