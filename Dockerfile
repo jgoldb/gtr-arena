@@ -18,7 +18,7 @@ COPY package*.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/client/package.json packages/client/
 COPY packages/server/package.json packages/server/
-RUN npm ci --omit=dev
+RUN apk add --no-cache python3 make g++ && npm ci --omit=dev && apk del python3 make g++
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/client/dist packages/client/dist
 COPY --from=build /app/packages/server/dist packages/server/dist
