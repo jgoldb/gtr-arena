@@ -1,5 +1,5 @@
-import type { CharacterId } from './characters';
-import type { GameFormat, EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot, LobbyGameInfo, LobbyUser, GameLobbyPlayer } from './types';
+import type { CharacterId } from './characters.js';
+import type { GameFormat, EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot, LobbyGameInfo, LobbyUser, GameLobbyPlayer } from './types.js';
 
 // ── Client -> Server Messages ───────────────────────────────────────────
 

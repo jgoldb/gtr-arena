@@ -1,8 +1,8 @@
-import type { Ability } from './abilities';
+import type { Ability } from './abilities.js';
 import {
   Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut,
   BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard,
-} from './abilities';
+} from './abilities.js';
 
 export type CharacterId = 'janitor' | 'dr-retardo';
 
