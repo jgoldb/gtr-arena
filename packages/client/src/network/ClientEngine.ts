@@ -75,6 +75,7 @@ export class ClientEngine {
   private animationFrameId: number | null = null;
   private static readonly SEND_RATE = 1000 / 20; // 20 Hz
   private sendAccumulator = 0;
+  private lastSentPosition = { x: NaN, y: NaN, z: NaN, rotationY: NaN, isMoving: false };
 
   // Visual effects
   private gasClouds = new Map<string, GasCloudVisual & { elapsed: number; duration: number }>();
@@ -1064,15 +1065,39 @@ export class ClientEngine {
     this.input.resetDeltas();
   }
 
+  private static readonly POSITION_EPSILON = 0.001;
+  private static readonly ROTATION_EPSILON = 0.001;
+
   private sendPositionUpdate(): void {
     const pos = this.playerController.getPosition();
+    const rotationY = this.playerController.mesh.rotation.y;
+    const isMoving = this.playerController.isMoving ?? false;
+    const prev = this.lastSentPosition;
+
+    // Skip sending if nothing changed
+    if (
+      Math.abs(prev.x - pos.x) < ClientEngine.POSITION_EPSILON
+      && Math.abs(prev.y - pos.y) < ClientEngine.POSITION_EPSILON
+      && Math.abs(prev.z - pos.z) < ClientEngine.POSITION_EPSILON
+      && Math.abs(prev.rotationY - rotationY) < ClientEngine.ROTATION_EPSILON
+      && prev.isMoving === isMoving
+    ) {
+      return;
+    }
+
+    prev.x = pos.x;
+    prev.y = pos.y;
+    prev.z = pos.z;
+    prev.rotationY = rotationY;
+    prev.isMoving = isMoving;
+
     this.network.send({
       type: 'player_state',
       x: pos.x,
       y: pos.y,
       z: pos.z,
-      rotationY: this.playerController.mesh.rotation.y,
-      isMoving: this.playerController.isMoving ?? false,
+      rotationY,
+      isMoving,
     });
   }
 
