@@ -250,7 +250,11 @@ export class GameSession {
         this.engine.updateEntityPosition(entityId, msg.x, msg.y, msg.z, msg.rotationY, msg.isMoving);
         break;
       case 'use_ability':
-        this.engine.requestAbility(entityId, msg.abilityId, msg.targetEntityId ?? null);
+        this.engine.requestAbility(
+          entityId, msg.abilityId, msg.targetEntityId ?? null,
+          msg.groundTargetX !== undefined && msg.groundTargetZ !== undefined
+            ? { x: msg.groundTargetX, z: msg.groundTargetZ } : undefined
+        );
         break;
       case 'set_target':
         this.engine.setTarget(entityId, msg.targetEntityId);

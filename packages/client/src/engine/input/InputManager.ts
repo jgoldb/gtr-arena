@@ -56,9 +56,11 @@ export class InputManager {
   private onMouseDown = (e: MouseEvent): void => {
     if (e.button === 0) {
       this.mouseButtons.left = true;
-      // Only set up click detection if right button isn't already held
-      // (right held = pointer lock active, this left press is just for auto-forward)
-      if (!this.mouseButtons.right) {
+      if (this.mouseButtons.right) {
+        // Right held = pointer lock active. Emit an immediate click at virtual cursor
+        // position so ground targeting can be confirmed during camera drag.
+        this.leftClickEvent = { x: this.mouseScreenX, y: this.mouseScreenY };
+      } else {
         this.leftClickPending = true;
         this.leftClickStartX = e.clientX;
         this.leftClickStartY = e.clientY;
@@ -105,6 +107,9 @@ export class InputManager {
       } else {
         this.mouseDelta.x += e.movementX;
         this.mouseDelta.y += e.movementY;
+        // Track virtual screen position during pointer lock (for ground targeting)
+        this.mouseScreenX = Math.max(0, Math.min(window.innerWidth, this.mouseScreenX + e.movementX));
+        this.mouseScreenY = Math.max(0, Math.min(window.innerHeight, this.mouseScreenY + e.movementY));
       }
     } else {
       // Track screen position for hover detection
@@ -183,6 +188,11 @@ export class InputManager {
   /** Returns mouse screen position when pointer is NOT locked (for hover detection), or null if locked. */
   getMouseScreenPos(): { x: number; y: number } | null {
     if (document.pointerLockElement) return null;
+    return { x: this.mouseScreenX, y: this.mouseScreenY };
+  }
+
+  /** Returns mouse screen position always, even during pointer lock (virtual tracking via movementX/Y). */
+  getMouseScreenPosAlways(): { x: number; y: number } {
     return { x: this.mouseScreenX, y: this.mouseScreenY };
   }
 

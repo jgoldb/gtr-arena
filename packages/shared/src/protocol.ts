@@ -58,6 +58,8 @@ export interface C2S_UseAbility {
   type: 'use_ability';
   abilityId: string;
   targetEntityId: string | null;
+  groundTargetX?: number;
+  groundTargetZ?: number;
 }
 
 export interface C2S_SetTarget {
@@ -206,6 +208,8 @@ export interface S2C_AbilityEffect {
   type: 'ability_effect';
   entityId: string;
   abilityId: string;
+  groundTargetX?: number;
+  groundTargetZ?: number;
 }
 
 export interface S2C_CooldownUpdate {

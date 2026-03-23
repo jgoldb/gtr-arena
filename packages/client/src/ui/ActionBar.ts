@@ -343,6 +343,8 @@ export class ActionBar {
     }
     if (ability.castTime) {
       statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${ability.castTime}s cast</div>`;
+    } else {
+      statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">Instant cast</div>`;
     }
 
     this.tooltipEl.innerHTML = `

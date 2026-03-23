@@ -88,6 +88,10 @@ export class PlayerController implements Targetable {
     return this.characterModel.displayName;
   }
 
+  get characterId(): CharacterId {
+    return this.characterModel.id;
+  }
+
   rollAutoAttackDamage(): number {
     return this.characterModel.rollAutoAttackDamage();
   }

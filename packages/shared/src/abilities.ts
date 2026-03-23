@@ -50,6 +50,11 @@ export interface Ability {
   readonly appliesSelfBuff?: BuffDefinition;
   readonly bonusDamagePercent?: number; // conditional % increase (e.g. 125 = +125%)
   readonly bonusDamageRequiresDebuff?: string; // debuff id required for bonus
+  readonly chargeDuration?: number; // seconds — for charge abilities (e.g. Sweep)
+  readonly chargeSpeed?: number; // world units/sec
+  readonly chargeMaxDamage?: number; // max damage at full distance
+  readonly groundTargeted?: boolean; // ability targets a ground location (click-to-place AoE)
+  readonly aoeRadius?: number; // world units — radius of the AoE effect
 }
 
 // ── Buff definitions ────────────────────────────────────────────────────
@@ -133,7 +138,7 @@ export const ChemicalSpillDot: BuffDefinition = {
   icon: '🧪',
   duration: 6,
   type: 'debuff',
-  description: 'Taking 20 damage every 2 seconds from mysterious chemicals.',
+  description: 'Taking 200 damage every 2 seconds from mysterious chemicals.',
   effects: [],
 };
 
@@ -153,7 +158,7 @@ export const FullRetardBuff: BuffDefinition = {
   id: 'full-retard',
   name: 'Full Retard',
   icon: '🤯',
-  duration: 7,
+  duration: 8,
   type: 'buff',
   description: 'Deals damage to all enemies and heals all friendlies in melee range.',
   effects: [],
@@ -186,10 +191,13 @@ export const Sweep: Ability = {
   id: 'sweep',
   name: 'Sweep',
   icon: '🌪️',
-  manaCost: 10,
-  cooldown: 15,
-  damage: 80,
+  manaCost: 130,
+  cooldown: 10,
+  damage: 409,
   requiresHostileTarget: false,
+  chargeDuration: 0.714,
+  chargeSpeed: yardsToUnits(28), // 28 yards/sec — covers 20 yards in ~0.714s
+  chargeMaxDamage: 409,
   description:
     'Thrust forward with incredible ferocity, dealing damage to anyone in your way. Damage increases with distance. At the end, deals extra damage to targets within melee range.',
 };
@@ -199,12 +207,14 @@ export const BucketSplash: Ability = {
   name: 'Bucket Splash',
   icon: '🪣',
   range: yardsToUnits(10),
-  manaCost: 8,
-  cooldown: 12,
-  damage: 5,
+  manaCost: 65,
+  cooldown: 6,
+  damage: 0,
+  damageMin: 25,
+  damageMax: 35,
   requiresHostileTarget: true,
   description:
-    'Splashes dirty mop water onto the target, dealing 5 damage. Applies Covered in Piss for 6 sec, increasing auto-attack damage taken by 50%.',
+    'Splashes dirty mop water onto the target, dealing 25-35 damage. Applies Covered in Piss for 6 sec, increasing auto-attack damage taken by 50%.',
   appliesDebuff: CoveredInPiss,
 };
 
@@ -213,14 +223,14 @@ export const Mop: Ability = {
   name: 'Mop',
   icon: '🧹',
   range: yardsToUnits(3),
-  manaCost: 12,
-  cooldown: 5,
+  manaCost: 30,
+  cooldown: 4,
   damage: 0,
-  damageMin: 10,
-  damageMax: 20,
+  damageMin: 100,
+  damageMax: 116,
   requiresHostileTarget: true,
   description:
-    'Strikes the target with a dirty mop, dealing 10-20 damage. Damage is increased by 125% if the target has Covered in Piss.',
+    'Strikes the target with a dirty mop, dealing 100-116 damage. Damage is increased by 125% if the target has Covered in Piss.',
   bonusDamagePercent: 125,
   bonusDamageRequiresDebuff: 'covered-in-piss',
 };
@@ -230,12 +240,12 @@ export const BigBoot: Ability = {
   name: 'Big Boot',
   icon: '🥾',
   range: yardsToUnits(5),
-  manaCost: 10,
+  manaCost: 180,
   cooldown: 18,
-  damage: 0,
+  damage: 50,
   requiresHostileTarget: true,
   description:
-    'Kick the target right in the neck, stunning them for 3 seconds.',
+    'Kick the target right in the neck, dealing 50 damage and stunning for 3 seconds.',
   appliesDebuff: BigBootStun,
 };
 
@@ -243,19 +253,19 @@ export const FartBomb: Ability = {
   id: 'fart-bomb',
   name: 'Fart Bomb',
   icon: '💨',
-  manaCost: 10,
+  manaCost: 140,
   cooldown: 8,
   damage: 0,
   requiresHostileTarget: false,
   description:
-    'Emit a cloud of toxic gas that poisons and slows enemies by 30%. Deals 96 damage over 8 seconds.',
+    'Emit a cloud of toxic gas that poisons and slows enemies by 30%. Deals 592 damage over 8 seconds.',
 };
 
 export const CrashOut: Ability = {
   id: 'crash-out',
   name: 'Crash Out',
   icon: '😡',
-  manaCost: 18,
+  manaCost: 280,
   cooldown: 60,
   damage: 0,
   requiresHostileTarget: false,
@@ -264,26 +274,41 @@ export const CrashOut: Ability = {
   appliesSelfBuff: CrashOutBuff,
 };
 
+export const BrokenGlassDebuff: BuffDefinition = {
+  id: 'broken-glass',
+  name: 'Broken Glass',
+  icon: '🪟',
+  duration: 2,
+  type: 'debuff',
+  description: 'Movement speed slowed by 70% for 2 seconds.',
+  effects: [{ type: 'movementSpeedPercent', value: -70 }],
+};
+
 export const BottleChuck: Ability = {
   id: 'bottle-chuck',
   name: 'Bottle Chuck',
-  icon: '🧪',
+  icon: '⚗️',
   range: yardsToUnits(20),
-  manaCost: 8,
+  manaCost: 180,
   cooldown: 4,
-  damage: 45,
-  requiresHostileTarget: true,
+  damage: 0,
+  damageMin: 166,
+  damageMax: 191,
+  requiresHostileTarget: false,
+  groundTargeted: true,
+  aoeRadius: yardsToUnits(2),
+  appliesDebuff: BrokenGlassDebuff,
   description:
-    'Toss a bottle of volatile chemicals at an enemy dealing 45 damage.',
+    'Toss a bottle of volatile chemicals at a location, dealing 166-191 damage and slowing all enemies in the area by 70% for 2 sec.',
 };
 
 export const Discombobulate: Ability = {
   id: 'discombobulate',
   name: 'Discombobulate',
   icon: '🌀',
-  range: yardsToUnits(20),
-  manaCost: 15,
-  cooldown: 8,
+  range: yardsToUnits(15),
+  manaCost: 245,
+  cooldown: 10,
   castTime: 1.5,
   damage: 0,
   requiresHostileTarget: true,
@@ -296,21 +321,20 @@ export const ChemicalSpill: Ability = {
   id: 'chemical-spill',
   name: 'Chemical Spill',
   icon: '🧪',
-  manaCost: 10,
+  manaCost: 175,
   cooldown: 8,
   damage: 0,
   requiresHostileTarget: false,
   description:
-    'Spill a vial of mysterious chemicals onto the ground that other players can slip on. Activates after 2 seconds. Friendly players receive a 40% movement speed increase for 4 seconds. Hostile players take 40 damage and an additional 60 damage over 6 seconds.',
+    'Spill a vial of mysterious chemicals onto the ground that other players can slip on. Activates after 2 seconds. Friendly players receive a 40% movement speed increase for 4 seconds. Hostile players take 297-349 damage and an additional 600 damage over 6 seconds.',
 };
 
 export const RetardStrength: Ability = {
   id: 'retard-strength',
   name: 'Retard Strength',
   icon: '💪',
-  manaCost: 15,
-  cooldown: 15,
-  castTime: 2,
+  manaCost: 300,
+  cooldown: 10,
   damage: 0,
   requiresHostileTarget: false,
   description:
@@ -323,26 +347,26 @@ export const Chudmax: Ability = {
   name: 'Chudmax',
   icon: '🧬',
   range: yardsToUnits(15),
-  manaCost: 150,
+  manaCost: 275,
   cooldown: 1.5,
   castTime: 3,
-  damage: 80,
-  healAmount: 120,
+  damage: 540,
+  healAmount: 660,
   requiresHostileTarget: false,
   requiresTarget: true,
   isChannel: true,
   channelTicks: 3,
   description:
-    'Channel the chud at your target for 3 seconds. Heals friendly targets for 120 or damages hostile targets for 80 over the duration.',
+    'Channel the chud at your target for 3 seconds. Heals friendly targets for 660 or damages hostile targets for 540 over the duration.',
 };
 
 export const FullRetard: Ability = {
   id: 'full-retard',
   name: 'Full Retard',
   icon: '🤯',
-  manaCost: 30,
+  manaCost: 360,
   cooldown: 60,
-  castTime: 2,
+  castTime: 1,
   damage: 0,
   requiresHostileTarget: false,
   description:

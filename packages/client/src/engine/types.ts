@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { CharacterId } from '@gtr/shared';
 
 export interface GameContext {
   scene: THREE.Scene;
@@ -16,6 +17,7 @@ export interface GameSystem {
 export interface Targetable {
   readonly name: string;
   readonly modelName: string;
+  readonly characterId: CharacterId;
   readonly team: number;
   isHostileTo(other: Targetable): boolean;
   hp: number;

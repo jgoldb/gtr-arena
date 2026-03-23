@@ -138,6 +138,7 @@ export class ClientEngine {
   onCooldownUpdate?: (abilityId: string, remaining: number, total: number) => void;
   onError?: (message: string) => void;
   onTargetChanged?: (entityId: string | null) => void;
+  onGroundTargetConfirmed?: () => void;
   onEnterCombat?: (entityId: string) => void;
   onLeaveCombat?: (entityId: string) => void;
   onBuffApplied?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
@@ -251,6 +252,7 @@ export class ClientEngine {
     const targetable: Targetable = {
       get name() { return entity.name; },
       get modelName() { return entity.model.displayName; },
+      get characterId() { return entity.characterId as CharacterId; },
       get team() { return entity.team; },
       get hp() { return entity.hp; },
       set hp(v) { entity.hp = v; },
@@ -613,10 +615,14 @@ export class ClientEngine {
   }
 
   handleAbilityEffect(msg: S2C_AbilityEffect): void {
+    // Ground-targeted abilities use the ground position for the projectile animation
+    const groundPos = msg.groundTargetX !== undefined && msg.groundTargetZ !== undefined
+      ? new THREE.Vector3(msg.groundTargetX, 0, msg.groundTargetZ)
+      : undefined;
+
     if (msg.entityId === this.localEntityId) {
-      // Pass target position for directed animations
-      const targetMesh = this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId) : undefined;
-      this.playerController.triggerAbilityAnimation(msg.abilityId, targetMesh?.position.clone());
+      const targetPos = groundPos ?? (this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId)?.position.clone() : undefined);
+      this.playerController.triggerAbilityAnimation(msg.abilityId, targetPos);
       // Start sweep charge for local player
       if (msg.abilityId === 'sweep') {
         this.startSweepCharge();
@@ -624,8 +630,8 @@ export class ClientEngine {
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
       if (entity) {
-        const targetMesh = entity.targetEntityId ? this.getEntityMesh(entity.targetEntityId) : undefined;
-        entity.model.triggerAbilityAnimation(msg.abilityId, targetMesh?.position.clone());
+        const targetPos = groundPos ?? (entity.targetEntityId ? this.getEntityMesh(entity.targetEntityId)?.position.clone() : undefined);
+        entity.model.triggerAbilityAnimation(msg.abilityId, targetPos);
       }
     }
   }
@@ -750,8 +756,13 @@ export class ClientEngine {
 
   // ── Network commands ──────────────────────────────────────────────────
 
-  sendAbility(abilityId: string, targetEntityId: string | null): void {
-    this.network.send({ type: 'use_ability', abilityId, targetEntityId });
+  sendAbility(abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
+    this.network.send({
+      type: 'use_ability',
+      abilityId,
+      targetEntityId,
+      ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetZ: groundTarget.z } : {}),
+    });
   }
 
   sendSetTarget(targetEntityId: string | null): void {
@@ -882,8 +893,16 @@ export class ClientEngine {
   }
 
   private update(dt: number): void {
-    // God mode: +300% movement speed
-    this.playerController.movementSpeedModifier = this.godMode ? 4 : 1;
+    // Compute movement speed modifier from local buffs + god mode
+    let moveMult = 1;
+    for (const b of this.localBuffs) {
+      if (b.effects) {
+        for (const effect of b.effects) {
+          if (effect.type === 'movementSpeedPercent') moveMult += effect.value / 100;
+        }
+      }
+    }
+    this.playerController.movementSpeedModifier = moveMult * (this.godMode ? 4 : 1);
 
     // Update local player using the real PlayerController (same as playground)
     this.playerController.update(dt);
@@ -1118,12 +1137,18 @@ export class ClientEngine {
     // Process left click for target selection (same as playground: InputManager captures on mousedown)
     const leftClick = this.input.getLeftClick();
     if (leftClick) {
-      this.targetingSystem.processClick(leftClick.x, leftClick.y);
-      const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
-      if (newTargetId !== this.selectedTargetId) {
-        this.selectedTargetId = newTargetId;
-        this.sendSetTarget(newTargetId);
-        this.onTargetChanged?.(newTargetId);
+      if (this.targetingSystem.groundTargetActive) {
+        if (!this.targetingSystem.groundTargetBlocked) {
+          this.onGroundTargetConfirmed?.();
+        }
+      } else {
+        this.targetingSystem.processClick(leftClick.x, leftClick.y);
+        const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
+        if (newTargetId !== this.selectedTargetId) {
+          this.selectedTargetId = newTargetId;
+          this.sendSetTarget(newTargetId);
+          this.onTargetChanged?.(newTargetId);
+        }
       }
     }
 
@@ -1146,7 +1171,7 @@ export class ClientEngine {
     }
 
     // Update cursor for hover detection (only when pointer is unlocked)
-    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos());
+    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.getMouseScreenPosAlways());
 
     // Update targeting ring animation + target highlight
     this.targetingSystem.update(dt);

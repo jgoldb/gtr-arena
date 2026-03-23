@@ -1,4 +1,4 @@
-import { REGEN_TICK_INTERVAL, HP_REGEN_AMOUNT, MANA_REGEN_AMOUNT, MANA_REGEN_DELAY, RESTING_MANA_MULTIPLIER } from '@gtr/shared';
+import { REGEN_TICK_INTERVAL, MANA_REGEN_DELAY, RESTING_MANA_MULTIPLIER, getCharacterStats } from '@gtr/shared';
 import type { Targetable } from '../types';
 import type { BuffSystem } from './BuffSystem';
 
@@ -39,9 +39,11 @@ export class RegenSystem {
     for (const entity of this.getEntities()) {
       if (entity.dead) continue;
 
+      const stats = getCharacterStats(entity.characterId);
+
       // Health regen: only out of combat
       if (!entity.inCombat && entity.hp < entity.maxHp) {
-        entity.hp = Math.min(entity.maxHp, entity.hp + HP_REGEN_AMOUNT);
+        entity.hp = Math.min(entity.maxHp, entity.hp + stats.hpRegen);
       }
 
       // Mana regen: only if entity has mana, and 5s since last mana use
@@ -50,8 +52,8 @@ export class RegenSystem {
         if (timeSinceUse === undefined || timeSinceUse >= MANA_REGEN_DELAY) {
           const isResting = this.buffSystem?.hasBuff(entity, 'resting') ?? false;
           const regenAmount = isResting
-            ? MANA_REGEN_AMOUNT * RESTING_MANA_MULTIPLIER
-            : MANA_REGEN_AMOUNT;
+            ? stats.manaRegen * RESTING_MANA_MULTIPLIER
+            : stats.manaRegen;
           entity.mana = Math.min(entity.maxMana, entity.mana + regenAmount);
         }
       }

@@ -358,6 +358,57 @@ export class CombatSystem {
     }
   }
 
+  /** Apply AoE ability damage to a single target (called per-target in the AoE). */
+  applyAoeDamage(attacker: Targetable, target: Targetable, ability: Ability): void {
+    if (attacker.dead || target.dead) return;
+
+    this.onHostileAction?.(attacker, target);
+
+    const outcome = this.rollOutcome(attacker, target, false);
+    if (outcome === 'miss') {
+      this.onCombatText?.(target, 0, 'miss');
+      this.enterCombat(attacker);
+      this.enterCombat(target);
+      return;
+    }
+
+    let baseDamage: number;
+    if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
+      baseDamage = ability.damageMin + Math.floor(Math.random() * (ability.damageMax - ability.damageMin + 1));
+    } else {
+      baseDamage = ability.damage;
+    }
+
+    let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+    if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
+    baseDamage = Math.round(baseDamage * damageMult);
+
+    const isCrit = outcome === 'crit';
+    const damage = baseDamage * (isCrit ? 2 : 1);
+    const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
+    target.hp = Math.max(0, target.hp - actualDamage);
+    if (damage > 0) {
+      this.onDirectDamageDealt?.(target);
+      this.onFlinchDamage?.(target);
+    }
+    if (actualDamage > 0) {
+      this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
+    }
+
+    // Apply debuff on hit
+    if (ability.appliesDebuff) {
+      this.buffSystem.apply(target, ability.appliesDebuff);
+    }
+
+    this.enterCombat(attacker);
+    this.enterCombat(target);
+
+    if (target.hp <= 0 && !target.dead) {
+      target.die();
+      this.combatTimers.delete(target);
+    }
+  }
+
   setCooldown(abilityId: string, duration: number): void {
     if (duration > 0) {
       this.cooldowns.set(abilityId, { remaining: duration, total: duration });
