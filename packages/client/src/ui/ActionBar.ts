@@ -1,6 +1,6 @@
 import { YARDS_TO_UNITS, type Ability } from '../engine/combat/Ability';
 import type { CombatSystem } from '../engine/combat/CombatSystem';
-import { keybindManager } from './KeybindManager';
+import { keybindManager, matchesKeybindEvent } from './KeybindManager';
 
 export interface ActionBarSlot {
   ability: Ability | null;
@@ -394,7 +394,7 @@ export class ActionBar {
   private onKeyDown = (e: KeyboardEvent): void => {
     if (this.callbacks.isDisabled?.()) return;
     for (const slot of this.slots) {
-      if (e.code === slot.keyCode && slot.ability) {
+      if (matchesKeybindEvent(slot.keyCode, e) && slot.ability) {
         this.callbacks.onActivate(slot.ability);
         break;
       }

@@ -1,4 +1,4 @@
-import { keybindManager, codeToDisplayLabel, type KeybindEntry } from './KeybindManager';
+import { keybindManager, codeToDisplayLabel, matchesKeybindEvent, buildComboString, type KeybindEntry } from './KeybindManager';
 
 /**
  * Full-screen keybind editor opened from the Escape menu.
@@ -15,6 +15,7 @@ export class KeybindMenu {
   private _isOpen = false;
   private onCloseCallback: (() => void) | null = null;
   private openSnapshot: Map<string, string> | null = null;
+  private hintEl: HTMLElement;
 
   constructor() {
     // Backdrop
@@ -76,6 +77,15 @@ export class KeybindMenu {
     }
     this.box.appendChild(list);
 
+    // Hint for cancelling rebind
+    this.hintEl = document.createElement('div');
+    this.hintEl.textContent = 'Right-click to cancel rebinding';
+    this.hintEl.style.cssText = `
+      color: #667; font-size: 11px; text-align: center;
+      margin-bottom: 10px; display: none;
+    `;
+    this.box.appendChild(this.hintEl);
+
     // Bottom buttons
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display: flex; gap: 10px; justify-content: center;';
@@ -124,6 +134,8 @@ export class KeybindMenu {
 
     // Key listener for rebinding
     window.addEventListener('keydown', this.onKeyDown);
+    // Right-click cancels listening
+    window.addEventListener('contextmenu', this.onContextMenu);
   }
 
   get isOpen(): boolean {
@@ -200,7 +212,11 @@ export class KeybindMenu {
     });
 
     row.addEventListener('click', () => {
-      this.startListening(entry.id);
+      if (this.listeningId === entry.id) {
+        this.cancelListening();
+      } else {
+        this.startListening(entry.id);
+      }
     });
 
     this.rows.set(entry.id, { keyLabel, entry });
@@ -219,6 +235,7 @@ export class KeybindMenu {
       rowData.keyLabel.style.color = '#5588ff';
       rowData.keyLabel.parentElement!.style.background = 'rgba(60, 100, 200, 0.1)';
     }
+    this.hintEl.style.display = 'block';
   }
 
   private cancelListening(): void {
@@ -231,35 +248,40 @@ export class KeybindMenu {
       rowData.keyLabel.parentElement!.style.background = 'transparent';
     }
     this.listeningId = null;
+    this.hintEl.style.display = 'none';
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
     if (!this._isOpen) return;
 
-    // Escape always closes or cancels
-    if (e.code === 'Escape') {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      if (this.listeningId) {
-        this.cancelListening();
-      } else {
+    // When not listening, the game-menu keybind closes the menu
+    if (!this.listeningId) {
+      if (matchesKeybindEvent(keybindManager.getCode('toggle_game_menu'), e)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
         this.cancelAndClose();
       }
       return;
     }
 
-    if (!this.listeningId) return;
-
-    // Don't allow binding modifier-only keys or Escape
+    // Listening mode: don't allow binding modifier-only keys
     const ignore = ['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight'];
     if (ignore.includes(e.code)) return;
 
     e.preventDefault();
     e.stopImmediatePropagation();
 
-    keybindManager.rebind(this.listeningId, e.code);
+    const combo = buildComboString(e);
+    keybindManager.rebind(this.listeningId, combo);
     this.listeningId = null;
+    this.hintEl.style.display = 'none';
     this.refreshAllRows();
+  };
+
+  private onContextMenu = (e: MouseEvent): void => {
+    if (!this._isOpen || !this.listeningId) return;
+    e.preventDefault();
+    this.cancelListening();
   };
 
   private exportKeybinds(anchorBtn: HTMLElement): void {
@@ -309,6 +331,7 @@ export class KeybindMenu {
 
   dispose(): void {
     window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('contextmenu', this.onContextMenu);
     this.element.remove();
   }
 }

@@ -311,10 +311,10 @@ export class PlayerController implements Targetable {
     const bwdCode = keybindManager.getCode('move_backward');
     const leftCode = keybindManager.getCode('move_left');
     const rightCode = keybindManager.getCode('move_right');
-    const wDown = this.input.isKeyDown(this.getMovementKey(fwdCode)) || (bothMouseHeld && this.getMovementKey(fwdCode) === fwdCode);
-    const sDown = this.input.isKeyDown(this.getMovementKey(bwdCode)) || (bothMouseHeld && this.getMovementKey(bwdCode) === fwdCode);
-    const dDown = this.input.isKeyDown(this.getMovementKey(rightCode)) || (bothMouseHeld && this.getMovementKey(rightCode) === fwdCode);
-    const aDown = this.input.isKeyDown(this.getMovementKey(leftCode)) || (bothMouseHeld && this.getMovementKey(leftCode) === fwdCode);
+    const wDown = this.input.isBindDown(this.getMovementKey(fwdCode)) || (bothMouseHeld && this.getMovementKey(fwdCode) === fwdCode);
+    const sDown = this.input.isBindDown(this.getMovementKey(bwdCode)) || (bothMouseHeld && this.getMovementKey(bwdCode) === fwdCode);
+    const dDown = this.input.isBindDown(this.getMovementKey(rightCode)) || (bothMouseHeld && this.getMovementKey(rightCode) === fwdCode);
+    const aDown = this.input.isBindDown(this.getMovementKey(leftCode)) || (bothMouseHeld && this.getMovementKey(leftCode) === fwdCode);
     if (this.godMode && rightHeld) {
       // 3D flight: W/S follows camera pitch, A/D strafes horizontally
       const elevation = this.cameraElevationGetter();
@@ -377,7 +377,7 @@ export class PlayerController implements Targetable {
     const turnSpeed = deltaTime > 0 ? rotApplied / deltaTime : 0;
 
     // Jump / fly
-    const spaceDown = this.input.isKeyDown('Space');
+    const spaceDown = this.input.isBindDown(keybindManager.getCode('jump'));
     if (this.godMode) {
       // Flying: Space = ascend, Shift = descend, no gravity
       if (spaceDown) {
