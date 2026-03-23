@@ -319,28 +319,23 @@ export class GameSession {
     const player = this.players.find(p => p.userId === userId);
     if (!player) return;
 
-    // Dead players or post-game disconnects: remove immediately, no grace period
+    // Check full-team forfeit (only during active game)
+    if (!this.gameOver && this.checkTeamForfeit()) return;
+
+    // Freeze alive entities during active game (dead/post-game entities stay as-is)
     const entity = this.engine.getEntity(entityId);
-    if (entity?.dead || this.gameOver) {
+    if (!this.gameOver && entity && !entity.dead) {
+      this.engine.freezeEntity(entityId);
+    }
+
+    // All disconnects get a grace period — dead players and post-game players
+    // can still reconnect to see results and rematch
+    const timer = setTimeout(() => {
+      this.disconnectedPlayers.delete(userId);
       this.engine.removeEntity(entityId);
       this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
       this.onGracePeriodExpired?.(userId);
       if (!this.gameOver) this.checkTeamForfeit();
-      return;
-    }
-
-    // Check full-team forfeit first (instant, no grace period)
-    if (this.checkTeamForfeit()) return;
-
-    this.engine.freezeEntity(entityId);
-
-    const timer = setTimeout(() => {
-      this.disconnectedPlayers.delete(userId);
-      // Remove the entity from the game world entirely (not a kill)
-      this.engine.removeEntity(entityId);
-      this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
-      this.onGracePeriodExpired?.(userId);
-      this.checkTeamForfeit();
     }, GameSession.DISCONNECT_GRACE_PERIOD_MS);
     this.disconnectedPlayers.set(userId, { timer });
 

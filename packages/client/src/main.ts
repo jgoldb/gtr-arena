@@ -44,6 +44,7 @@ let currentState: AppState = 'auth';
 let network: NetworkManager | null = null;
 let localUserId = '';
 let isAdmin = false;
+let awaitingReconnectResult = false;
 
 // Active screens / engines
 let authScreen: AuthScreen | null = null;
@@ -945,21 +946,34 @@ function handleServerMessage(msg: ServerMessage): void {
         }
         authScreen?.destroy();
         authScreen = null;
-        showLobby();
+        if (currentState === 'multiplayer') {
+          // Reconnecting mid-game — don't flash lobby, wait for server
+          // to send rejoin_game (back to game) or lobby_state (to lobby)
+          awaitingReconnectResult = true;
+        } else {
+          showLobby();
+        }
       } else {
-        // Show error on auth screen, disconnect so user can retry
+        // Auth failed — always transition to auth screen (handles reconnect case
+        // where authScreen is null, e.g. when re-auth fails during gameplay)
         let errorMsg = msg.error ?? 'Authentication failed';
         if (msg.bannedUntil && msg.bannedUntil !== 'permanent') {
           const banEnd = new Date(msg.bannedUntil + 'Z');
           errorMsg = `You are banned until ${banEnd.toLocaleString()}`;
         }
-        authScreen?.showError(errorMsg);
         network?.disconnect();
         network = null;
+        showAuth();
+        setTimeout(() => authScreen?.showError(errorMsg), 0);
       }
       break;
 
     case 'lobby_state':
+      if (awaitingReconnectResult) {
+        // Server didn't send rejoin_game — no game to rejoin, go to lobby
+        awaitingReconnectResult = false;
+        showLobby();
+      }
       lobbyScreen?.updateUsers(msg.users);
       lobbyScreen?.updateGames(msg.games);
       break;
@@ -1098,6 +1112,7 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
 
     case 'rejoin_game':
+      awaitingReconnectResult = false;
       startMultiplayerRejoin(msg);
       break;
 

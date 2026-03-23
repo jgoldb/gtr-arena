@@ -62,7 +62,9 @@ export class NetworkManager {
       if (wasReconnect) {
         this.connectionStateHandler?.({ status: 'reconnected' });
       }
-      this.send({ type: 'authenticate', username: this.username, password: this.password, mode: this.mode });
+      // Always use 'login' on reconnect — account already exists
+      const authMode = wasReconnect ? 'login' : this.mode;
+      this.send({ type: 'authenticate', username: this.username, password: this.password, mode: authMode });
       this.flushQueue();
     };
 

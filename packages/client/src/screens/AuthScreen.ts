@@ -9,8 +9,10 @@ export class AuthScreen {
   private onAuth: (result: AuthResult) => void;
   private errorEl: HTMLDivElement;
   private confirmPasswordInput: HTMLInputElement;
+  private submitBtn!: HTMLButtonElement;
   private mode: 'login' | 'register' = 'login';
   private animationFrameId: number = 0;
+  private loading = false;
 
   constructor(onAuth: (result: AuthResult) => void) {
     this.onAuth = onAuth;
@@ -435,18 +437,20 @@ export class AuthScreen {
     this.errorEl = document.createElement('div');
     this.errorEl.style.cssText = 'color: #cc4444; font-size: 12px; min-height: 18px; margin-bottom: 8px;';
 
-    const submitBtn = document.createElement('button');
+    this.submitBtn = document.createElement('button');
+    const submitBtn = this.submitBtn;
     submitBtn.textContent = 'Enter Arena';
     submitBtn.style.cssText = `
       width: 100%; padding: 11px 0; font-size: 14px; font-weight: bold;
       background: rgba(60, 80, 160, 0.8); color: #ddd;
       border: 1px solid rgba(100, 140, 255, 0.3); border-radius: 4px;
-      cursor: pointer; outline: none;
+      cursor: pointer; outline: none; transition: opacity 0.15s;
     `;
-    submitBtn.addEventListener('mouseenter', () => { submitBtn.style.background = 'rgba(70, 95, 185, 0.9)'; });
-    submitBtn.addEventListener('mouseleave', () => { submitBtn.style.background = 'rgba(60, 80, 160, 0.8)'; });
+    submitBtn.addEventListener('mouseenter', () => { if (!this.loading) submitBtn.style.background = 'rgba(70, 95, 185, 0.9)'; });
+    submitBtn.addEventListener('mouseleave', () => { if (!this.loading) submitBtn.style.background = 'rgba(60, 80, 160, 0.8)'; });
 
     const submit = () => {
+      if (this.loading) return;
       const name = usernameInput.value.trim();
       const pass = passwordInput.value;
 
@@ -465,6 +469,7 @@ export class AuthScreen {
         }
       }
       this.errorEl.textContent = '';
+      this.setLoading(true);
       this.onAuth({ username: name, password: pass, mode: this.mode });
     };
 
@@ -499,7 +504,16 @@ export class AuthScreen {
   }
 
   showError(message: string): void {
+    this.setLoading(false);
     this.errorEl.textContent = message;
+  }
+
+  private setLoading(on: boolean): void {
+    this.loading = on;
+    this.submitBtn.disabled = on;
+    this.submitBtn.textContent = on ? 'Connecting...' : 'Enter Arena';
+    this.submitBtn.style.opacity = on ? '0.6' : '1';
+    this.submitBtn.style.cursor = on ? 'default' : 'pointer';
   }
 
   destroy(): void {
