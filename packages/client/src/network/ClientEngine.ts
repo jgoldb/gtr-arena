@@ -99,6 +99,11 @@ export class ClientEngine {
   // Sweep charge (local player only — client-side movement during charge)
   private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number } | null = null;
 
+  // Track tab visibility for fast-forwarding client-side timers on restore
+  private wasHidden = false;
+  private hiddenAt = 0;
+  private onVisibilityChange: (() => void) | null = null;
+
   /** Round-trip latency in ms — sourced from NetworkManager ping/pong. */
   get latency(): number {
     return this.network.rtt;
@@ -133,6 +138,7 @@ export class ClientEngine {
   onCooldownUpdate?: (abilityId: string, remaining: number, total: number) => void;
   onError?: (message: string) => void;
   onTargetChanged?: (entityId: string | null) => void;
+  onGroundTargetConfirmed?: () => void;
   onEnterCombat?: (entityId: string) => void;
   onLeaveCombat?: (entityId: string) => void;
   onBuffApplied?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
@@ -201,6 +207,15 @@ export class ClientEngine {
     this.snapshotBuffer.pushPositions(0, Date.now(), initialEntities.map(e => ({
       id: e.id, x: e.x, y: e.y, z: e.z, rotationY: e.rotationY, isMoving: e.isMoving,
     })));
+
+    // Track tab visibility so we can fast-forward client-side timers on restore
+    this.onVisibilityChange = () => {
+      if (document.hidden) {
+        this.wasHidden = true;
+        this.hiddenAt = performance.now();
+      }
+    };
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
 
   private createRemoteEntity(snap: EntitySnapshot): RemoteEntity {
@@ -237,6 +252,7 @@ export class ClientEngine {
     const targetable: Targetable = {
       get name() { return entity.name; },
       get modelName() { return entity.model.displayName; },
+      get characterId() { return entity.characterId as CharacterId; },
       get team() { return entity.team; },
       get hp() { return entity.hp; },
       set hp(v) { entity.hp = v; },
@@ -286,6 +302,10 @@ export class ClientEngine {
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
+    }
+    if (this.onVisibilityChange) {
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+      this.onVisibilityChange = null;
     }
   }
 
@@ -380,6 +400,19 @@ export class ClientEngine {
       const pool = this.chemPools.get(cpSnap.id);
       if (pool && cpSnap.consumed && !pool.consumed) {
         pool.consumed = true;
+      }
+    }
+
+    // Sync arena countdown timer from server keyframe
+    if (msg.arenaTimeRemaining !== undefined && msg.arenaTimeRemaining > 0) {
+      const script = this.mapManager.getScript();
+      const openTime = (script && 'OPEN_TIME' in script) ? (script as any).OPEN_TIME as number : 30;
+      this.mapManager.setElapsed(openTime - msg.arenaTimeRemaining);
+    } else if (msg.arenaTimeRemaining === undefined || msg.arenaTimeRemaining <= 0) {
+      // No arenaTimeRemaining means doors are already open — ensure client matches
+      const script = this.mapManager.getScript();
+      if (script && 'opened' in script && !(script as any).opened) {
+        this.mapManager.forceOpenDoors();
       }
     }
   }
@@ -571,13 +604,25 @@ export class ClientEngine {
 
   handleCombatEvent(msg: S2C_CombatEvent): void {
     this.onCombatText?.(msg.sourceEntityId, msg.targetEntityId, msg.amount, msg.combatType);
+
+    // Auto-target attacker when player has no target
+    if (msg.targetEntityId === this.localEntityId && !this.selectedTargetId && msg.combatType !== 'heal') {
+      const attacker = this.remoteEntities.get(msg.sourceEntityId);
+      if (attacker) {
+        this.selectTarget(attacker.targetable);
+      }
+    }
   }
 
   handleAbilityEffect(msg: S2C_AbilityEffect): void {
+    // Ground-targeted abilities use the ground position for the projectile animation
+    const groundPos = msg.groundTargetX !== undefined && msg.groundTargetZ !== undefined
+      ? new THREE.Vector3(msg.groundTargetX, 0, msg.groundTargetZ)
+      : undefined;
+
     if (msg.entityId === this.localEntityId) {
-      // Pass target position for directed animations
-      const targetMesh = this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId) : undefined;
-      this.playerController.triggerAbilityAnimation(msg.abilityId, targetMesh?.position.clone());
+      const targetPos = groundPos ?? (this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId)?.position.clone() : undefined);
+      this.playerController.triggerAbilityAnimation(msg.abilityId, targetPos);
       // Start sweep charge for local player
       if (msg.abilityId === 'sweep') {
         this.startSweepCharge();
@@ -585,8 +630,8 @@ export class ClientEngine {
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
       if (entity) {
-        const targetMesh = entity.targetEntityId ? this.getEntityMesh(entity.targetEntityId) : undefined;
-        entity.model.triggerAbilityAnimation(msg.abilityId, targetMesh?.position.clone());
+        const targetPos = groundPos ?? (entity.targetEntityId ? this.getEntityMesh(entity.targetEntityId)?.position.clone() : undefined);
+        entity.model.triggerAbilityAnimation(msg.abilityId, targetPos);
       }
     }
   }
@@ -711,8 +756,13 @@ export class ClientEngine {
 
   // ── Network commands ──────────────────────────────────────────────────
 
-  sendAbility(abilityId: string, targetEntityId: string | null): void {
-    this.network.send({ type: 'use_ability', abilityId, targetEntityId });
+  sendAbility(abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
+    this.network.send({
+      type: 'use_ability',
+      abilityId,
+      targetEntityId,
+      ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetZ: groundTarget.z } : {}),
+    });
   }
 
   sendSetTarget(targetEntityId: string | null): void {
@@ -787,13 +837,72 @@ export class ClientEngine {
     const dt = Math.min((now - this.lastFrameTime) / 1000, 0.1);
     this.lastFrameTime = now;
 
+    // When the tab was backgrounded, RAF was paused and dt was clamped to 0.1s.
+    // Fast-forward all client-side timers by the real elapsed gap so they don't
+    // appear frozen when the tab is restored.
+    if (this.wasHidden) {
+      this.wasHidden = false;
+      const gap = (now - this.hiddenAt) / 1000;
+      if (gap > 0.2) this.fastForwardTimers(gap);
+    }
+
     this.update(dt);
     this.renderer.renderer.render(this.scene, this.camera);
   };
 
+  /**
+   * Fast-forward client-side timers after the tab was backgrounded.
+   * The arena countdown is wall-clock-based (ArenaScript getter) so it self-
+   * corrects automatically — we only need to catch up cooldowns, buff
+   * remaining timers, gas cloud / chem pool visuals, and sweep charge.
+   */
+  private fastForwardTimers(gap: number): void {
+    // Cooldowns
+    for (const [id, cd] of this.cooldowns) {
+      cd.remaining = Math.max(0, cd.remaining - gap);
+      if (cd.remaining <= 0) this.cooldowns.delete(id);
+    }
+
+    // Buff remaining timers (local + remote)
+    for (const b of this.localBuffs) {
+      if (b.duration > 0) b.remaining = Math.max(0, b.remaining - gap);
+    }
+    for (const entity of this.remoteEntities.values()) {
+      for (const b of entity.buffs) {
+        if (b.duration > 0) b.remaining = Math.max(0, b.remaining - gap);
+      }
+    }
+
+    // Gas cloud visuals
+    for (const [id, cloud] of this.gasClouds) {
+      cloud.elapsed += gap;
+    }
+
+    // Chem pool visuals
+    for (const [id, pool] of this.chemPools) {
+      pool.elapsed += gap;
+      if (pool.consumed) pool.consumeElapsed += gap;
+    }
+
+    // Sweep charge — if we were mid-charge when backgrounded, it's certainly
+    // finished by now.  Clear it so the player isn't stuck in a charge state.
+    if (this.sweepCharge) {
+      this.sweepCharge = null;
+      this.playerController.charging = false;
+    }
+  }
+
   private update(dt: number): void {
-    // God mode: +300% movement speed
-    this.playerController.movementSpeedModifier = this.godMode ? 4 : 1;
+    // Compute movement speed modifier from local buffs + god mode
+    let moveMult = 1;
+    for (const b of this.localBuffs) {
+      if (b.effects) {
+        for (const effect of b.effects) {
+          if (effect.type === 'movementSpeedPercent') moveMult += effect.value / 100;
+        }
+      }
+    }
+    this.playerController.movementSpeedModifier = moveMult * (this.godMode ? 4 : 1);
 
     // Update local player using the real PlayerController (same as playground)
     this.playerController.update(dt);
@@ -829,7 +938,7 @@ export class ClientEngine {
     }
 
     // Resting toggle
-    const rKeyDown = this.input.isKeyDown(keybindManager.getCode('rest'));
+    const rKeyDown = this.input.isBindDown(keybindManager.getCode('rest'));
     if (rKeyDown && !this.rKeyWasDown) {
       if (this.resting) {
         this.stopResting();
@@ -848,12 +957,12 @@ export class ClientEngine {
 
     // Cancel resting on movement or jump
     if (this.resting) {
-      const wDown = this.input.isKeyDown(keybindManager.getCode('move_forward'));
-      const sDown = this.input.isKeyDown(keybindManager.getCode('move_backward'));
-      const aDown = this.input.isKeyDown(keybindManager.getCode('move_left'));
-      const dDown = this.input.isKeyDown(keybindManager.getCode('move_right'));
+      const wDown = this.input.isBindDown(keybindManager.getCode('move_forward'));
+      const sDown = this.input.isBindDown(keybindManager.getCode('move_backward'));
+      const aDown = this.input.isBindDown(keybindManager.getCode('move_left'));
+      const dDown = this.input.isBindDown(keybindManager.getCode('move_right'));
       const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
-      const jumping = this.input.isKeyDown('Space');
+      const jumping = this.input.isBindDown(keybindManager.getCode('jump'));
       if (wDown || sDown || aDown || dDown || bothMouse || jumping) {
         this.stopResting();
       }
@@ -991,7 +1100,7 @@ export class ClientEngine {
     this.mapManager.update(dt);
 
     // Tab targeting — nearest hostile in front within 30 yards
-    const tabDown = this.input.isKeyDown('Tab');
+    const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
     if (tabDown && !this.tabKeyWasDown) {
       const hostiles = this.getAllRemoteEntities().map(e => e.targetable);
       this.targetingSystem.selectNearestHostileInFront(hostiles, yardsToUnits(30));
@@ -1005,7 +1114,7 @@ export class ClientEngine {
     this.tabKeyWasDown = tabDown;
 
     // Target of target key
-    const fDown = this.input.isKeyDown(keybindManager.getCode('target_of_target'));
+    const fDown = this.input.isBindDown(keybindManager.getCode('target_of_target'));
     if (fDown && !this.fKeyWasDown && this.selectedTargetId) {
       const isSelf = this.selectedTargetId === this.localEntityId;
       const totId = isSelf
@@ -1028,12 +1137,18 @@ export class ClientEngine {
     // Process left click for target selection (same as playground: InputManager captures on mousedown)
     const leftClick = this.input.getLeftClick();
     if (leftClick) {
-      this.targetingSystem.processClick(leftClick.x, leftClick.y);
-      const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
-      if (newTargetId !== this.selectedTargetId) {
-        this.selectedTargetId = newTargetId;
-        this.sendSetTarget(newTargetId);
-        this.onTargetChanged?.(newTargetId);
+      if (this.targetingSystem.groundTargetActive) {
+        if (!this.targetingSystem.groundTargetBlocked) {
+          this.onGroundTargetConfirmed?.();
+        }
+      } else {
+        this.targetingSystem.processClick(leftClick.x, leftClick.y);
+        const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
+        if (newTargetId !== this.selectedTargetId) {
+          this.selectedTargetId = newTargetId;
+          this.sendSetTarget(newTargetId);
+          this.onTargetChanged?.(newTargetId);
+        }
       }
     }
 
@@ -1056,7 +1171,7 @@ export class ClientEngine {
     }
 
     // Update cursor for hover detection (only when pointer is unlocked)
-    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos());
+    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.getMouseScreenPosAlways());
 
     // Update targeting ring animation + target highlight
     this.targetingSystem.update(dt);

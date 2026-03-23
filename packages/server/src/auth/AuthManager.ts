@@ -110,4 +110,8 @@ export class AuthManager {
   getIsAdmin(userId: string): boolean {
     return this.sessions.get(userId)?.isAdmin ?? false;
   }
+
+  getUserIdByDbId(dbId: number): string | undefined {
+    return this.userIdByDbId.get(dbId);
+  }
 }

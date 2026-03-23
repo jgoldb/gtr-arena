@@ -13,6 +13,12 @@ export class AuthScreen {
   private mode: 'login' | 'register' = 'login';
   private animationFrameId: number = 0;
   private loading = false;
+  private audioCtx: AudioContext | null = null;
+  private gainNode: GainNode | null = null;
+  private sourceNode: AudioBufferSourceNode | null = null;
+  private fadingOut = false;
+  private readonly onVisibilityChange = () => this.handleVisibilityChange();
+  private readonly onUserGesture = () => this.resumeAudioCtx();
 
   constructor(onAuth: (result: AuthResult) => void) {
     this.onAuth = onAuth;
@@ -61,7 +67,36 @@ export class AuthScreen {
     const particles: { x: number; y: number; vx: number; vy: number; size: number; color: string; life: number; maxLife: number }[] = [];
     const streaks: { x: number; y: number; vx: number; len: number; color: string; alpha: number }[] = [];
 
-    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+    // Sun position constants (used by cached gradients and animation)
+    const sunX = 85, sunY = 85, sunRadius = 30;
+
+    // Cached gradients — static ones created once, size-dependent rebuilt on resize
+    let cachedBaseGradient: CanvasGradient;
+    let cachedSunIllumGradient: CanvasGradient;
+    const cachedSunBodyGradient = ctx.createRadialGradient(sunX - 4, sunY - 4, 0, sunX, sunY, sunRadius);
+    cachedSunBodyGradient.addColorStop(0, '#fffff8');
+    cachedSunBodyGradient.addColorStop(0.15, '#fff8e0');
+    cachedSunBodyGradient.addColorStop(0.5, '#ffdd66');
+    cachedSunBodyGradient.addColorStop(0.8, '#ffaa33');
+    cachedSunBodyGradient.addColorStop(1, '#ff6600');
+
+    const rebuildCachedGradients = () => {
+      cachedBaseGradient = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, 0, canvas.width / 2, canvas.height / 2, canvas.width * 0.6);
+      cachedBaseGradient.addColorStop(0, 'rgba(15, 10, 30, 0.05)');
+      cachedBaseGradient.addColorStop(1, 'rgba(0, 0, 0, 0.1)');
+
+      cachedSunIllumGradient = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, Math.max(canvas.width, canvas.height) * 0.7);
+      cachedSunIllumGradient.addColorStop(0, 'rgba(255, 200, 100, 0.07)');
+      cachedSunIllumGradient.addColorStop(0.15, 'rgba(255, 170, 60, 0.035)');
+      cachedSunIllumGradient.addColorStop(0.5, 'rgba(255, 130, 40, 0.01)');
+      cachedSunIllumGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    };
+
+    const resize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      rebuildCachedGradients();
+    };
     resize();
     window.addEventListener('resize', resize);
 
@@ -91,7 +126,7 @@ export class AuthScreen {
       });
     }
 
-    // Asteroids — large detailed rocks drifting through
+    // Asteroids — large detailed rocks drifting through (pre-rendered to offscreen canvases)
     type AsteroidRock = {
       x: number; y: number; vx: number; vy: number;
       rotation: number; rotSpeed: number; size: number;
@@ -99,8 +134,70 @@ export class AuthScreen {
       craters: { cx: number; cy: number; r: number }[];
       ridges: { dist: number; start: number; len: number }[];
       rgb: [number, number, number];
+      preRendered: HTMLCanvasElement;
     };
     const asteroidList: AsteroidRock[] = [];
+
+    const preRenderAsteroid = (size: number, shape: number[], craters: AsteroidRock['craters'], ridges: AsteroidRock['ridges'], rgb: [number, number, number]): HTMLCanvasElement => {
+      const pad = 4;
+      const dim = Math.ceil(size * 2 + pad * 2);
+      const c = document.createElement('canvas');
+      c.width = dim;
+      c.height = dim;
+      const octx = c.getContext('2d')!;
+      const cx = dim / 2, cy = dim / 2;
+      const [r, g, b] = rgb;
+
+      // Body shape
+      octx.beginPath();
+      for (let j = 0; j < shape.length; j += 2) {
+        const px = cx + Math.cos(shape[j]) * shape[j + 1];
+        const py = cy + Math.sin(shape[j]) * shape[j + 1];
+        j === 0 ? octx.moveTo(px, py) : octx.lineTo(px, py);
+      }
+      octx.closePath();
+      octx.fillStyle = `rgb(${r},${g},${b})`;
+      octx.fill();
+
+      // 3D lighting gradient
+      const lg = octx.createRadialGradient(cx - size * 0.3, cy - size * 0.3, 0, cx, cy, size);
+      lg.addColorStop(0, `rgba(${r + 55},${g + 50},${b + 45},0.4)`);
+      lg.addColorStop(0.5, 'rgba(0,0,0,0)');
+      lg.addColorStop(1, 'rgba(0,0,0,0.4)');
+      octx.fillStyle = lg;
+      octx.fill();
+
+      // Edge outline
+      octx.strokeStyle = `rgba(${r + 35},${g + 30},${b + 25},0.5)`;
+      octx.lineWidth = 1.5;
+      octx.stroke();
+
+      // Craters
+      for (const cr of craters) {
+        octx.globalAlpha = 1;
+        octx.beginPath();
+        octx.arc(cx + cr.cx, cy + cr.cy, cr.r, 0, Math.PI * 2);
+        octx.fillStyle = `rgb(${r - 25},${g - 25},${b - 20})`;
+        octx.fill();
+        octx.beginPath();
+        octx.arc(cx + cr.cx - cr.r * 0.25, cy + cr.cy - cr.r * 0.25, cr.r * 0.75, 0, Math.PI * 2);
+        octx.strokeStyle = `rgba(${r + 25},${g + 20},${b + 15},0.3)`;
+        octx.lineWidth = 0.8;
+        octx.stroke();
+      }
+
+      // Surface ridges
+      octx.globalAlpha = 0.25;
+      octx.strokeStyle = `rgb(${r - 15},${g - 15},${b - 10})`;
+      octx.lineWidth = 0.7;
+      for (const rd of ridges) {
+        octx.beginPath();
+        octx.arc(cx, cy, rd.dist, rd.start, rd.start + rd.len);
+        octx.stroke();
+      }
+
+      return c;
+    };
 
     const makeAsteroid = (): AsteroidRock => {
       const size = 80 + Math.random() * 120;
@@ -126,27 +223,381 @@ export class AuthScreen {
       else if (edge === 2) { x = Math.random() * canvas.width; y = -size * 1.5; vx = (Math.random() - 0.5) * speed * 0.4; vy = speed; }
       else { x = Math.random() * canvas.width; y = canvas.height + size * 1.5; vx = (Math.random() - 0.5) * speed * 0.4; vy = -speed; }
       const palettes: [number, number, number][] = [[95, 85, 70], [75, 68, 58], [105, 92, 75], [85, 78, 65], [65, 58, 50]];
-      return { x, y, vx, vy, rotation: Math.random() * Math.PI * 2, rotSpeed: (Math.random() - 0.5) * 0.004, size, shape, craters, ridges, rgb: palettes[Math.floor(Math.random() * palettes.length)] };
+      const rgb = palettes[Math.floor(Math.random() * palettes.length)];
+      const preRendered = preRenderAsteroid(size, shape, craters, ridges, rgb);
+      return { x, y, vx, vy, rotation: Math.random() * Math.PI * 2, rotSpeed: (Math.random() - 0.5) * 0.004, size, shape, craters, ridges, rgb, preRendered };
     };
 
-    let lastDrawTime = 0;
-    const FRAME_INTERVAL = 66; // ~15fps — plenty for slow ambient motion
+    // ── Sun (top-left corner) — solar flare definitions ──────────
+    type SolarFlare = { angle: number; length: number; width: number; speed: number; phase: number };
+    const solarFlares: SolarFlare[] = [];
+    for (let i = 0; i < 8; i++) {
+      solarFlares.push({
+        angle: (i / 8) * Math.PI * 2 + (Math.random() - 0.5) * 0.4,
+        length: 12 + Math.random() * 22,
+        width: 0.1 + Math.random() * 0.18,
+        speed: 0.0008 + Math.random() * 0.0012,
+        phase: Math.random() * Math.PI * 2,
+      });
+    }
 
-    const animateBg = (now: number) => {
-      this.animationFrameId = requestAnimationFrame(animateBg);
+    // Lens flare element definitions (constant — hoisted out of render loop)
+    const lensEls: { t: number; size: number; r: number; g: number; b: number; a: number }[] = [
+      { t: 0.25, size: 12, r: 255, g: 200, b: 120, a: 0.12 },
+      { t: 0.4, size: 8, r: 200, g: 220, b: 255, a: 0.15 },
+      { t: 0.55, size: 30, r: 120, g: 160, b: 255, a: 0.06 },
+      { t: 0.7, size: 10, r: 255, g: 230, b: 160, a: 0.14 },
+      { t: 0.9, size: 45, r: 100, g: 140, b: 255, a: 0.04 },
+      { t: 1.1, size: 18, r: 255, g: 180, b: 100, a: 0.1 },
+      { t: 1.35, size: 55, r: 80, g: 120, b: 255, a: 0.03 },
+      { t: 1.55, size: 22, r: 200, g: 180, b: 255, a: 0.07 },
+    ];
+
+    // ── Astronaut — tumbling spaceman on a windy path ────────────
+    const astroEl = document.createElement('img');
+    astroEl.src = '/grib_astro.png';
+    astroEl.style.cssText = 'position: absolute; pointer-events: none; display: none; z-index: 0;';
+    this.element.appendChild(astroEl);
+    let astroReady = false;
+    astroEl.onload = () => { astroReady = true; };
+
+    // Thought bubble — bottom-left anchored to astronaut's top-right corner
+    const bubbleWrap = document.createElement('div');
+    bubbleWrap.style.cssText = `
+      position: absolute; pointer-events: none; display: none; z-index: 0;
+      transform-origin: 50% 100%;
+    `;
+    // Main bubble
+    const bubble = document.createElement('div');
+    const astroThoughts = [
+      "I'm fucked!",
+      "I loved her...",
+      "Where's Brad?",
+      "I'll never get glad 😟",
+      "Yeah I'm huge",
+      "Joel?",
+      "Can't believe I'm actually 300 lbs...",
+      "Am I gay?",
+      "Cord??",
+      "I'm Looksmaxxing right now",
+      "What's on the Dash tonight?",
+      "Wish I had some bird right about now...",
+      "T levels are tanking",
+      "Shoulda stayed on the damn couch"
+    ];
+    bubble.textContent = astroThoughts[Math.floor(Math.random() * astroThoughts.length)];
+    bubble.style.cssText = `
+      background: #fff; color: #111; font-family: 'Comic Sans MS', 'Segoe UI', sans-serif;
+      font-size: 15px; font-weight: 700; padding: 8px 14px; border-radius: 18px;
+      white-space: nowrap;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    `;
+    bubbleWrap.appendChild(bubble);
+    // Trailing dots in normal flow (big → small, toward the anchor)
+    const dotSizes = [10, 7, 5];
+    for (let di = 0; di < 3; di++) {
+      const dot = document.createElement('div');
+      dot.style.cssText = `
+        width: ${dotSizes[di]}px; height: ${dotSizes[di]}px; border-radius: 50%;
+        background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+        margin-top: 3px; margin-left: auto; margin-right: auto;
+      `;
+      bubbleWrap.appendChild(dot);
+    }
+    this.element.appendChild(bubbleWrap);
+    let bubbleVisible = false;
+    let bubbleDone = false; // prevents re-triggering after pop-out
+    let bubbleShowTime = 0;
+    let bubbleScale = 0;
+    const BUBBLE_DURATION = 3500; // visible for 3.5s
+    const BUBBLE_TRIGGER = 0.35; // show at 35% of journey
+    const BUBBLE_POP_SPEED = 0.07; // scale change per frame at 60fps
+
+    type AstroWaypoint = { x: number; y: number };
+    type Astronaut = {
+      path: AstroWaypoint[];  // bezier-style waypoints
+      t: number;              // 0..1 progress along path
+      speed: number;          // how fast t advances per frame
+      rotation: number;
+      rotSpeed: number;
+      size: number;
+    };
+    let astronaut: Astronaut | null = null;
+    let astroSpawnTime = 0; // timestamp of next spawn
+    const ASTRO_INTERVAL = 30000; // 30 seconds
+
+    const spawnAstronaut = (): Astronaut => {
+      const w = canvas.width, h = canvas.height;
+      const margin = 180;
+      // Pick a random edge to enter from
+      const edge = Math.floor(Math.random() * 4);
+      let startX: number, startY: number;
+      if (edge === 0) { startX = -margin; startY = Math.random() * h; }
+      else if (edge === 1) { startX = w + margin; startY = Math.random() * h; }
+      else if (edge === 2) { startX = Math.random() * w; startY = -margin; }
+      else { startX = Math.random() * w; startY = h + margin; }
+
+      // Generate 5-7 waypoints that meander through the screen then exit off another edge
+      const numWaypoints = 5 + Math.floor(Math.random() * 3);
+      const path: AstroWaypoint[] = [{ x: startX, y: startY }];
+      for (let i = 1; i < numWaypoints - 1; i++) {
+        path.push({
+          x: margin * 0.5 + Math.random() * (w - margin),
+          y: margin * 0.5 + Math.random() * (h - margin),
+        });
+      }
+      // Exit off a different edge
+      let exitEdge = (edge + 1 + Math.floor(Math.random() * 3)) % 4;
+      let endX: number, endY: number;
+      if (exitEdge === 0) { endX = -margin; endY = Math.random() * h; }
+      else if (exitEdge === 1) { endX = w + margin; endY = Math.random() * h; }
+      else if (exitEdge === 2) { endX = Math.random() * w; endY = -margin; }
+      else { endX = Math.random() * w; endY = h + margin; }
+      path.push({ x: endX, y: endY });
+
+      return {
+        path,
+        t: 0,
+        speed: 0.0004 + Math.random() * 0.0003,
+        rotation: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 0.03,
+        size: 250 + Math.random() * 60,
+      };
+    };
+
+    // Catmull-Rom spline interpolation for smooth windy paths
+    const catmullRom = (p0: AstroWaypoint, p1: AstroWaypoint, p2: AstroWaypoint, p3: AstroWaypoint, t: number): { x: number; y: number } => {
+      const t2 = t * t, t3 = t2 * t;
+      return {
+        x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+        y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+      };
+    };
+
+    const getAstroPos = (astro: Astronaut): { x: number; y: number } => {
+      const pts = astro.path;
+      const totalSegments = pts.length - 1;
+      const scaledT = astro.t * totalSegments;
+      const seg = Math.min(Math.floor(scaledT), totalSegments - 1);
+      const localT = scaledT - seg;
+      const p0 = pts[Math.max(seg - 1, 0)];
+      const p1 = pts[seg];
+      const p2 = pts[Math.min(seg + 1, pts.length - 1)];
+      const p3 = pts[Math.min(seg + 2, pts.length - 1)];
+      return catmullRom(p0, p1, p2, p3, localT);
+    };
+
+    // ── Single merged animation loop ─────────────────────────────
+    // Astronaut DOM updates run every frame (smooth 60fps movement).
+    // Canvas drawing is throttled to ~15fps (plenty for slow ambient motion).
+    let lastDrawTime = 0;
+    const FRAME_INTERVAL = 66;
+    let astroLastTime = 0;
+
+    const animateLoop = (now: number) => {
+      this.animationFrameId = requestAnimationFrame(animateLoop);
       if (document.hidden) return;
+
+      // ── Astronaut update (every frame for smooth DOM movement) ──
+      if (astroReady) {
+        const dt = astroLastTime ? Math.min((now - astroLastTime) / (1000 / 60), 3) : 1;
+        astroLastTime = now;
+
+        if (astroSpawnTime === 0) astroSpawnTime = now + ASTRO_INTERVAL;
+
+        if (!astronaut && now >= astroSpawnTime) {
+          astronaut = spawnAstronaut();
+          astroEl.style.display = 'block';
+          bubble.textContent = astroThoughts[Math.floor(Math.random() * astroThoughts.length)];
+          bubbleVisible = false;
+          bubbleDone = false;
+          bubbleShowTime = 0;
+          bubbleScale = 0;
+          bubbleWrap.style.display = 'none';
+        }
+
+        if (astronaut) {
+          astronaut.t += astronaut.speed * dt;
+          astronaut.rotation += astronaut.rotSpeed * dt;
+
+          if (astronaut.t >= 1) {
+            astronaut = null;
+            astroSpawnTime = now + ASTRO_INTERVAL;
+            astroEl.style.display = 'none';
+            bubbleWrap.style.display = 'none';
+            bubbleVisible = false;
+            bubbleScale = 0;
+          } else {
+            const pos = getAstroPos(astronaut);
+            const s = astronaut.size;
+            const aspect = astroEl.naturalWidth / astroEl.naturalHeight;
+            const drawH = s;
+            const drawW = s * aspect;
+            astroEl.style.width = `${drawW}px`;
+            astroEl.style.height = `${drawH}px`;
+            astroEl.style.left = `${pos.x - drawW / 2}px`;
+            astroEl.style.top = `${pos.y - drawH / 2}px`;
+            astroEl.style.transform = `rotate(${astronaut.rotation}rad)`;
+
+            // Thought bubble — trigger once at 35% of journey
+            const r = astronaut.rotation;
+            if (!bubbleVisible && !bubbleDone && astronaut.t >= BUBBLE_TRIGGER) {
+              bubbleVisible = true;
+              bubbleShowTime = now;
+              bubbleScale = 0;
+              bubbleWrap.style.display = 'block';
+            }
+            if (bubbleVisible) {
+              // Animate scale in/out
+              const popping = now - bubbleShowTime > BUBBLE_DURATION;
+              if (popping) {
+                bubbleScale = Math.max(0, bubbleScale - BUBBLE_POP_SPEED * dt);
+                if (bubbleScale <= 0) { bubbleWrap.style.display = 'none'; bubbleVisible = false; bubbleDone = true; }
+              } else {
+                bubbleScale = Math.min(1, bubbleScale + BUBBLE_POP_SPEED * dt);
+              }
+              // Anchor bottom-center of bubble to top-center of astronaut image
+              const anchorX = pos.x + Math.sin(r) * (drawH / 2);
+              const anchorY = pos.y - Math.cos(r) * (drawH / 2);
+              bubbleWrap.style.left = `${anchorX}px`;
+              bubbleWrap.style.top = `${anchorY}px`;
+              // Dampen rotation so bubble leans with astronaut but stays readable
+              let bubbleR = r % (Math.PI * 2);
+              if (bubbleR > Math.PI) bubbleR -= Math.PI * 2;
+              if (bubbleR < -Math.PI) bubbleR += Math.PI * 2;
+              bubbleR *= 0.25;
+              bubbleWrap.style.transform = `translate(-50%, -100%) rotate(${bubbleR}rad) scale(${bubbleScale})`;
+            }
+          }
+        }
+      }
+
+      // ── Canvas background (throttled to ~15fps) ──
       if (now - lastDrawTime < FRAME_INTERVAL) return;
       lastDrawTime = now;
 
       ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Draw radial gradient base
-      const grd = ctx.createRadialGradient(canvas.width / 2, canvas.height / 2, 0, canvas.width / 2, canvas.height / 2, canvas.width * 0.6);
-      grd.addColorStop(0, 'rgba(15, 10, 30, 0.05)');
-      grd.addColorStop(1, 'rgba(0, 0, 0, 0.1)');
-      ctx.fillStyle = grd;
+      // Draw radial gradient base (cached)
+      ctx.fillStyle = cachedBaseGradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // ── Sun ──────────────────────────────────────────────────────
+
+      // Scene illumination (cached)
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = cachedSunIllumGradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Corona — pulsing outer glow
+      const coronaPulse = 1 + Math.sin(now * 0.0015) * 0.08;
+      const coronaR = 70 * coronaPulse;
+      const corona = ctx.createRadialGradient(sunX, sunY, sunRadius * 0.6, sunX, sunY, coronaR);
+      corona.addColorStop(0, 'rgba(255, 230, 170, 0.3)');
+      corona.addColorStop(0.4, 'rgba(255, 170, 60, 0.12)');
+      corona.addColorStop(0.7, 'rgba(255, 100, 20, 0.04)');
+      corona.addColorStop(1, 'rgba(255, 60, 10, 0)');
+      ctx.fillStyle = corona;
+      ctx.beginPath();
+      ctx.arc(sunX, sunY, coronaR, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Solar flares — animated prominences curving out from the surface
+      for (const flare of solarFlares) {
+        const t = now * flare.speed + flare.phase;
+        const len = flare.length * (0.5 + 0.5 * Math.sin(t));
+        if (len < 3) continue;
+        const baseAngle = flare.angle + Math.sin(t * 0.7) * 0.15;
+        const x1 = sunX + Math.cos(baseAngle - flare.width) * sunRadius * 0.9;
+        const y1 = sunY + Math.sin(baseAngle - flare.width) * sunRadius * 0.9;
+        const x2 = sunX + Math.cos(baseAngle + flare.width) * sunRadius * 0.9;
+        const y2 = sunY + Math.sin(baseAngle + flare.width) * sunRadius * 0.9;
+        const cpx = sunX + Math.cos(baseAngle) * (sunRadius + len);
+        const cpy = sunY + Math.sin(baseAngle) * (sunRadius + len);
+        const flareGrad = ctx.createRadialGradient(sunX, sunY, sunRadius * 0.8, sunX, sunY, sunRadius + len);
+        flareGrad.addColorStop(0, 'rgba(255, 220, 100, 0.6)');
+        flareGrad.addColorStop(0.5, 'rgba(255, 130, 30, 0.25)');
+        flareGrad.addColorStop(1, 'rgba(255, 60, 10, 0)');
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = flareGrad;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.quadraticCurveTo(cpx, cpy, x2, y2);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Sun body (cached gradient)
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = cachedSunBodyGradient;
+      ctx.beginPath();
+      ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Surface shimmer — moving bright spots on the sun
+      ctx.globalAlpha = 0.15;
+      for (let si = 0; si < 3; si++) {
+        const shimAngle = now * 0.001 * (si + 1) + si * 2.1;
+        const shimX = sunX + Math.cos(shimAngle) * sunRadius * 0.4;
+        const shimY = sunY + Math.sin(shimAngle) * sunRadius * 0.3;
+        const shimR = sunRadius * (0.25 + 0.15 * Math.sin(now * 0.002 + si));
+        const shim = ctx.createRadialGradient(shimX, shimY, 0, shimX, shimY, shimR);
+        shim.addColorStop(0, 'rgba(255, 255, 220, 0.5)');
+        shim.addColorStop(1, 'rgba(255, 255, 200, 0)');
+        ctx.fillStyle = shim;
+        ctx.beginPath();
+        ctx.arc(shimX, shimY, shimR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Star-point light rays — elongated spikes
+      ctx.globalAlpha = 1;
+      const rayCount = 6;
+      const rayBaseLen = 80 + Math.sin(now * 0.001) * 15;
+      for (let ri = 0; ri < rayCount; ri++) {
+        const rayAngle = (ri / rayCount) * Math.PI * 2 + Math.PI / 12;
+        const rayLen = rayBaseLen * (0.7 + 0.3 * Math.sin(now * 0.0008 + ri * 1.5));
+        const rw = 0.02;
+        const rx1 = sunX + Math.cos(rayAngle - rw) * sunRadius;
+        const ry1 = sunY + Math.sin(rayAngle - rw) * sunRadius;
+        const rx2 = sunX + Math.cos(rayAngle + rw) * sunRadius;
+        const ry2 = sunY + Math.sin(rayAngle + rw) * sunRadius;
+        const rxTip = sunX + Math.cos(rayAngle) * (sunRadius + rayLen);
+        const ryTip = sunY + Math.sin(rayAngle) * (sunRadius + rayLen);
+        const rayGrad = ctx.createLinearGradient(sunX, sunY, rxTip, ryTip);
+        rayGrad.addColorStop(0, 'rgba(255, 240, 180, 0.45)');
+        rayGrad.addColorStop(0.3, 'rgba(255, 200, 100, 0.15)');
+        rayGrad.addColorStop(1, 'rgba(255, 160, 60, 0)');
+        ctx.fillStyle = rayGrad;
+        ctx.beginPath();
+        ctx.moveTo(rx1, ry1);
+        ctx.lineTo(rxTip, ryTip);
+        ctx.lineTo(rx2, ry2);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Dynamic lens flare — elements along sun → screen-center line
+      const lfDx = canvas.width * 0.5 - sunX;
+      const lfDy = canvas.height * 0.5 - sunY;
+      const flareIntensity = 0.7 + 0.3 * Math.sin(now * 0.0012);
+      ctx.globalAlpha = flareIntensity;
+      for (const le of lensEls) {
+        const lx = sunX + lfDx * le.t;
+        const ly = sunY + lfDy * le.t;
+        const pSize = le.size * (1 + 0.15 * Math.sin(now * 0.002 + le.t * 5));
+        const leGrad = ctx.createRadialGradient(lx, ly, 0, lx, ly, pSize);
+        leGrad.addColorStop(0, `rgba(${le.r}, ${le.g}, ${le.b}, ${le.a})`);
+        leGrad.addColorStop(0.6, `rgba(${le.r}, ${le.g}, ${le.b}, ${le.a * 0.3})`);
+        leGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = leGrad;
+        ctx.beginPath();
+        ctx.arc(lx, ly, pSize, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1;
 
       // Particles
       for (const p of particles) {
@@ -187,7 +638,7 @@ export class AuthScreen {
         ctx.stroke();
       }
 
-      // Asteroids — occasional large rocks drifting through
+      // Asteroids — pre-rendered, just drawImage with rotation
       if (asteroidList.length < 3 && Math.random() < 0.004) asteroidList.push(makeAsteroid());
 
       for (let i = asteroidList.length - 1; i >= 0; i--) {
@@ -197,66 +648,17 @@ export class AuthScreen {
         if (a.x < -m || a.x > canvas.width + m || a.y < -m || a.y > canvas.height + m) {
           asteroidList.splice(i, 1); continue;
         }
-        const [r, g, b] = a.rgb;
         ctx.save();
         ctx.translate(a.x, a.y);
         ctx.rotate(a.rotation);
-
-        // Body shape
-        ctx.beginPath();
-        for (let j = 0; j < a.shape.length; j += 2) {
-          const px = Math.cos(a.shape[j]) * a.shape[j + 1];
-          const py = Math.sin(a.shape[j]) * a.shape[j + 1];
-          j === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-        }
-        ctx.closePath();
-        ctx.globalAlpha = 0.8;
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
-        ctx.fill();
-
-        // 3D lighting gradient (lit from upper-left)
-        const lg = ctx.createRadialGradient(-a.size * 0.3, -a.size * 0.3, 0, 0, 0, a.size);
-        lg.addColorStop(0, `rgba(${r + 55},${g + 50},${b + 45},0.35)`);
-        lg.addColorStop(0.5, 'rgba(0,0,0,0)');
-        lg.addColorStop(1, 'rgba(0,0,0,0.35)');
-        ctx.fillStyle = lg;
-        ctx.fill();
-
-        // Edge outline
-        ctx.strokeStyle = `rgba(${r + 35},${g + 30},${b + 25},0.35)`;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-
-        // Craters
-        for (const c of a.craters) {
-          ctx.globalAlpha = 0.5;
-          ctx.beginPath();
-          ctx.arc(c.cx, c.cy, c.r, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${r - 25},${g - 25},${b - 20},0.7)`;
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(c.cx - c.r * 0.25, c.cy - c.r * 0.25, c.r * 0.75, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(${r + 25},${g + 20},${b + 15},0.2)`;
-          ctx.lineWidth = 0.8;
-          ctx.stroke();
-        }
-
-        // Surface ridges
-        ctx.globalAlpha = 0.15;
-        ctx.strokeStyle = `rgb(${r - 15},${g - 15},${b - 10})`;
-        ctx.lineWidth = 0.7;
-        for (const rd of a.ridges) {
-          ctx.beginPath();
-          ctx.arc(0, 0, rd.dist, rd.start, rd.start + rd.len);
-          ctx.stroke();
-        }
-
+        ctx.globalAlpha = 1;
+        ctx.drawImage(a.preRendered, -a.preRendered.width / 2, -a.preRendered.height / 2);
         ctx.restore();
       }
 
       ctx.globalAlpha = 1;
     };
-    this.animationFrameId = requestAnimationFrame(animateBg);
+    this.animationFrameId = requestAnimationFrame(animateLoop);
 
     // ── Content wrapper (over canvas) ───────────────────────────────
     const content = document.createElement('div');
@@ -501,6 +903,74 @@ export class AuthScreen {
 
     // Initial tab state
     updateTabs();
+
+    // ── Background music with fade-in ──────────────────────────────
+    this.startMusic();
+  }
+
+  private async startMusic(): Promise<void> {
+    try {
+      const ctx = new AudioContext();
+      this.audioCtx = ctx;
+      const gain = ctx.createGain();
+      this.gainNode = gain;
+      gain.gain.value = 0;
+      gain.connect(ctx.destination);
+
+      const resp = await fetch('/soundtrack1.ogg');
+      const buf = await resp.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(buf);
+
+      // Don't start if we were destroyed while loading
+      if (this.fadingOut) return;
+
+      const source = ctx.createBufferSource();
+      this.sourceNode = source;
+      source.buffer = audioBuf;
+      source.loop = true;
+      source.connect(gain);
+      source.start();
+
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
+
+      // If the browser suspended the context (no user gesture yet),
+      // wait for any interaction to resume it; otherwise fade in now.
+      if (ctx.state === 'suspended') {
+        for (const evt of ['pointerdown', 'keydown'] as const) {
+          document.addEventListener(evt, this.onUserGesture, { once: false });
+        }
+      } else if (!document.hidden) {
+        gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 2);
+      }
+    } catch {
+      // Audio playback not available — silent fail
+    }
+  }
+
+  private resumeAudioCtx(): void {
+    if (!this.audioCtx || this.fadingOut) return;
+    this.audioCtx.resume().then(() => {
+      // Remove gesture listeners once resumed
+      for (const evt of ['pointerdown', 'keydown'] as const) {
+        document.removeEventListener(evt, this.onUserGesture);
+      }
+      if (!this.fadingOut && this.gainNode && this.audioCtx && !document.hidden) {
+        this.gainNode.gain.linearRampToValueAtTime(0.5, this.audioCtx.currentTime + 2);
+      }
+    });
+  }
+
+  private handleVisibilityChange(): void {
+    if (this.fadingOut || !this.audioCtx || !this.gainNode) return;
+    const ctx = this.audioCtx;
+    const gain = this.gainNode;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    if (document.hidden) {
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
+    } else {
+      gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.5);
+    }
   }
 
   showError(message: string): void {
@@ -519,5 +989,28 @@ export class AuthScreen {
   destroy(): void {
     cancelAnimationFrame(this.animationFrameId);
     this.element.remove();
+    this.fadeOutMusic();
+  }
+
+  private fadeOutMusic(): void {
+    this.fadingOut = true;
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    for (const evt of ['pointerdown', 'keydown'] as const) {
+      document.removeEventListener(evt, this.onUserGesture);
+    }
+    if (!this.audioCtx || !this.gainNode) return;
+    const ctx = this.audioCtx;
+    const gain = this.gainNode;
+    // Fade out over 1.5 seconds, then stop and close
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 1.5);
+    setTimeout(() => {
+      this.sourceNode?.stop();
+      ctx.close();
+      this.audioCtx = null;
+      this.gainNode = null;
+      this.sourceNode = null;
+    }, 1600);
   }
 }

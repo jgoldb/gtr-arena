@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { yardsToUnits, ArenaPreparationBuff, RestingBuff, type Ability } from './combat/Ability';
+import { yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
@@ -44,7 +44,8 @@ interface ActiveChemicalPool extends ChemPoolVisual {
   elapsed: number;
   speedBuff: BuffDefinition;
   dot: BuffDefinition;
-  initialDamage: number;
+  initialDamageMin: number;
+  initialDamageMax: number;
   dotDamagePerTick: number;
   dotTickInterval: number;
   dotDuration: number;
@@ -76,6 +77,14 @@ interface ActiveFullRetardAura extends FullRetardAuraVisual {
   nextTickAt: number;
 }
 
+interface PendingAoeImpact {
+  ability: Ability;
+  groundPos: THREE.Vector3;
+  delay: number;
+  elapsed: number;
+  owner: Targetable;
+}
+
 export class Engine {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
@@ -94,6 +103,7 @@ export class Engine {
   private readonly chemicalPools: ActiveChemicalPool[] = [];
   private readonly activeDots: ActiveDot[] = [];
   private readonly discombobEffects: DiscombobBubbles[] = [];
+  private readonly pendingAoeImpacts: PendingAoeImpact[] = [];
   private fullRetardAura: ActiveFullRetardAura | null = null;
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamTarget: Targetable | null = null;
@@ -124,6 +134,7 @@ export class Engine {
   private static readonly CAST_PUSHBACK = 0.5;
   onCastComplete?: (ability: Ability, target: Targetable | null) => void;
   onCastFailed?: (message: string) => void;
+  onGroundTargetConfirmed?: () => void;
 
   private arenaPreparationActive = false;
   private resting = false;
@@ -211,6 +222,13 @@ export class Engine {
         for (const npc of this.npcs) {
           if (npc === target) { npc.triggerFlinch(); break; }
         }
+      }
+    };
+
+    // Auto-target attacker when player has no target
+    this.combatSystem.onHostileAction = (attacker, target) => {
+      if (target === this.playerController && !this.targetingSystem.currentTarget) {
+        this.targetingSystem.currentTarget = attacker;
       }
     };
 
@@ -358,6 +376,7 @@ export class Engine {
       }
       // Enter combat for hostile channel targets
       if (target && target.isHostileTo(this.playerController)) {
+        this.combatSystem.onHostileAction?.(this.playerController, target);
         this.combatSystem.enterCombat(this.playerController);
         this.combatSystem.enterCombat(target);
         // Channel start can miss on hostile targets (entire channel fails)
@@ -411,6 +430,63 @@ export class Engine {
     if (!this.casting) return;
     this.removeChannelAura();
     this.casting = null;
+  }
+
+  // Delay from ability activation to projectile impact (animation wind-up + flight time)
+  private static readonly BOTTLE_CHUCK_IMPACT_DELAY = 0.825; // ~0.275s launch + 0.55s flight
+
+  /** Execute a ground-targeted AoE ability at a world position. Consumes resources immediately, delays damage until impact. */
+  useGroundTargetAbility(
+    ability: Ability,
+    groundPos: THREE.Vector3
+  ): import('./combat/CombatSystem').CombatResult {
+    const attacker = this.playerController;
+    if (attacker.dead) return { success: false, error: 'dead', errorMessage: 'You are dead' };
+    if (this.buffSystem.isStunned(attacker)) return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
+    if (!this.godMode && this.combatSystem.getCooldownRemaining(ability.id) > 0) {
+      return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
+    }
+    if (!this.godMode) {
+      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
+      if (attacker.mana < effectiveCost) return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
+      attacker.mana -= effectiveCost;
+      if (effectiveCost > 0) this.regenSystem.notifyManaUsed(attacker);
+    }
+
+    if (!this.godMode) {
+      this.combatSystem.setCooldown(ability.id, ability.cooldown);
+    }
+
+    // Schedule damage for when the projectile lands
+    this.pendingAoeImpacts.push({
+      ability,
+      groundPos: groundPos.clone(),
+      delay: Engine.BOTTLE_CHUCK_IMPACT_DELAY,
+      elapsed: 0,
+      owner: attacker,
+    });
+
+    return { success: true };
+  }
+
+  private updatePendingAoeImpacts(dt: number): void {
+    for (let i = this.pendingAoeImpacts.length - 1; i >= 0; i--) {
+      const impact = this.pendingAoeImpacts[i];
+      impact.elapsed += dt;
+      if (impact.elapsed < impact.delay) continue;
+
+      // Impact! Damage all hostiles in radius
+      const radius = impact.ability.aoeRadius ?? 0;
+      for (const target of this.npcs) {
+        if (target.dead || !target.isHostileTo(impact.owner)) continue;
+        const dx = target.mesh.position.x - impact.groundPos.x;
+        const dz = target.mesh.position.z - impact.groundPos.z;
+        if (dx * dx + dz * dz > radius * radius) continue;
+        this.combatSystem.applyAoeDamage(impact.owner, target, impact.ability);
+      }
+
+      this.pendingAoeImpacts.splice(i, 1);
+    }
   }
 
   private completeCasting(): void {
@@ -575,7 +651,8 @@ export class Engine {
     duration: number,
     speedBuff: BuffDefinition,
     dot: BuffDefinition,
-    initialDamage: number,
+    initialDamageMin: number,
+    initialDamageMax: number,
     dotTotalDamage: number,
     dotTickInterval: number,
     dotDuration: number,
@@ -594,7 +671,8 @@ export class Engine {
       elapsed: 0,
       speedBuff,
       dot,
-      initialDamage,
+      initialDamageMin,
+      initialDamageMax,
       dotDamagePerTick,
       dotTickInterval,
       dotDuration,
@@ -626,8 +704,10 @@ export class Engine {
           if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
 
           if (target.isHostileTo(pool.owner)) {
+            this.combatSystem.onHostileAction?.(pool.owner, target);
             const poolGodImmune = this.godMode && target === this.playerController;
-            const actualPoolDmg = poolGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, pool.initialDamage, pool.owner);
+            const rolledDmg = pool.initialDamageMin + Math.floor(Math.random() * (pool.initialDamageMax - pool.initialDamageMin + 1));
+            const actualPoolDmg = poolGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, rolledDmg, pool.owner);
             target.hp = Math.max(0, target.hp - actualPoolDmg);
             if (actualPoolDmg > 0) this.combatSystem.onCombatText?.(target, actualPoolDmg, 'damage');
             this.combatSystem.enterCombat(pool.owner);
@@ -674,6 +754,7 @@ export class Engine {
       // Tick damage
       while (dot.elapsed >= dot.nextTickAt && dot.nextTickAt <= dot.totalDuration) {
         if (!dot.target.dead) {
+          this.combatSystem.onHostileAction?.(dot.owner, dot.target);
           const dotGodImmune = this.godMode && dot.target === this.playerController;
           const actualDotDmg = dotGodImmune ? 0 : this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
           dot.target.hp = Math.max(0, dot.target.hp - actualDotDmg);
@@ -745,6 +826,7 @@ export class Engine {
       while (cloud.elapsed >= cloud.nextTickAt && cloud.nextTickAt <= cloud.duration) {
         for (const target of cloud.affectedTargets) {
           if (target.dead) continue;
+          this.combatSystem.onHostileAction?.(cloud.owner, target);
           const cloudGodImmune = this.godMode && target === this.playerController;
           const actualCloudDmg = cloudGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, cloud.damagePerTick, cloud.owner);
           target.hp = Math.max(0, target.hp - actualCloudDmg);
@@ -821,7 +903,7 @@ export class Engine {
 
     const meleeRange = this.playerController.autoAttackRange;
 
-    // Tick every 1 second: 10 damage to hostiles, 15 heal to friendlies in melee range
+    // Tick every 1 second: 200 damage to hostiles, 300 heal to friendlies in melee range
     while (aura.elapsed >= aura.nextTickAt) {
       // Damage hostiles
       for (const npc of this.npcs) {
@@ -829,7 +911,7 @@ export class Engine {
         const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
         const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
         if (dx * dx + dz * dz <= meleeRange * meleeRange) {
-          const dmg = this.combatSystem.processDamageAbsorb(npc, 10, this.playerController);
+          const dmg = this.combatSystem.processDamageAbsorb(npc, 200, this.playerController);
           npc.hp = Math.max(0, npc.hp - dmg);
           if (dmg > 0) this.combatSystem.onCombatText?.(npc, dmg, 'damage');
           this.combatSystem.enterCombat(this.playerController);
@@ -838,14 +920,14 @@ export class Engine {
         }
       }
 
-      // Heal friendlies (including self — self heals for 3, allies for 15)
+      // Heal friendlies (including self — self heals for 125, allies for 300)
       const allTargets: Targetable[] = [this.playerController, ...this.npcs];
       for (const target of allTargets) {
         if (target.dead || target.isHostileTo(this.playerController)) continue;
         const dx = this.playerController.mesh.position.x - target.mesh.position.x;
         const dz = this.playerController.mesh.position.z - target.mesh.position.z;
         if (dx * dx + dz * dz <= meleeRange * meleeRange) {
-          const heal = target === this.playerController ? 3 : 15;
+          const heal = target === this.playerController ? 125 : 300;
           this.combatSystem.applyHeal(target, heal);
         }
       }
@@ -979,11 +1061,11 @@ export class Engine {
     player.charging = true;
     this.sweepCharge = {
       elapsed: 0,
-      duration: 1.0,
+      duration: Sweep.chargeDuration!,
       direction,
-      speed: yardsToUnits(20), // 20 yards/sec = 12 world units/sec
+      speed: Sweep.chargeSpeed!,
       hitTargets: new Set(),
-      maxDamage: 80,
+      maxDamage: Sweep.chargeMaxDamage!,
     };
   }
 
@@ -1097,7 +1179,13 @@ export class Engine {
     // Process targeting clicks before movement updates
     const click = this.input.getLeftClick();
     if (click) {
-      this.targetingSystem.processClick(click.x, click.y);
+      if (this.targetingSystem.groundTargetActive) {
+        if (!this.targetingSystem.groundTargetBlocked) {
+          this.onGroundTargetConfirmed?.();
+        }
+      } else {
+        this.targetingSystem.processClick(click.x, click.y);
+      }
     }
 
     // Process right-click for auto-attack
@@ -1110,7 +1198,7 @@ export class Engine {
     }
 
     // Update cursor for hover detection (only when pointer is unlocked)
-    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos());
+    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.getMouseScreenPosAlways());
 
     this.updateAutoAttack(deltaTime);
 
@@ -1122,7 +1210,7 @@ export class Engine {
     this.playerController.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(this.playerController, 'full-retard'));
 
     // Resting toggle
-    const rKeyDown = this.input.isKeyDown(keybindManager.getCode('rest'));
+    const rKeyDown = this.input.isBindDown(keybindManager.getCode('rest'));
     if (rKeyDown && !this.rKeyWasDown) {
       if (this.resting) {
         this.stopResting();
@@ -1133,14 +1221,14 @@ export class Engine {
     this.rKeyWasDown = rKeyDown;
 
     // Tab targeting — nearest hostile in front within 30 yards
-    const tabDown = this.input.isKeyDown('Tab');
+    const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
     if (tabDown && !this.tabKeyWasDown) {
       this.targetingSystem.selectNearestHostileInFront(this.npcs, yardsToUnits(30));
     }
     this.tabKeyWasDown = tabDown;
 
     // Target of target key
-    const fDown = this.input.isKeyDown(keybindManager.getCode('target_of_target'));
+    const fDown = this.input.isBindDown(keybindManager.getCode('target_of_target'));
     if (fDown && !this.fKeyWasDown) {
       const ct = this.targetingSystem.currentTarget;
       if (ct && 'autoAttackTarget' in ct) {
@@ -1169,12 +1257,12 @@ export class Engine {
 
     // Cancel resting on movement
     if (this.resting) {
-      const wDown = this.input.isKeyDown(keybindManager.getCode('move_forward'));
-      const sDown = this.input.isKeyDown(keybindManager.getCode('move_backward'));
-      const aDown = this.input.isKeyDown(keybindManager.getCode('move_left'));
-      const dDown = this.input.isKeyDown(keybindManager.getCode('move_right'));
+      const wDown = this.input.isBindDown(keybindManager.getCode('move_forward'));
+      const sDown = this.input.isBindDown(keybindManager.getCode('move_backward'));
+      const aDown = this.input.isBindDown(keybindManager.getCode('move_left'));
+      const dDown = this.input.isBindDown(keybindManager.getCode('move_right'));
       const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
-      const jumping = this.input.isKeyDown('Space');
+      const jumping = this.input.isBindDown(keybindManager.getCode('jump'));
       if (wDown || sDown || aDown || dDown || bothMouse || jumping) {
         this.stopResting();
       }
@@ -1190,6 +1278,10 @@ export class Engine {
     this.playerController.setStunned(playerStunned);
     if (playerStunned && this.autoAttacking) {
       this.stopAutoAttack();
+    }
+    // Cancel ground targeting on stun or death
+    if ((playerStunned || this.playerController.dead) && this.targetingSystem.groundTargetActive) {
+      this.targetingSystem.cancelGroundTarget();
     }
 
     // Cancel resting on stun
@@ -1303,6 +1395,7 @@ export class Engine {
     this.updateGasClouds(deltaTime);
     this.updateChemicalPools(deltaTime);
     this.updateActiveDots(deltaTime);
+    this.updatePendingAoeImpacts(deltaTime);
     this.updateFullRetardAura(deltaTime);
     this.updateDiscombobEffects(deltaTime);
     this.updateChannelBeam();

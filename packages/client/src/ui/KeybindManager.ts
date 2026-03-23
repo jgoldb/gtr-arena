@@ -11,6 +11,7 @@
 export interface KeybindEntry {
   id: string;
   label: string;
+  category: string;
   defaultCode: string;
   code: string;
 }
@@ -18,36 +19,66 @@ export interface KeybindEntry {
 const STORAGE_KEY = 'gtr_keybinds';
 
 /** Default keybind definitions — order here = order in the UI */
-const DEFAULT_BINDS: { id: string; label: string; code: string }[] = [
+const DEFAULT_BINDS: { id: string; label: string; category: string; code: string }[] = [
   // Movement
-  { id: 'move_forward', label: 'Move Forward', code: 'KeyW' },
-  { id: 'move_left', label: 'Move Left', code: 'KeyA' },
-  { id: 'move_backward', label: 'Move Backward', code: 'KeyS' },
-  { id: 'move_right', label: 'Move Right', code: 'KeyD' },
+  { id: 'move_forward', label: 'Run Forward', category: 'Movement', code: 'KeyW' },
+  { id: 'move_left', label: 'Strafe Left', category: 'Movement', code: 'KeyA' },
+  { id: 'move_backward', label: 'Backpedal', category: 'Movement', code: 'KeyS' },
+  { id: 'move_right', label: 'Strafe Right', category: 'Movement', code: 'KeyD' },
+  { id: 'jump', label: 'Jump', category: 'Movement', code: 'Space' },
+  { id: 'rest', label: 'Rest', category: 'Movement', code: 'KeyR' },
   // Action bar slots
-  { id: 'action_1', label: 'Action Bar 1', code: 'Digit1' },
-  { id: 'action_2', label: 'Action Bar 2', code: 'Digit2' },
-  { id: 'action_3', label: 'Action Bar 3', code: 'Digit3' },
-  { id: 'action_4', label: 'Action Bar 4', code: 'Digit4' },
-  { id: 'action_5', label: 'Action Bar 5', code: 'Digit5' },
-  { id: 'action_6', label: 'Action Bar 6', code: 'Digit6' },
-  { id: 'action_7', label: 'Action Bar 7', code: 'KeyQ' },
-  { id: 'action_8', label: 'Action Bar 8', code: 'KeyE' },
-  // Utility
-  { id: 'rest', label: 'Rest', code: 'KeyR' },
-  { id: 'target_of_target', label: 'Target of Target', code: 'KeyF' },
-  { id: 'toggle_hud', label: 'HUD', code: 'KeyL' },
+  { id: 'action_1', label: 'Action Bar 1', category: 'Action Bar', code: 'Digit1' },
+  { id: 'action_2', label: 'Action Bar 2', category: 'Action Bar', code: 'Digit2' },
+  { id: 'action_3', label: 'Action Bar 3', category: 'Action Bar', code: 'Digit3' },
+  { id: 'action_4', label: 'Action Bar 4', category: 'Action Bar', code: 'Digit4' },
+  { id: 'action_5', label: 'Action Bar 5', category: 'Action Bar', code: 'Digit5' },
+  { id: 'action_6', label: 'Action Bar 6', category: 'Action Bar', code: 'Digit6' },
+  { id: 'action_7', label: 'Action Bar 7', category: 'Action Bar', code: 'KeyQ' },
+  { id: 'action_8', label: 'Action Bar 8', category: 'Action Bar', code: 'KeyE' },
+  // Targeting
+  { id: 'target_nearest_enemy', label: 'Target Nearest Enemy', category: 'Targeting', code: 'Tab' },
+  { id: 'target_of_target', label: 'Assist Target', category: 'Targeting', code: 'KeyF' },
+  // Interface
+  { id: 'toggle_hud', label: 'Toggle HUD', category: 'Interface', code: 'KeyL' },
+  { id: 'toggle_game_menu', label: 'Game Menu', category: 'Interface', code: 'Escape' },
 ];
 
-/** Friendly display name for a KeyboardEvent.code */
-export function codeToDisplayLabel(code: string): string {
-  // Letters
+// ---- Combo helpers ----
+
+/** Parse a bind string like "Shift+Ctrl+Digit1" into its parts */
+export function parseCombo(bindCode: string): { shift: boolean; ctrl: boolean; alt: boolean; baseCode: string } {
+  const parts = bindCode.split('+');
+  const baseCode = parts[parts.length - 1];
+  return {
+    shift: parts.includes('Shift'),
+    ctrl: parts.includes('Ctrl'),
+    alt: parts.includes('Alt'),
+    baseCode,
+  };
+}
+
+/** Build a combo string from a KeyboardEvent (e.g. Shift held + Digit1 → "Shift+Digit1") */
+export function buildComboString(e: KeyboardEvent): string {
+  let combo = '';
+  if (e.shiftKey) combo += 'Shift+';
+  if (e.ctrlKey) combo += 'Ctrl+';
+  if (e.altKey) combo += 'Alt+';
+  combo += e.code;
+  return combo;
+}
+
+/** Check if a KeyboardEvent matches a bind string (exact modifier matching) */
+export function matchesKeybindEvent(bindCode: string, e: KeyboardEvent): boolean {
+  const { shift, ctrl, alt, baseCode } = parseCombo(bindCode);
+  return e.code === baseCode && e.shiftKey === shift && e.ctrlKey === ctrl && e.altKey === alt;
+}
+
+/** Friendly display name for a single KeyboardEvent.code */
+function baseCodeToLabel(code: string): string {
   if (code.startsWith('Key')) return code.slice(3);
-  // Digits
   if (code.startsWith('Digit')) return code.slice(5);
-  // Numpad
   if (code.startsWith('Numpad')) return 'Num' + code.slice(6);
-  // Special keys
   const map: Record<string, string> = {
     Space: 'Space',
     ShiftLeft: 'LShift',
@@ -56,6 +87,7 @@ export function codeToDisplayLabel(code: string): string {
     ControlRight: 'RCtrl',
     AltLeft: 'LAlt',
     AltRight: 'RAlt',
+    Escape: 'Esc',
     Tab: 'Tab',
     CapsLock: 'Caps',
     Backquote: '`',
@@ -73,6 +105,17 @@ export function codeToDisplayLabel(code: string): string {
   return map[code] ?? code;
 }
 
+/** Friendly display name for a bind string (handles combos like "Shift+Digit1" → "Shift+1") */
+export function codeToDisplayLabel(code: string): string {
+  const { shift, ctrl, alt, baseCode } = parseCombo(code);
+  let label = '';
+  if (shift) label += 'Shift+';
+  if (ctrl) label += 'Ctrl+';
+  if (alt) label += 'Alt+';
+  label += baseCodeToLabel(baseCode);
+  return label;
+}
+
 export class KeybindManager {
   private binds: Map<string, KeybindEntry> = new Map();
   private listeners: Set<() => void> = new Set();
@@ -83,6 +126,7 @@ export class KeybindManager {
       this.binds.set(def.id, {
         id: def.id,
         label: def.label,
+        category: def.category,
         defaultCode: def.code,
         code: def.code,
       });
@@ -156,17 +200,19 @@ export class KeybindManager {
     return () => this.listeners.delete(fn);
   }
 
-  /** Get set of all currently bound codes (for InputManager preventDefault) */
+  /** Get set of all currently bound base codes (for InputManager preventDefault) */
   getAllBoundCodes(): Set<string> {
     const codes = new Set<string>();
     for (const entry of this.binds.values()) {
-      codes.add(entry.code);
+      codes.add(parseCombo(entry.code).baseCode);
     }
-    // Always include these regardless of binding
-    codes.add('Space');
+    // Always include modifier & utility keys regardless of binding
     codes.add('ShiftLeft');
     codes.add('ShiftRight');
-    codes.add('Tab');
+    codes.add('ControlLeft');
+    codes.add('ControlRight');
+    codes.add('AltLeft');
+    codes.add('AltRight');
     return codes;
   }
 

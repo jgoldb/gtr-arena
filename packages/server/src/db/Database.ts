@@ -70,6 +70,9 @@ export class GtrDatabase {
     if (!cols.some(c => c.name === 'last_played')) {
       this.db.exec("ALTER TABLE users ADD COLUMN last_played TEXT DEFAULT NULL");
     }
+    if (!cols.some(c => c.name === 'xp')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0');
+    }
   }
 
   // ── Auth ────────────────────────────────────────────────────────────────
@@ -167,9 +170,20 @@ export class GtrDatabase {
     return true;
   }
 
-  getAllUsersWithStats(): { id: number; username: string; created_at: string; games_played: number; wins: number; losses: number; banned_until: string | null; last_played: string | null }[] {
+  getUserXp(userId: number): number {
+    const row = this.db.prepare('SELECT xp FROM users WHERE id = ?').get(userId) as { xp: number } | undefined;
+    return row?.xp ?? 0;
+  }
+
+  addXp(userId: number, amount: number): number {
+    this.db.prepare('UPDATE users SET xp = MAX(0, COALESCE(xp, 0) + ?) WHERE id = ?').run(amount, userId);
+    return this.getUserXp(userId);
+  }
+
+  getAllUsersWithStats(): { id: number; username: string; created_at: string; xp: number; games_played: number; wins: number; losses: number; banned_until: string | null; last_played: string | null }[] {
     return this.db.prepare(`
       SELECT u.id, u.username, u.created_at, u.banned_until, u.last_played,
+             COALESCE(u.xp, 0) as xp,
              COALESCE(s.games_played, 0) as games_played,
              COALESCE(s.wins, 0) as wins,
              COALESCE(s.losses, 0) as losses
@@ -218,7 +232,7 @@ export class GtrDatabase {
     if (!row) return false;
     this.db.prepare('UPDATE user_stats SET games_played = 0, wins = 0, losses = 0 WHERE user_id = ?').run(userId);
     this.db.prepare('DELETE FROM user_character_stats WHERE user_id = ?').run(userId);
-    this.db.prepare('UPDATE users SET last_played = NULL WHERE id = ?').run(userId);
+    this.db.prepare('UPDATE users SET last_played = NULL, xp = 0 WHERE id = ?').run(userId);
     return true;
   }
 

@@ -7,7 +7,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, ArenaPreparationBuff, RestingBuff } from '@gtr/shared';
+import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, ArenaPreparationBuff, RestingBuff, Sweep } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -66,7 +66,8 @@ interface ActiveChemicalPool {
   elapsed: number;
   speedBuff: BuffDefinition;
   dot: BuffDefinition;
-  initialDamage: number;
+  initialDamageMin: number;
+  initialDamageMax: number;
   dotDamagePerTick: number;
   dotTickInterval: number;
   dotDuration: number;
@@ -92,6 +93,15 @@ interface FullRetardAura {
   nextTickAt: number;
 }
 
+interface PendingAoeImpact {
+  ability: Ability;
+  groundX: number;
+  groundZ: number;
+  delay: number;
+  elapsed: number;
+  owner: ServerEntity;
+}
+
 export class ServerEngine {
   private entities: ServerEntity[] = [];
   private collision: CollisionSystem;
@@ -111,6 +121,7 @@ export class ServerEngine {
   private gasClouds: ActiveGasCloud[] = [];
   private chemicalPools: ActiveChemicalPool[] = [];
   private activeDots: ActiveDot[] = [];
+  private pendingAoeImpacts: PendingAoeImpact[] = [];
   private nextEffectId = 1;
 
   // Tick
@@ -122,6 +133,7 @@ export class ServerEngine {
   private static readonly CAST_PUSHBACK = 0.5;
   private static readonly INTERRUPT_COOLDOWN = 1;
   private static readonly KEYFRAME_INTERVAL = 100; // full snapshot every 5 seconds
+  private static readonly BOTTLE_CHUCK_IMPACT_DELAY = 0.825; // animation wind-up + flight time
   // Latency tolerance for range checks — prevents high-ping players from having
   // abilities rejected when target was in range on their screen
   private static readonly RANGE_TOLERANCE = yardsToUnits(2);
@@ -346,12 +358,28 @@ export class ServerEngine {
     if (entity) entity.isAutoAttacking = false;
   }
 
-  requestAbility(entityId: string, abilityId: string, targetEntityId: string | null): void {
+  requestAbility(entityId: string, abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
     const entity = this.getEntity(entityId);
     if (!entity || this.frozenEntities.has(entityId)) return;
 
     const ability = entity.abilities.find(a => a.id === abilityId);
     if (!ability) return;
+
+    // Cancel channel if starting new ability
+    if (this.castingStates.has(entityId) && this.combatSystem.getCooldownRemaining(entityId, abilityId) <= 0) {
+      this.cancelCasting(entityId);
+    }
+
+    // Ground-targeted AoE abilities
+    if (ability.groundTargeted && groundTarget) {
+      const result = this.useGroundTargetAbility(entity, ability, groundTarget.x, groundTarget.z);
+      if (result.success) {
+        this.onAbilitySuccess(entity, ability, groundTarget);
+      } else if (result.errorMessage) {
+        this.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
+      }
+      return;
+    }
 
     // Auto self-cast for friendly abilities
     let target: ServerEntity | null = null;
@@ -360,11 +388,6 @@ export class ServerEngine {
     }
     if (!target && ability.requiresTarget && !ability.requiresHostileTarget) {
       target = entity;
-    }
-
-    // Cancel channel if starting new ability
-    if (this.castingStates.has(entityId) && this.combatSystem.getCooldownRemaining(entityId, abilityId) <= 0) {
-      this.cancelCasting(entityId);
     }
 
     if (ability.castTime) {
@@ -382,6 +405,64 @@ export class ServerEngine {
   cancelCastRequest(entityId: string): void {
     if (this.frozenEntities.has(entityId)) return;
     this.cancelCasting(entityId);
+  }
+
+  /** Execute a ground-targeted AoE ability at a world position. Consumes resources immediately, delays damage until impact. */
+  private useGroundTargetAbility(entity: ServerEntity, ability: Ability, groundX: number, groundZ: number): { success: boolean; errorMessage?: string } {
+    if (entity.dead) return { success: false, errorMessage: 'You are dead' };
+    if (this.buffSystem.isStunned(entity)) return { success: false, errorMessage: 'You are stunned' };
+    if (!entity.godMode && this.combatSystem.getCooldownRemaining(entity.id, ability.id) > 0) {
+      return { success: false, errorMessage: 'Ability is not ready yet' };
+    }
+
+    // Validate range to ground target
+    const dist = Math.sqrt((entity.x - groundX) ** 2 + (entity.z - groundZ) ** 2);
+    if (ability.range && dist > ability.range + yardsToUnits(2)) {
+      return { success: false, errorMessage: 'Out of range' };
+    }
+
+    if (!entity.godMode) {
+      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
+      if (entity.mana < effectiveCost) return { success: false, errorMessage: 'Not enough mana' };
+      entity.mana -= effectiveCost;
+      if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
+    }
+
+    if (!entity.godMode) {
+      this.combatSystem.setCooldown(entity.id, ability.id, ability.cooldown);
+    }
+
+    // Schedule damage for when the projectile lands
+    this.pendingAoeImpacts.push({
+      ability,
+      groundX,
+      groundZ,
+      delay: ServerEngine.BOTTLE_CHUCK_IMPACT_DELAY,
+      elapsed: 0,
+      owner: entity,
+    });
+
+    return { success: true };
+  }
+
+  private updatePendingAoeImpacts(dt: number): void {
+    for (let i = this.pendingAoeImpacts.length - 1; i >= 0; i--) {
+      const impact = this.pendingAoeImpacts[i];
+      impact.elapsed += dt;
+      if (impact.elapsed < impact.delay) continue;
+
+      // Impact! Damage all hostiles in radius
+      const radius = impact.ability.aoeRadius ?? 0;
+      for (const target of this.entities) {
+        if (target === impact.owner || target.dead || !target.isHostileTo(impact.owner)) continue;
+        const dx = target.x - impact.groundX;
+        const dz = target.z - impact.groundZ;
+        if (dx * dx + dz * dz > radius * radius) continue;
+        this.combatSystem.applyAoeDamage(impact.owner, target, impact.ability);
+      }
+
+      this.pendingAoeImpacts.splice(i, 1);
+    }
   }
 
   setResting(entityId: string, resting: boolean): void {
@@ -470,6 +551,7 @@ export class ServerEngine {
     this.updateGasClouds(dt);
     this.updateChemicalPools(dt);
     this.updateActiveDots(dt);
+    this.updatePendingAoeImpacts(dt);
     this.updateFullRetardAuras(dt);
 
     // Update systems
@@ -542,6 +624,14 @@ export class ServerEngine {
           } as S2C_CombatEvent);
           return;
         }
+        // Hostile channel start — notify for auto-targeting
+        this.pendingEvents.push({
+          type: 'combat_event',
+          sourceEntityId: entity.id,
+          targetEntityId: target.id,
+          amount: 0,
+          combatType: 'damage',
+        } as S2C_CombatEvent);
       }
     }
 
@@ -775,11 +865,12 @@ export class ServerEngine {
 
   private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot'];
 
-  private onAbilitySuccess(entity: ServerEntity, ability: Ability): void {
+  private onAbilitySuccess(entity: ServerEntity, ability: Ability, groundTarget?: { x: number; z: number }): void {
     this.pendingEvents.push({
       type: 'ability_effect',
       entityId: entity.id,
       abilityId: ability.id,
+      ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetZ: groundTarget.z } : {}),
     } as S2C_AbilityEffect);
 
     // Send cooldown update to the entity's player (skip in god mode)
@@ -793,13 +884,13 @@ export class ServerEngine {
     }
 
     if (ability.id === 'fart-bomb') {
-      this.spawnGasCloud(entity, yardsToUnits(5), 8, FartBombDebuff, 96, 2);
+      this.spawnGasCloud(entity, yardsToUnits(5), 8, FartBombDebuff, 592, 2);
     }
     if (ability.id === 'sweep') {
       this.startSweepCharge(entity);
     }
     if (ability.id === 'chemical-spill') {
-      this.spawnChemicalPool(entity, yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 40, 60, 2, 6, 2);
+      this.spawnChemicalPool(entity, yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, 2);
     }
 
     // Melee abilities automatically engage auto-attack on the target
@@ -816,12 +907,12 @@ export class ServerEngine {
     entity.charging = true;
     this.sweepCharges.set(entity.id, {
       elapsed: 0,
-      duration: 1.0,
+      duration: Sweep.chargeDuration!,
       dirX: Math.sin(entity.rotationY),
       dirZ: Math.cos(entity.rotationY),
-      speed: yardsToUnits(20),
+      speed: Sweep.chargeSpeed!,
       hitTargets: new Set(),
-      maxDamage: 80,
+      maxDamage: Sweep.chargeMaxDamage!,
     });
   }
 
@@ -907,7 +998,7 @@ export class ServerEngine {
   private spawnChemicalPool(
     owner: ServerEntity, radius: number, duration: number,
     speedBuff: BuffDefinition, dot: BuffDefinition,
-    initialDamage: number, dotTotalDamage: number, dotTickInterval: number,
+    initialDamageMin: number, initialDamageMax: number, dotTotalDamage: number, dotTickInterval: number,
     dotDuration: number, activationDelay: number
   ): void {
     const dotTickCount = Math.floor(dotDuration / dotTickInterval);
@@ -917,7 +1008,7 @@ export class ServerEngine {
       centerX: owner.x, centerZ: owner.z,
       radius, duration, elapsed: 0,
       speedBuff, dot,
-      initialDamage,
+      initialDamageMin, initialDamageMax,
       dotDamagePerTick: Math.round(dotTotalDamage / dotTickCount),
       dotTickInterval, dotDuration,
       owner, activationDelay, consumed: false,
@@ -947,7 +1038,8 @@ export class ServerEngine {
         if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
 
         if (entity.isHostileTo(pool.owner)) {
-          const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, pool.initialDamage, pool.owner);
+          const rolledDmg = pool.initialDamageMin + Math.floor(Math.random() * (pool.initialDamageMax - pool.initialDamageMin + 1));
+          const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, rolledDmg, pool.owner);
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
             this.pendingEvents.push({
@@ -1030,7 +1122,7 @@ export class ServerEngine {
           const dx = aura.entity.x - other.x;
           const dz = aura.entity.z - other.z;
           if (dx * dx + dz * dz <= meleeRange * meleeRange) {
-            const dmg = this.combatSystem.processDamageAbsorb(other, 10, aura.entity);
+            const dmg = this.combatSystem.processDamageAbsorb(other, 200, aura.entity);
             other.hp = Math.max(0, other.hp - dmg);
             if (dmg > 0) {
               this.pendingEvents.push({
@@ -1043,13 +1135,13 @@ export class ServerEngine {
           }
         }
 
-        // Heal friendlies (self heals 3, allies 15)
+        // Heal friendlies (self heals 125, allies 300)
         for (const other of this.entities) {
           if (other.dead || other.isHostileTo(aura.entity)) continue;
           const dx = aura.entity.x - other.x;
           const dz = aura.entity.z - other.z;
           if (dx * dx + dz * dz <= meleeRange * meleeRange) {
-            const heal = other === aura.entity ? 3 : 15;
+            const heal = other === aura.entity ? 125 : 300;
             this.combatSystem.applyHeal(aura.entity, other, heal);
           }
         }

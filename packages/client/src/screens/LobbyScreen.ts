@@ -1,6 +1,6 @@
 import type { NetworkManager } from '../network/NetworkManager';
 import type { LobbyUser, LobbyGameInfo, GameFormat, UserProfileData } from '@gtr/shared';
-import { MAP_LIST } from '@gtr/shared';
+import { MAP_LIST, CHARACTER_LIST, xpToLevel, xpProgress } from '@gtr/shared';
 
 export class LobbyScreen {
   readonly element: HTMLDivElement;
@@ -11,6 +11,12 @@ export class LobbyScreen {
   private network: NetworkManager;
   private localUserId: string;
   private animFrameId = 0;
+  private localXp = 0;
+  private levelBadgeContainer: HTMLDivElement;
+  private xpBarFill: HTMLDivElement;
+  private xpText: HTMLDivElement;
+  private profileOverlay: HTMLDivElement | null = null;
+  private profileUsername: string | null = null;
 
   onPlayground?: () => void;
   onLogout?: () => void;
@@ -18,7 +24,7 @@ export class LobbyScreen {
   onChangePassword?: () => void;
   onMenu?: () => void;
 
-  constructor(network: NetworkManager, localUserId: string, isAdmin = false) {
+  constructor(network: NetworkManager, localUserId: string, isAdmin = false, localXp = 0) {
     this.network = network;
     this.localUserId = localUserId;
 
@@ -202,6 +208,50 @@ export class LobbyScreen {
     this.userListEl.className = 'lby-scrollbar';
     this.userListEl.style.cssText = 'flex: 1; overflow-y: auto; font-size: 13px;';
 
+    // ── Level badge + XP bar ──────────────────────────────────────
+    this.localXp = localXp;
+
+    const levelSection = document.createElement('div');
+    levelSection.style.cssText = 'display: flex; flex-direction: column; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid rgba(100,120,200,0.08);';
+
+    // Badge container (swapped out on update)
+    this.levelBadgeContainer = document.createElement('div');
+    levelSection.appendChild(this.levelBadgeContainer);
+
+    // "LEVEL" label
+    const levelLabel = document.createElement('div');
+    levelLabel.textContent = 'LEVEL';
+    levelLabel.style.cssText = 'font-size: 9px; font-weight: 700; letter-spacing: 2px; color: rgba(200,180,120,0.6); margin-top: 6px;';
+    levelSection.appendChild(levelLabel);
+
+    // XP bar
+    const xpBarOuter = document.createElement('div');
+    xpBarOuter.style.cssText = `
+      width: 100%; height: 6px; margin-top: 8px; border-radius: 3px;
+      background: rgba(0,0,0,0.4); border: 1px solid rgba(180,160,100,0.15);
+      overflow: hidden; position: relative;
+    `;
+    this.xpBarFill = document.createElement('div');
+    this.xpBarFill.style.cssText = `
+      height: 100%; width: 0%; border-radius: 3px;
+      background: linear-gradient(90deg, #8a6d1b, #c9a84c, #8a6d1b);
+      background-size: 200% 100%;
+      box-shadow: 0 0 6px rgba(200,170,60,0.3);
+      transition: width 0.3s ease;
+    `;
+    xpBarOuter.appendChild(this.xpBarFill);
+    levelSection.appendChild(xpBarOuter);
+
+    // XP text
+    this.xpText = document.createElement('div');
+    this.xpText.style.cssText = 'font-size: 10px; color: rgba(200,180,120,0.5); margin-top: 4px;';
+    levelSection.appendChild(this.xpText);
+
+    // Render initial state
+    this.renderLevelDisplay();
+
+    rightPanel.appendChild(levelSection);
+
     rightPanel.appendChild(usersHeader);
     rightPanel.appendChild(this.userListEl);
 
@@ -292,6 +342,27 @@ export class LobbyScreen {
       ctx.globalAlpha = 1;
     };
     this.animFrameId = requestAnimationFrame(draw);
+  }
+
+  // ── Level display ─────────────────────────────────────────────────
+
+  private renderLevelDisplay(): void {
+    const level = xpToLevel(this.localXp);
+    const progress = xpProgress(this.localXp);
+    const pct = progress.needed > 0 ? (progress.current / progress.needed) * 100 : 0;
+
+    // Replace badge
+    this.levelBadgeContainer.innerHTML = '';
+    this.levelBadgeContainer.appendChild(this.createLevelBadge(level, 52));
+
+    // Update bar + text
+    this.xpBarFill.style.width = `${pct}%`;
+    this.xpText.textContent = `${progress.current} / ${progress.needed} XP`;
+  }
+
+  updateXp(xp: number): void {
+    this.localXp = xp;
+    this.renderLevelDisplay();
   }
 
   // ── Public API ────────────────────────────────────────────────────
@@ -677,6 +748,57 @@ export class LobbyScreen {
     return btn;
   }
 
+  /** Creates a decorative golden-ring level badge. */
+  private createLevelBadge(level: number, size: number): HTMLDivElement {
+    const badge = document.createElement('div');
+    const borderWidth = Math.max(2, Math.round(size * 0.06));
+    badge.style.cssText = `
+      width: ${size}px; height: ${size}px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+      background: radial-gradient(circle at 35% 35%, rgba(30,28,18,0.95), rgba(12,10,6,0.98));
+      border: ${borderWidth}px solid transparent;
+      background-clip: padding-box;
+    `;
+
+    // Golden ring (outer glow + ring)
+    const ring = document.createElement('div');
+    ring.style.cssText = `
+      position: absolute; inset: -${borderWidth + 1}px; border-radius: 50%;
+      border: ${borderWidth}px solid transparent;
+      background: linear-gradient(135deg, #c9a84c, #f0d878, #a07828, #f0d878, #c9a84c) border-box;
+      -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      filter: drop-shadow(0 0 ${Math.round(size * 0.08)}px rgba(200,170,60,0.4));
+    `;
+    badge.appendChild(ring);
+
+    // Inner decorative ring
+    const innerRing = document.createElement('div');
+    innerRing.style.cssText = `
+      position: absolute; inset: ${Math.round(size * 0.06)}px; border-radius: 50%;
+      border: 1px solid rgba(200,170,60,0.2);
+      pointer-events: none;
+    `;
+    badge.appendChild(innerRing);
+
+    // Level number
+    const levelNum = document.createElement('div');
+    const fontSize = level >= 100 ? size * 0.32 : level >= 10 ? size * 0.4 : size * 0.46;
+    levelNum.textContent = String(level);
+    levelNum.style.cssText = `
+      font-size: ${fontSize}px; font-weight: 800; line-height: 1;
+      color: #e8d48c;
+      text-shadow: 0 0 8px rgba(200,170,60,0.4), 0 1px 2px rgba(0,0,0,0.6);
+      position: relative; z-index: 1;
+      font-family: 'Georgia', 'Times New Roman', serif;
+    `;
+    badge.appendChild(levelNum);
+
+    return badge;
+  }
+
   private escapeHtml(text: string): string {
     const div = document.createElement('div');
     div.textContent = text;
@@ -750,8 +872,20 @@ export class LobbyScreen {
 
   // ── Profile dialog ───────────────────────────────────────────────────
 
+  /** Update an already-open profile dialog if it matches the given username. */
+  updateOpenProfileDialog(profile: UserProfileData): void {
+    if (this.profileOverlay && this.profileUsername === profile.username) {
+      this.showProfileDialog(profile);
+    }
+  }
+
   showProfileDialog(profile: UserProfileData): void {
+    // Remove existing profile dialog if open
+    this.profileOverlay?.remove();
+
+    this.profileUsername = profile.username;
     const overlay = document.createElement('div');
+    this.profileOverlay = overlay;
     overlay.style.cssText = `
       position: fixed; inset: 0; z-index: 1100;
       display: flex; align-items: center; justify-content: center;
@@ -799,6 +933,14 @@ export class LobbyScreen {
     const lastPlayedEl = document.createElement('div');
     lastPlayedEl.textContent = `Last Played ${lastPlayedText}`;
     lastPlayedEl.style.cssText = 'font-size: 12px; color: rgba(130,150,200,0.6); margin-top: 2px; position: relative;';
+    // Level badge (top-right of header)
+    const profileLevel = xpToLevel(profile.xp);
+    const profileLevelBadge = this.createLevelBadge(profileLevel, 48);
+    profileLevelBadge.style.position = 'absolute';
+    profileLevelBadge.style.top = '18px';
+    profileLevelBadge.style.right = '24px';
+    header.appendChild(profileLevelBadge);
+
     header.append(nameEl, joinedEl, lastPlayedEl);
 
     // Stats body
@@ -833,16 +975,78 @@ export class LobbyScreen {
 
     body.appendChild(statsGrid);
 
+    // Per-character stats
+    if (profile.characterStats && profile.characterStats.length > 0) {
+      const charSection = document.createElement('div');
+      charSection.style.cssText = 'margin-top: 20px;';
+
+      const charHeader = document.createElement('div');
+      charHeader.textContent = 'CHARACTER STATS';
+      charHeader.style.cssText = 'font-size: 10px; font-weight: 600; letter-spacing: 1.5px; color: rgba(120,140,180,0.5); margin-bottom: 10px; text-transform: uppercase;';
+      charSection.appendChild(charHeader);
+
+      // Sort by games played descending
+      const sorted = [...profile.characterStats].sort((a, b) => b.gamesPlayed - a.gamesPlayed);
+      for (const cs of sorted) {
+        const charInfo = CHARACTER_LIST.find(c => c.id === cs.characterId);
+        const name = charInfo?.name ?? cs.characterId;
+        const charWinRate = cs.gamesPlayed > 0 ? (cs.wins / cs.gamesPlayed * 100) : 0;
+
+        const row = document.createElement('div');
+        row.style.cssText = `
+          display: flex; align-items: center; justify-content: space-between;
+          background: rgba(15,18,35,0.6); border: 1px solid rgba(80,100,180,0.08);
+          border-radius: 6px; padding: 10px 14px; margin-bottom: 6px;
+        `;
+
+        const nameEl = document.createElement('div');
+        nameEl.textContent = name;
+        nameEl.style.cssText = 'font-size: 13px; font-weight: 600; color: #dde2f0;';
+
+        const statsEl = document.createElement('div');
+        statsEl.style.cssText = 'display: flex; gap: 12px; align-items: center; font-size: 12px;';
+
+        const gamesEl = document.createElement('span');
+        gamesEl.textContent = `${cs.gamesPlayed} played`;
+        gamesEl.style.cssText = 'color: #8ab4f8;';
+
+        const winsEl = document.createElement('span');
+        winsEl.textContent = `${cs.wins}W`;
+        winsEl.style.cssText = 'color: #66cc88;';
+
+        const lossesEl = document.createElement('span');
+        lossesEl.textContent = `${cs.losses}L`;
+        lossesEl.style.cssText = 'color: #cc6666;';
+
+        const wrEl = document.createElement('span');
+        wrEl.textContent = cs.gamesPlayed > 0 ? `${charWinRate.toFixed(0)}%` : '-';
+        wrEl.style.cssText = `color: ${charWinRate >= 50 ? '#66cc88' : '#cc8866'}; font-weight: 600; min-width: 32px; text-align: right;`;
+
+        statsEl.append(gamesEl, winsEl, lossesEl, wrEl);
+        row.append(nameEl, statsEl);
+        charSection.appendChild(row);
+      }
+
+      body.appendChild(charSection);
+    }
+
     // Close button
     const closeRow = document.createElement('div');
     closeRow.style.cssText = 'padding: 0 32px 20px; text-align: right;';
     const closeBtn = this.makeButton('Close', '#3a3a50', '#4a4a66');
-    closeBtn.addEventListener('click', () => overlay.remove());
+    const closeProfile = () => {
+      overlay.remove();
+      if (this.profileOverlay === overlay) {
+        this.profileOverlay = null;
+        this.profileUsername = null;
+      }
+    };
+    closeBtn.addEventListener('click', closeProfile);
     closeRow.appendChild(closeBtn);
 
     dialog.append(header, body, closeRow);
     overlay.appendChild(dialog);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeProfile(); });
     this.element.appendChild(overlay);
   }
 
@@ -892,24 +1096,25 @@ export class LobbyScreen {
     const table = document.createElement('table');
     table.style.cssText = 'width: 100%; border-collapse: collapse; font-size: 13px;';
 
-    type SortKey = 'username' | 'gamesPlayed' | 'wins' | 'losses' | 'winRate' | 'createdAt' | 'lastPlayed';
+    type SortKey = 'username' | 'level' | 'gamesPlayed' | 'wins' | 'losses' | 'winRate' | 'lastPlayed';
     let sortKey: SortKey = 'wins';
     let sortAsc = false;
 
     const columns: { key: SortKey; label: string; align?: string }[] = [
       { key: 'username', label: 'Player' },
+      { key: 'level', label: 'Level' },
       { key: 'gamesPlayed', label: 'Games' },
       { key: 'wins', label: 'Wins' },
       { key: 'losses', label: 'Losses' },
       { key: 'winRate', label: 'Win %' },
       { key: 'lastPlayed', label: 'Last Played' },
-      { key: 'createdAt', label: 'Joined' },
     ];
 
     const getValue = (e: UserProfileData, key: SortKey): string | number => {
+      if (key === 'level') return xpToLevel(e.xp);
       if (key === 'winRate') return e.gamesPlayed > 0 ? e.wins / e.gamesPlayed : 0;
       if (key === 'lastPlayed') return e.lastPlayed ?? '';
-      return e[key];
+      return e[key as keyof UserProfileData] as string | number;
     };
 
     const renderTable = () => {
@@ -932,7 +1137,7 @@ export class LobbyScreen {
         th.addEventListener('mouseenter', () => { th.style.color = 'rgba(160,180,255,0.9)'; });
         th.addEventListener('mouseleave', () => { th.style.color = sortKey === col.key ? 'rgba(160,180,255,0.9)' : 'rgba(130,150,210,0.6)'; });
         th.addEventListener('click', () => {
-          if (sortKey === col.key) { sortAsc = !sortAsc; } else { sortKey = col.key; sortAsc = col.key === 'username' || col.key === 'createdAt'; }
+          if (sortKey === col.key) { sortAsc = !sortAsc; } else { sortKey = col.key; sortAsc = col.key === 'username'; }
           renderTable();
         });
         hRow.appendChild(th);
@@ -957,20 +1162,19 @@ export class LobbyScreen {
         tr.addEventListener('mouseleave', () => { tr.style.background = 'transparent'; });
 
         const wr = entry.gamesPlayed > 0 ? (entry.wins / entry.gamesPlayed * 100) : 0;
-        const joinedDate = new Date(entry.createdAt + 'Z');
-        const joined = joinedDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+        const level = xpToLevel(entry.xp);
         const lastPlayed = entry.lastPlayed
           ? new Date(entry.lastPlayed + 'Z').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
           : 'Never';
 
         const values: { text: string; color: string }[] = [
           { text: entry.username, color: '#bbc4dd' },
+          { text: String(level), color: '#c8b478' },
           { text: String(entry.gamesPlayed), color: '#8ab4f8' },
           { text: String(entry.wins), color: '#66cc88' },
           { text: String(entry.losses), color: '#cc6666' },
           { text: entry.gamesPlayed > 0 ? `${wr.toFixed(1)}%` : '-', color: wr >= 50 ? '#66cc88' : '#cc8866' },
           { text: lastPlayed, color: 'rgba(150,160,190,0.6)' },
-          { text: joined, color: 'rgba(150,160,190,0.6)' },
         ];
 
         for (const v of values) {

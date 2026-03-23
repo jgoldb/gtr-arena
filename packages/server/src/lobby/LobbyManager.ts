@@ -200,6 +200,9 @@ export class LobbyManager {
       case 'change_password':
         this.handleChangePassword(userId, msg.currentPassword, msg.newPassword);
         break;
+      case 'debug_add_xp':
+        this.handleDebugAddXp(userId, msg.amount);
+        break;
     }
   }
 
@@ -417,15 +420,23 @@ export class LobbyManager {
       return;
     }
 
+    const charStats = this.db.getUserCharacterStats(dbId);
     const msg: S2C_UserProfile = {
       type: 'user_profile',
       profile: {
         username: row.username,
+        xp: row.xp,
         gamesPlayed: row.games_played,
         wins: row.wins,
         losses: row.losses,
         createdAt: row.created_at,
         lastPlayed: row.last_played,
+        characterStats: charStats.map(c => ({
+          characterId: c.character_id,
+          gamesPlayed: c.games_played,
+          wins: c.wins,
+          losses: c.losses,
+        })),
       },
     };
     this.send(user.socket, msg);
@@ -438,6 +449,7 @@ export class LobbyManager {
     const rows = this.db.getAllUsersWithStats();
     const entries: UserProfileData[] = rows.map(r => ({
       username: r.username,
+      xp: r.xp,
       gamesPlayed: r.games_played,
       wins: r.wins,
       losses: r.losses,
@@ -447,6 +459,16 @@ export class LobbyManager {
 
     const msg: S2C_Leaderboard = { type: 'leaderboard', entries };
     this.send(user.socket, msg);
+  }
+
+  private handleDebugAddXp(userId: string, amount: number): void {
+    const user = this.users.get(userId);
+    if (!user) return;
+    const dbId = this.auth.getDbId(userId);
+    if (dbId == null) return;
+    // Allow negative amounts (for reset-style usage) but clamp at 0 in DB
+    const newXp = this.db.addXp(dbId, amount);
+    this.send(user.socket, { type: 'xp_update', xp: newXp });
   }
 
   // ── Session creation ─────────────────────────────────────────────────
@@ -521,6 +543,7 @@ export class LobbyManager {
       users: rows.map(r => ({
         id: r.id,
         username: r.username,
+        xp: r.xp,
         createdAt: r.created_at,
         gamesPlayed: r.games_played,
         wins: r.wins,
@@ -677,6 +700,46 @@ export class LobbyManager {
     this.send(user.socket, result);
 
     if (success) {
+      // Notify the target user if they're online so their lobby XP/level updates in real time
+      const targetSocketId = this.auth.getUserIdByDbId(targetUserId);
+      if (targetSocketId) {
+        const targetUser = this.users.get(targetSocketId);
+        if (targetUser) {
+          this.send(targetUser.socket, { type: 'xp_update', xp: 0 });
+        }
+      }
+
+      // Broadcast updated profile to all lobby users so open inspect dialogs refresh
+      const rows = this.db.getAllUsersWithStats();
+      const row = rows.find(r => r.id === targetUserId);
+      if (row) {
+        const broadcastCharStats = this.db.getUserCharacterStats(targetUserId);
+        const profileMsg: S2C_UserProfile = {
+          type: 'user_profile',
+          broadcast: true,
+          profile: {
+            username: row.username,
+            xp: row.xp,
+            gamesPlayed: row.games_played,
+            wins: row.wins,
+            losses: row.losses,
+            createdAt: row.created_at,
+            lastPlayed: row.last_played,
+            characterStats: broadcastCharStats.map(c => ({
+              characterId: c.character_id,
+              gamesPlayed: c.games_played,
+              wins: c.wins,
+              losses: c.losses,
+            })),
+          },
+        };
+        for (const u of this.users.values()) {
+          if (!u.gameSessionId) {
+            this.send(u.socket, profileMsg);
+          }
+        }
+      }
+
       this.handleAdminGetUsers(userId);
     }
   }

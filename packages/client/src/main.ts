@@ -44,6 +44,7 @@ let currentState: AppState = 'auth';
 let network: NetworkManager | null = null;
 let localUserId = '';
 let isAdmin = false;
+let localXp = 0;
 let awaitingReconnectResult = false;
 
 // Active screens / engines
@@ -282,13 +283,14 @@ function showLobby(): void {
   currentState = 'lobby';
   hideGameUI();
 
-  lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin);
+  lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin, localXp);
   lobbyScreen.onPlayground = () => startPlayground();
   lobbyScreen.onLogout = () => {
     network?.disconnect();
     network = null;
     localUserId = '';
     isAdmin = false;
+    localXp = 0;
     sessionStorage.removeItem('gtr_username');
     showAuth();
   };
@@ -400,12 +402,15 @@ function startMultiplayer(msg: S2C_GameStart): void {
   clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
+    // Skip 0-amount damage text (e.g. debuff-only abilities, hostile channel starts)
+    if (amount === 0 && type !== 'miss' && type !== 'dodge') return;
     const localId = clientEngine!.localId;
     const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
     if (isLocalInvolved) {
       const mesh = clientEngine!.getEntityMesh(targetEntityId);
       if (mesh && mpCombatText) {
-        mpCombatText.spawn(mesh, amount, type as any);
+        const isIncoming = targetEntityId === localId;
+        mpCombatText.spawn(mesh, amount, type as any, isIncoming);
       }
     }
     if (targetEntityId === localId) {
@@ -475,12 +480,15 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
   clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
+    // Skip 0-amount damage text (e.g. debuff-only abilities, hostile channel starts)
+    if (amount === 0 && type !== 'miss' && type !== 'dodge') return;
     const localId = clientEngine!.localId;
     const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
     if (isLocalInvolved) {
       const mesh = clientEngine!.getEntityMesh(targetEntityId);
       if (mesh && mpCombatText) {
-        mpCombatText.spawn(mesh, amount, type as any);
+        const isIncoming = targetEntityId === localId;
+        mpCombatText.spawn(mesh, amount, type as any, isIncoming);
       }
     }
     if (targetEntityId === localId) {
@@ -655,6 +663,24 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   // Action bar - abilities come from shared character data
   const abilities: readonly Ability[] = localCharStats.abilities;
 
+  // Ground targeting state (MP)
+  let mpPendingGroundAbility: Ability | null = null;
+
+  function mpCancelGroundTargeting(): void {
+    if (!mpPendingGroundAbility) return;
+    mpPendingGroundAbility = null;
+    clientEngine!.targetingSystem.cancelGroundTarget();
+  }
+
+  clientEngine.onGroundTargetConfirmed = () => {
+    if (!mpPendingGroundAbility || !clientEngine) return;
+    const ability = mpPendingGroundAbility;
+    const groundPos = clientEngine.targetingSystem.getGroundTargetPosition();
+    clientEngine.targetingSystem.cancelGroundTarget();
+    mpPendingGroundAbility = null;
+    clientEngine.sendAbility(ability.id, mpSelectedTargetId, { x: groundPos.x, z: groundPos.z });
+  };
+
   mpActionBar = new ActionBar({
     onActivate: (ability) => {
       if (clientEngine!.isResting()) clientEngine!.stopResting();
@@ -663,6 +689,19 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       if (castState?.isChannel && clientEngine!.getCooldownRemaining(ability.id) <= 0) {
         clientEngine!.sendCancelCast();
       }
+      // Ground-targeted abilities enter reticle mode
+      if (ability.groundTargeted) {
+        if (mpPendingGroundAbility?.id === ability.id) {
+          mpCancelGroundTargeting();
+        } else {
+          if (clientEngine!.getCooldownRemaining(ability.id) > 0) return;
+          mpCancelGroundTargeting();
+          mpPendingGroundAbility = ability;
+          clientEngine!.targetingSystem.startGroundTarget(ability.aoeRadius ?? 1, ability.range ?? 10);
+        }
+        return;
+      }
+      mpCancelGroundTargeting();
       clientEngine!.sendAbility(ability.id, mpSelectedTargetId);
     },
     getAbilityStatus: (ability) => {
@@ -740,6 +779,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       network?.send({ type: 'return_to_lobby' });
     },
     onEscapeWhilePlaying: () => {
+      if (mpPendingGroundAbility) {
+        mpCancelGroundTargeting();
+        return true;
+      }
       if (clientEngine?.getLocalCastingState()) {
         clientEngine.sendCancelCast();
         return true;
@@ -940,6 +983,7 @@ function handleServerMessage(msg: ServerMessage): void {
       if (msg.success) {
         localUserId = msg.userId;
         isAdmin = msg.isAdmin ?? false;
+        localXp = msg.xp ?? 0;
         // Update stored username to the original registered casing from the server
         if (msg.username) {
           sessionStorage.setItem('gtr_username', msg.username);
@@ -983,11 +1027,20 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
 
     case 'user_profile':
-      lobbyScreen?.showProfileDialog(msg.profile);
+      if (msg.broadcast) {
+        lobbyScreen?.updateOpenProfileDialog(msg.profile);
+      } else {
+        lobbyScreen?.showProfileDialog(msg.profile);
+      }
       break;
 
     case 'leaderboard':
       lobbyScreen?.showLeaderboard(msg.entries);
+      break;
+
+    case 'xp_update':
+      localXp = msg.xp;
+      lobbyScreen?.updateXp(msg.xp);
       break;
 
     case 'game_lobby_state':
@@ -1097,6 +1150,7 @@ function handleServerMessage(msg: ServerMessage): void {
       network = null;
       localUserId = '';
       isAdmin = false;
+      localXp = 0;
       sessionStorage.removeItem('gtr_username');
       showAuth();
       // Show the reason on the auth screen after it renders
@@ -1537,8 +1591,9 @@ async function startPlayground(): Promise<void> {
   document.body.appendChild(unitTooltip.element);
 
   engine.combatSystem.onCombatText = (target, amount, type) => {
-    combatText.spawn(target.mesh, amount, type);
-    if (target === engine.playerController) playerFrame.showCombatText(amount, type);
+    const isIncoming = target === engine.playerController;
+    combatText.spawn(target.mesh, amount, type, isIncoming);
+    if (isIncoming) playerFrame.showCombatText(amount, type);
     else if (target === engine.targetingSystem.currentTarget) targetFrame.showCombatText(amount, type);
   };
 
@@ -1594,11 +1649,36 @@ async function startPlayground(): Promise<void> {
   // Helper: apply post-cast effects
   const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot'];
 
-  function onAbilitySuccess(ability: Ability): void {
-    engine.playerController.triggerAbilityAnimation(ability.id, engine.targetingSystem.currentTarget?.mesh.position.clone());
-    if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 96, 2, engine.playerController);
+  // Ground targeting state
+  let pendingGroundAbility: Ability | null = null;
+
+  function cancelGroundTargeting(): void {
+    if (!pendingGroundAbility) return;
+    pendingGroundAbility = null;
+    engine.targetingSystem.cancelGroundTarget();
+  }
+
+  engine.onGroundTargetConfirmed = () => {
+    if (!pendingGroundAbility) return;
+    const ability = pendingGroundAbility;
+    const groundPos = engine.targetingSystem.getGroundTargetPosition();
+    engine.targetingSystem.cancelGroundTarget();
+    pendingGroundAbility = null;
+
+    const result = engine.useGroundTargetAbility(ability, groundPos);
+    if (result.success) {
+      onAbilitySuccess(ability, groundPos);
+    } else if (result.errorMessage) {
+      errorText.show(result.errorMessage);
+    }
+  };
+
+  function onAbilitySuccess(ability: Ability, groundPos?: import('three').Vector3): void {
+    const targetPos = groundPos ?? engine.targetingSystem.currentTarget?.mesh.position.clone();
+    engine.playerController.triggerAbilityAnimation(ability.id, targetPos);
+    if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
     if (ability.id === 'sweep') engine.startSweepCharge();
-    if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 40, 60, 2, 6, engine.playerController, 2);
+    if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
 
     // Melee abilities automatically engage auto-attack on the target
     if (MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {
@@ -1617,6 +1697,23 @@ async function startPlayground(): Promise<void> {
     onActivate: (ability) => {
       if (engine.isResting()) engine.stopResting();
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
+      // Ground-targeted abilities enter reticle mode instead of executing immediately
+      if (ability.groundTargeted) {
+        if (pendingGroundAbility?.id === ability.id) {
+          cancelGroundTargeting();
+        } else {
+          // Don't enter ground targeting if on cooldown
+          if (engine.combatSystem.getCooldownRemaining(ability.id) > 0) {
+            errorText.show('Ability is not ready yet');
+            return;
+          }
+          cancelGroundTargeting();
+          pendingGroundAbility = ability;
+          engine.targetingSystem.startGroundTarget(ability.aoeRadius ?? 1, ability.range ?? 10);
+        }
+        return;
+      }
+      cancelGroundTargeting();
       let target: Targetable | null = engine.targetingSystem.currentTarget;
       if (!target && ability.requiresTarget && !ability.requiresHostileTarget) target = engine.playerController;
       if (ability.castTime) {
@@ -1657,7 +1754,7 @@ async function startPlayground(): Promise<void> {
   document.body.appendChild(actionBar.element);
   const loadAbilities = (abilities: readonly Ability[]) => { actionBar.clearAllSlots(); abilities.forEach((ab, i) => actionBar.setSlotAbility(i, ab)); };
   loadAbilities(engine.playerController.abilities);
-  engine.onCharacterChange = (abilities) => loadAbilities(abilities);
+  engine.onCharacterChange = (abilities) => { cancelGroundTargeting(); loadAbilities(abilities); };
   engine.onAutoAttackError = (message) => errorText.show(message);
   engine.onRestError = (message) => errorText.show(message);
   engine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
@@ -1669,6 +1766,10 @@ async function startPlayground(): Promise<void> {
       network?.send({ type: 'return_to_lobby' });
     },
     onEscapeWhilePlaying: () => {
+      if (pendingGroundAbility) {
+        cancelGroundTargeting();
+        return true;
+      }
       if (engine.isCasting()) {
         engine.cancelCasting();
         return true;

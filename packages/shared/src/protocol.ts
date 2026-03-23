@@ -1,5 +1,5 @@
 import type { CharacterId } from './characters.js';
-import type { GameFormat, EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot, LobbyGameInfo, LobbyUser, GameLobbyPlayer } from './types.js';
+import type { GameFormat, EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot, LobbyGameInfo, LobbyUser, GameLobbyPlayer, PlayerMatchStats } from './types.js';
 
 // ── Client -> Server Messages ───────────────────────────────────────────
 
@@ -58,6 +58,8 @@ export interface C2S_UseAbility {
   type: 'use_ability';
   abilityId: string;
   targetEntityId: string | null;
+  groundTargetX?: number;
+  groundTargetZ?: number;
 }
 
 export interface C2S_SetTarget {
@@ -141,6 +143,7 @@ export interface S2C_AuthResult {
   userId: string;
   username?: string;
   isAdmin?: boolean;
+  xp?: number;
   bannedUntil?: string;
   error?: string;
 }
@@ -205,6 +208,8 @@ export interface S2C_AbilityEffect {
   type: 'ability_effect';
   entityId: string;
   abilityId: string;
+  groundTargetX?: number;
+  groundTargetZ?: number;
 }
 
 export interface S2C_CooldownUpdate {
@@ -245,11 +250,22 @@ export interface S2C_EntityDied {
   killerEntityId: string | null;
 }
 
+/** End-of-game result for a single player (identity + match stats). */
+export interface PlayerMatchResult {
+  userId: string;
+  username: string;
+  team: number;
+  characterId: string;
+  stats: PlayerMatchStats;
+}
+
 export interface S2C_GameOver {
   type: 'game_over';
   winningTeam: number;
   /** Whether all original players are still connected (enables rematch option). */
   allPlayersPresent: boolean;
+  /** Per-player results for all original match participants (including disconnected). */
+  playerResults: PlayerMatchResult[];
 }
 
 export interface S2C_RematchChallenge {
@@ -271,18 +287,29 @@ export interface S2C_RematchFailed {
   reason: string;
 }
 
+export interface UserCharacterStatsEntry {
+  characterId: string;
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+}
+
 export interface UserProfileData {
   username: string;
+  xp: number;
   gamesPlayed: number;
   wins: number;
   losses: number;
   createdAt: string;
   lastPlayed: string | null;
+  characterStats?: UserCharacterStatsEntry[];
 }
 
 export interface S2C_UserProfile {
   type: 'user_profile';
   profile: UserProfileData;
+  /** If true, this is a broadcast update (e.g. stats reset), not a user-initiated inspect. */
+  broadcast?: boolean;
 }
 
 export interface S2C_Leaderboard {
@@ -325,7 +352,7 @@ export interface S2C_RejoinGame {
   gasClouds: GasCloudSnapshot[];
   chemicalPools: ChemicalPoolSnapshot[];
   disconnectedEntityIds: string[];
-  gameOver?: { winningTeam: number };
+  gameOver?: { winningTeam: number; playerResults: PlayerMatchResult[] };
   /** Seconds remaining until arena doors open. Undefined/0 = already open. */
   arenaTimeRemaining?: number;
 }
@@ -391,9 +418,15 @@ export interface C2S_Ping {
   timestamp: number;
 }
 
+export interface C2S_DebugAddXp {
+  type: 'debug_add_xp';
+  amount: number;
+}
+
 export interface AdminUserRecord {
   id: number;
   username: string;
+  xp: number;
   createdAt: string;
   gamesPlayed: number;
   wins: number;
@@ -497,6 +530,13 @@ export interface S2C_GameStateSnapshot {
   buffs: EntityBuffSnapshot[];
   gasClouds: GasCloudSnapshot[];
   chemicalPools: ChemicalPoolSnapshot[];
+  /** Seconds remaining until arena doors open. Undefined = already open. */
+  arenaTimeRemaining?: number;
+}
+
+export interface S2C_XpUpdate {
+  type: 'xp_update';
+  xp: number;
 }
 
 export interface S2C_GodModeUpdate {
@@ -541,7 +581,8 @@ export type ClientMessage =
   | C2S_AdminResetPassword
   | C2S_AdminResetStats
   | C2S_ChangePassword
-  | C2S_Ping;
+  | C2S_Ping
+  | C2S_DebugAddXp;
 
 export type ServerMessage =
   | S2C_AuthResult
@@ -568,6 +609,7 @@ export type ServerMessage =
   | S2C_AdminUsersList
   | S2C_AdminResult
   | S2C_ChangePasswordResult
+  | S2C_XpUpdate
   | S2C_GodModeUpdate
   | S2C_RematchChallenge
   | S2C_RematchReadyUpdate

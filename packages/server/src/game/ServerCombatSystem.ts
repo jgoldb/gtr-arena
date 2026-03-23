@@ -251,6 +251,9 @@ export class ServerCombatSystem {
         }
         if (actualDamage > 0) {
           this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+        } else if (damage === 0) {
+          // 0-damage hostile ability (e.g. debuff-only) — still notify for auto-targeting
+          this.onCombatText?.(attacker, target, 0, 'damage');
         }
 
         if (ability.appliesDebuff) {
@@ -306,6 +309,55 @@ export class ServerCombatSystem {
     }
     if (actualDamage > 0) {
       this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage');
+    }
+
+    this.enterCombat(attacker);
+    this.enterCombat(target);
+
+    if (target.hp <= 0 && !target.dead) {
+      target.die();
+      this.combatTimers.delete(target);
+    }
+  }
+
+  /** Apply AoE ability damage to a single target (called per-target in the AoE). */
+  applyAoeDamage(attacker: ServerEntity, target: ServerEntity, ability: Ability): void {
+    if (attacker.dead || target.dead) return;
+
+    const outcome = this.rollOutcome(attacker, target, false);
+    if (outcome === 'miss') {
+      this.onCombatText?.(attacker, target, 0, 'miss');
+      this.enterCombat(attacker);
+      this.enterCombat(target);
+      return;
+    }
+
+    let baseDamage: number;
+    if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
+      baseDamage = ability.damageMin + Math.floor(Math.random() * (ability.damageMax - ability.damageMin + 1));
+    } else {
+      baseDamage = ability.damage;
+    }
+
+    let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
+    if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
+    baseDamage = Math.round(baseDamage * damageMult);
+
+    const isCrit = outcome === 'crit';
+    const damage = baseDamage * (isCrit ? 2 : 1);
+    const actualDamage = target.godMode ? 0 : this.processDamageAbsorb(target, damage, attacker);
+    target.hp = Math.max(0, target.hp - actualDamage);
+    if (damage > 0) {
+      this.onDirectDamageDealt?.(target);
+      this.onFlinchDamage?.(target);
+    }
+    if (actualDamage > 0) {
+      this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage');
+    }
+
+    // Apply debuff on hit
+    if (ability.appliesDebuff) {
+      this.buffSystem.apply(target, ability.appliesDebuff);
     }
 
     this.enterCombat(attacker);

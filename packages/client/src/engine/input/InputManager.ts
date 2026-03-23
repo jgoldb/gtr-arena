@@ -1,4 +1,4 @@
-import { keybindManager } from '../../ui/KeybindManager';
+import { keybindManager, parseCombo } from '../../ui/KeybindManager';
 
 export class InputManager {
   private keys = new Map<string, boolean>();
@@ -36,6 +36,10 @@ export class InputManager {
 
     // Discard spurious mouse delta from the pointer lock transition
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
+
+    // Clear all key/mouse state when window loses focus — prevents stuck keys
+    // (e.g. modifier held while Alt-Tabbing or browser menu bar activating)
+    window.addEventListener('blur', this.onBlur);
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -52,9 +56,11 @@ export class InputManager {
   private onMouseDown = (e: MouseEvent): void => {
     if (e.button === 0) {
       this.mouseButtons.left = true;
-      // Only set up click detection if right button isn't already held
-      // (right held = pointer lock active, this left press is just for auto-forward)
-      if (!this.mouseButtons.right) {
+      if (this.mouseButtons.right) {
+        // Right held = pointer lock active. Emit an immediate click at virtual cursor
+        // position so ground targeting can be confirmed during camera drag.
+        this.leftClickEvent = { x: this.mouseScreenX, y: this.mouseScreenY };
+      } else {
         this.leftClickPending = true;
         this.leftClickStartX = e.clientX;
         this.leftClickStartY = e.clientY;
@@ -101,6 +107,9 @@ export class InputManager {
       } else {
         this.mouseDelta.x += e.movementX;
         this.mouseDelta.y += e.movementY;
+        // Track virtual screen position during pointer lock (for ground targeting)
+        this.mouseScreenX = Math.max(0, Math.min(window.innerWidth, this.mouseScreenX + e.movementX));
+        this.mouseScreenY = Math.max(0, Math.min(window.innerHeight, this.mouseScreenY + e.movementY));
       }
     } else {
       // Track screen position for hover detection
@@ -116,6 +125,14 @@ export class InputManager {
         this.canvas.requestPointerLock();
       }
     }
+  };
+
+  private onBlur = (): void => {
+    this.keys.clear();
+    this.mouseButtons.left = false;
+    this.mouseButtons.right = false;
+    this.mouseButtons.middle = false;
+    this.leftClickPending = false;
   };
 
   private onPointerLockChange = (): void => {
@@ -135,6 +152,17 @@ export class InputManager {
 
   isKeyDown(code: string): boolean {
     return this.keys.get(code) ?? false;
+  }
+
+  /** Check if a combo bind string (e.g. "Shift+Digit1") is currently active.
+   *  Exact modifier matching — modifiers must match the bind precisely. */
+  isBindDown(bindCode: string): boolean {
+    const { shift, ctrl, alt, baseCode } = parseCombo(bindCode);
+    if (!(this.keys.get(baseCode) ?? false)) return false;
+    const shiftHeld = (this.keys.get('ShiftLeft') ?? false) || (this.keys.get('ShiftRight') ?? false);
+    const ctrlHeld = (this.keys.get('ControlLeft') ?? false) || (this.keys.get('ControlRight') ?? false);
+    const altHeld = (this.keys.get('AltLeft') ?? false) || (this.keys.get('AltRight') ?? false);
+    return shiftHeld === shift && ctrlHeld === ctrl && altHeld === alt;
   }
 
   isMouseButtonDown(button: 'left' | 'right' | 'middle'): boolean {
@@ -163,6 +191,11 @@ export class InputManager {
     return { x: this.mouseScreenX, y: this.mouseScreenY };
   }
 
+  /** Returns mouse screen position always, even during pointer lock (virtual tracking via movementX/Y). */
+  getMouseScreenPosAlways(): { x: number; y: number } {
+    return { x: this.mouseScreenX, y: this.mouseScreenY };
+  }
+
   resetDeltas(): void {
     this.mouseDelta.x = 0;
     this.mouseDelta.y = 0;
@@ -178,5 +211,6 @@ export class InputManager {
     window.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('mousemove', this.onMouseMove);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
+    window.removeEventListener('blur', this.onBlur);
   }
 }

@@ -23,8 +23,21 @@ export interface ArenaTheme {
 export abstract class ArenaScript implements MapScript {
   protected group!: THREE.Group;
   protected collision!: CollisionSystem;
-  protected elapsed = 0;
   protected opened = false;
+
+  // Wall-clock-based elapsed: immune to RAF pauses (tab backgrounding) and dt
+  // clamping.  `elapsed` is always derived from performance.now() so it tracks
+  // real time precisely and never drifts.
+  private _elapsedAnchor = 0;
+  private _anchorTime = 0;
+
+  protected get elapsed(): number {
+    return this._elapsedAnchor + (performance.now() - this._anchorTime) / 1000;
+  }
+  protected set elapsed(value: number) {
+    this._elapsedAnchor = value;
+    this._anchorTime = performance.now();
+  }
 
   private openAnimProgress = 0;
   private flashLights: THREE.PointLight[] = [];
@@ -61,7 +74,7 @@ export abstract class ArenaScript implements MapScript {
   }
 
   update(dt: number): void {
-    this.elapsed += dt;
+    // elapsed is now wall-clock-derived (getter), no manual increment needed
     this.updateArena(dt);
 
     // Countdown

@@ -17,6 +17,8 @@ export interface CharacterStats {
   autoAttackRange: number;  // world units
   critChance: number;
   dodgeChance: number;
+  hpRegen: number;       // hp restored per regen tick
+  manaRegen: number;     // mana restored per regen tick
   abilities: readonly Ability[];
 }
 
@@ -34,27 +36,31 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
   'janitor': {
     id: 'janitor',
     displayName: 'The Janitor',
-    baseMaxHp: 475,
-    baseMaxMana: 48,
-    autoAttackDamageMin: 11,
-    autoAttackDamageMax: 19,
+    baseMaxHp: 3008,
+    baseMaxMana: 882,
+    autoAttackDamageMin: 163,
+    autoAttackDamageMax: 200,
     autoAttackSpeed: 2.5,
     autoAttackRange: 1.8,
-    critChance: 0.22,
+    critChance: 0.25,
     dodgeChance: 0.17,
+    hpRegen: 32,
+    manaRegen: 16,
     abilities: [Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut],
   },
   'dr-retardo': {
     id: 'dr-retardo',
     displayName: 'Dr. Retardo',
-    baseMaxHp: 369,
-    baseMaxMana: 125,
-    autoAttackDamageMin: 3,
-    autoAttackDamageMax: 6,
-    autoAttackSpeed: 1.2,
-    autoAttackRange: 1.8,
+    baseMaxHp: 2449,
+    baseMaxMana: 3112,
+    autoAttackDamageMin: 25,
+    autoAttackDamageMax: 35,
+    autoAttackSpeed: 1.5,
+    autoAttackRange: 1.4,
     critChance: 0.07,
     dodgeChance: 0.05,
+    hpRegen: 24,
+    manaRegen: 32,
     abilities: [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard],
   },
 };
@@ -62,3 +68,9 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
 export function getCharacterStats(id: CharacterId): CharacterStats {
   return CHARACTERS[id];
 }
+
+// ── Regen constants (shared by client RegenSystem & ServerRegenSystem) ──
+
+export const REGEN_TICK_INTERVAL = 2.5;       // seconds between regen ticks
+export const MANA_REGEN_DELAY = 5;             // seconds after last mana use before regen resumes
+export const RESTING_MANA_MULTIPLIER = 5;      // mana regen multiplier while resting (5x)

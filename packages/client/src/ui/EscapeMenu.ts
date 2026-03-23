@@ -1,3 +1,5 @@
+import { keybindManager, matchesKeybindEvent } from './KeybindManager';
+
 export interface EscapeMenuButton {
   label: string;
   onClick: () => void;
@@ -148,9 +150,9 @@ export class EscapeMenu {
       this.box.appendChild(exitBtn);
     }
 
-    // "Exit" button — closes the menu without any action
+    // "Close" button — closes the menu without any action
     const closeBtn = this.makeMenuButton(
-      'Exit',
+      'Close',
       'rgba(60, 60, 80, 0.8)',
       'rgba(80, 80, 100, 0.9)',
     );
@@ -262,7 +264,7 @@ export class EscapeMenu {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (e.code === 'Escape') {
+    if (matchesKeybindEvent(keybindManager.getCode('toggle_game_menu'), e)) {
       e.preventDefault();
       if (this._isOpen) {
         this.close();

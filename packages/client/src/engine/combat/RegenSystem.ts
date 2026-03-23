@@ -1,11 +1,8 @@
+import { REGEN_TICK_INTERVAL, MANA_REGEN_DELAY, RESTING_MANA_MULTIPLIER, getCharacterStats } from '@gtr/shared';
 import type { Targetable } from '../types';
 import type { BuffSystem } from './BuffSystem';
 
 export class RegenSystem {
-  private static readonly TICK_INTERVAL = 2.5; // seconds
-  private static readonly REGEN_AMOUNT = 2;
-  private static readonly MANA_REGEN_DELAY = 5; // seconds after last mana use
-  private static readonly RESTING_MANA_MULTIPLIER = 4; // 300% increase = 4x total
 
   private tickAccumulator = 0;
   private manaUsedTimers = new Map<Targetable, number>(); // entity → seconds since last mana use
@@ -32,8 +29,8 @@ export class RegenSystem {
 
     // Advance tick
     this.tickAccumulator += dt;
-    while (this.tickAccumulator >= RegenSystem.TICK_INTERVAL) {
-      this.tickAccumulator -= RegenSystem.TICK_INTERVAL;
+    while (this.tickAccumulator >= REGEN_TICK_INTERVAL) {
+      this.tickAccumulator -= REGEN_TICK_INTERVAL;
       this.tick();
     }
   }
@@ -42,19 +39,21 @@ export class RegenSystem {
     for (const entity of this.getEntities()) {
       if (entity.dead) continue;
 
+      const stats = getCharacterStats(entity.characterId);
+
       // Health regen: only out of combat
       if (!entity.inCombat && entity.hp < entity.maxHp) {
-        entity.hp = Math.min(entity.maxHp, entity.hp + RegenSystem.REGEN_AMOUNT);
+        entity.hp = Math.min(entity.maxHp, entity.hp + stats.hpRegen);
       }
 
       // Mana regen: only if entity has mana, and 5s since last mana use
       if (entity.maxMana > 0 && entity.mana < entity.maxMana) {
         const timeSinceUse = this.manaUsedTimers.get(entity);
-        if (timeSinceUse === undefined || timeSinceUse >= RegenSystem.MANA_REGEN_DELAY) {
+        if (timeSinceUse === undefined || timeSinceUse >= MANA_REGEN_DELAY) {
           const isResting = this.buffSystem?.hasBuff(entity, 'resting') ?? false;
           const regenAmount = isResting
-            ? RegenSystem.REGEN_AMOUNT * RegenSystem.RESTING_MANA_MULTIPLIER
-            : RegenSystem.REGEN_AMOUNT;
+            ? stats.manaRegen * RESTING_MANA_MULTIPLIER
+            : stats.manaRegen;
           entity.mana = Math.min(entity.maxMana, entity.mana + regenAmount);
         }
       }
