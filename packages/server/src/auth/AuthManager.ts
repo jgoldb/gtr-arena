@@ -29,6 +29,9 @@ export class AuthManager {
     if (!username || username.length < 1 || username.length > 20) {
       return { success: false, userId: '', error: 'Username must be 1-20 characters' };
     }
+    if (!/^[a-zA-Z0-9]+$/.test(username)) {
+      return { success: false, userId: '', error: 'Username must contain only letters and numbers' };
+    }
     if (!password || password.length < 1) {
       return { success: false, userId: '', error: 'Password is required' };
     }

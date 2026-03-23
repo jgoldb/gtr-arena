@@ -860,6 +860,10 @@ export class AuthScreen {
         this.errorEl.textContent = 'Username must be 1-20 characters';
         return;
       }
+      if (!/^[a-zA-Z0-9]+$/.test(name)) {
+        this.errorEl.textContent = 'Username must contain only letters and numbers';
+        return;
+      }
       if (pass.length < 1) {
         this.errorEl.textContent = 'Password is required';
         return;

@@ -440,7 +440,7 @@ export class LobbyScreen {
       const info = document.createElement('div');
       const hostLine = document.createElement('div');
       hostLine.style.cssText = 'font-weight: 600; font-size: 14px; color: #bbc4dd; margin-bottom: 3px;';
-      hostLine.textContent = `${this.escapeHtml(game.hostUsername)}'s Game`;
+      hostLine.textContent = `${game.hostUsername}'s Game`;
 
       const metaLine = document.createElement('div');
       metaLine.style.cssText = 'display: flex; gap: 10px; font-size: 12px; color: rgba(120,130,160,0.6);';

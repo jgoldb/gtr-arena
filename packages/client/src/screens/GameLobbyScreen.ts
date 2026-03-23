@@ -350,7 +350,7 @@ export class GameLobbyScreen {
         const nameSpan = document.createElement('span');
         nameSpan.style.cssText = `font-size: 13px; font-weight: ${p.userId === this.localUserId ? '600' : '400'}; color: #bbc4dd;`;
         const hostLabel = p.userId === this.hostUserId ? ' (Host)' : '';
-        nameSpan.textContent = `${this.escapeHtml(p.username)}${hostLabel}`;
+        nameSpan.textContent = `${p.username}${hostLabel}`;
 
         const rightSide = document.createElement('div');
         rightSide.style.cssText = 'display: flex; align-items: center; gap: 8px;';

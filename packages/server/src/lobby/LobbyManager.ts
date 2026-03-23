@@ -30,6 +30,11 @@ export class LobbyManager {
     this.db = db;
   }
 
+  /** Prefix a username with <GM> if the user is an admin. */
+  private static gmTag(username: string, isAdmin: boolean): string {
+    return isAdmin ? `<GM> ${username}` : username;
+  }
+
   addUser(userId: string, username: string, socket: WebSocket): void {
     // Check for pending game rejoin
     const rejoinSessionId = this.pendingRejoins.get(userId);
@@ -213,7 +218,7 @@ export class LobbyManager {
     const chatMsg: S2C_LobbyChat = {
       type: 'lobby_chat',
       userId,
-      username: user.username,
+      username: LobbyManager.gmTag(user.username, this.auth.getIsAdmin(userId)),
       message: message.trim().substring(0, 500),
       timestamp: Date.now(),
     };
@@ -235,7 +240,7 @@ export class LobbyManager {
     }
 
     const gameId = `game_${this.nextGameId++}`;
-    const lobby = new GameLobby(gameId, format, mapId, userId, user.username);
+    const lobby = new GameLobby(gameId, format, mapId, userId, LobbyManager.gmTag(user.username, this.auth.getIsAdmin(userId)));
     this.gameLobbies.set(gameId, lobby);
 
     user.gameLobbyId = gameId;
@@ -257,7 +262,7 @@ export class LobbyManager {
       return;
     }
 
-    const result = lobby.addPlayer(userId, user.username);
+    const result = lobby.addPlayer(userId, LobbyManager.gmTag(user.username, this.auth.getIsAdmin(userId)));
     if (!result.success) {
       this.send(user.socket, { type: 'error', message: result.error! });
       return;
@@ -424,7 +429,7 @@ export class LobbyManager {
     const msg: S2C_UserProfile = {
       type: 'user_profile',
       profile: {
-        username: row.username,
+        username: LobbyManager.gmTag(row.username, row.is_admin === 1),
         xp: row.xp,
         gamesPlayed: row.games_played,
         wins: row.wins,
@@ -448,7 +453,7 @@ export class LobbyManager {
 
     const rows = this.db.getAllUsersWithStats();
     const entries: UserProfileData[] = rows.map(r => ({
-      username: r.username,
+      username: LobbyManager.gmTag(r.username, r.is_admin === 1),
       xp: r.xp,
       gamesPlayed: r.games_played,
       wins: r.wins,
@@ -542,7 +547,7 @@ export class LobbyManager {
       type: 'admin_users_list',
       users: rows.map(r => ({
         id: r.id,
-        username: r.username,
+        username: LobbyManager.gmTag(r.username, r.is_admin === 1),
         xp: r.xp,
         createdAt: r.created_at,
         gamesPlayed: r.games_played,
@@ -718,7 +723,7 @@ export class LobbyManager {
           type: 'user_profile',
           broadcast: true,
           profile: {
-            username: row.username,
+            username: LobbyManager.gmTag(row.username, row.is_admin === 1),
             xp: row.xp,
             gamesPlayed: row.games_played,
             wins: row.wins,
@@ -778,7 +783,7 @@ export class LobbyManager {
     for (const u of this.users.values()) {
       users.push({
         userId: u.userId,
-        username: u.username,
+        username: LobbyManager.gmTag(u.username, this.auth.getIsAdmin(u.userId)),
         status: u.gameSessionId ? 'in-game' : 'online',
       });
     }
@@ -803,7 +808,7 @@ export class LobbyManager {
     for (const u of this.users.values()) {
       users.push({
         userId: u.userId,
-        username: u.username,
+        username: LobbyManager.gmTag(u.username, this.auth.getIsAdmin(u.userId)),
         status: u.gameSessionId ? 'in-game' : 'online',
       });
     }

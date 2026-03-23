@@ -180,9 +180,9 @@ export class GtrDatabase {
     return this.getUserXp(userId);
   }
 
-  getAllUsersWithStats(): { id: number; username: string; created_at: string; xp: number; games_played: number; wins: number; losses: number; banned_until: string | null; last_played: string | null }[] {
+  getAllUsersWithStats(): { id: number; username: string; is_admin: number; created_at: string; xp: number; games_played: number; wins: number; losses: number; banned_until: string | null; last_played: string | null }[] {
     return this.db.prepare(`
-      SELECT u.id, u.username, u.created_at, u.banned_until, u.last_played,
+      SELECT u.id, u.username, u.is_admin, u.created_at, u.banned_until, u.last_played,
              COALESCE(u.xp, 0) as xp,
              COALESCE(s.games_played, 0) as games_played,
              COALESCE(s.wins, 0) as wins,
