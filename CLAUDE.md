@@ -10,7 +10,7 @@ A multiplayer arena combat game inspired by WoW arena (3D, Third-person, real-ti
 packages/
   shared/     # Types, protocol, game data (abilities, characters, maps)
   client/     # Three.js client (Playground + Multiplayer modes)
-  server/     # Node.js WebSocket server (authoritative game state)
+  server/     # Node.js WebSocket server, SQLite database, auth & lobby management
 ```
 
 ### Running
@@ -18,6 +18,11 @@ packages/
 - **Dev (playground only):** `npm run dev` — Vite dev server, no network
 - **Dev (multiplayer):** `npm run dev:mp` — Starts both Vite + game server
 - **Server only:** `npm run dev:server`
+
+### Environment Variables
+
+- `PORT` — Server port (default `3001`, Docker overrides to `8080`)
+- `ADMIN_USERNAME` — (Optional) Username to auto-promote to admin on login/register (case-insensitive)
 
 ## Two Game Modes
 
@@ -32,6 +37,37 @@ packages/
 - Client: `packages/client/src/network/ClientEngine.ts` — renders + interpolates
 - Split authority: server owns combat/HP/buffs, client owns local movement
 - Message wiring: `packages/client/src/main.ts`
+
+## Database & Authentication
+
+### SQLite Database
+
+- **Driver:** `better-sqlite3` with WAL mode
+- **File:** `packages/server/data/gtr.db` (created at runtime, not checked into git)
+- **Schema & migrations:** `packages/server/src/db/Database.ts` — migrations run inline in `init()`
+
+**Tables:**
+- `users` — accounts (username, password_hash via bcrypt, is_admin, banned_until, last_played)
+- `user_stats` — aggregate games played / wins / losses per user
+- `user_character_stats` — per-character win/loss tracking
+
+### Auth Flow
+
+1. Client sends `auth` message (register or login) over WebSocket
+2. `AuthManager` (`packages/server/src/auth/AuthManager.ts`) validates credentials via `Database`
+3. If `ADMIN_USERNAME` env var is set and matches the username, the user is auto-promoted to admin
+4. Server responds with `S2C_AuthResult` including `isAdmin` flag
+5. `LobbyManager` tracks active sessions; auth is required before joining lobbies
+
+### Admin System
+
+**Server:** `LobbyManager` (`packages/server/src/lobby/LobbyManager.ts`) handles admin messages — all operations verify `is_admin` in the database before executing.
+
+**Client:** `AdminScreen` (`packages/client/src/screens/AdminScreen.ts`) — a user management table gated behind `isAdmin` status.
+
+**Admin capabilities:** view all users with stats, ban/unban (with duration presets), reset passwords, reset stats, delete users.
+
+**Protocol:** Admin messages (`admin_get_users`, `admin_delete_user`, `admin_ban_user`, etc.) are defined in `packages/shared/src/protocol.ts`. Server broadcasts updated user lists to all online admins after mutations.
 
 ## Development Workflow: Playground First
 
@@ -138,6 +174,15 @@ If the feature adds new abilities/buffs:
 2. Add to character ability lists in `packages/shared/src/characters.ts`
 
 ## Architecture Reference
+
+### Server Layers
+
+The server has three concerns:
+- **Auth & Database** — `AuthManager` + `Database` handle registration, login, sessions, and admin operations
+- **Lobby** — `LobbyManager` manages connected users, chat, game creation/joining, and admin commands
+- **Game** — `ServerEngine` runs the authoritative 20 Hz game loop for active matches
+
+All communication uses a single WebSocket endpoint (`/ws`). The server also serves the static client build via HTTP.
 
 ### Network Protocol (WoW-style Delta Compression)
 

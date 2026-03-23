@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import bcrypt from 'bcryptjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_DB_PATH = path.resolve(__dirname, '../../data/gtr.db');
+const DEFAULT_DB_PATH = process.env.DB_PATH || path.resolve(__dirname, '../../data/gtr.db');
 
 const BCRYPT_ROUNDS = 10;
 
