@@ -147,6 +147,18 @@ export class EscapeMenu {
 
       this.box.appendChild(exitBtn);
     }
+
+    // "Exit" button — closes the menu without any action
+    const closeBtn = this.makeMenuButton(
+      'Exit',
+      'rgba(60, 60, 80, 0.8)',
+      'rgba(80, 80, 100, 0.9)',
+    );
+    closeBtn.style.marginTop = '20px';
+    closeBtn.style.marginBottom = '0';
+    closeBtn.addEventListener('click', () => this.close());
+    this.box.appendChild(closeBtn);
+
     this.element.appendChild(this.box);
 
     // Close when clicking backdrop (not the panel)

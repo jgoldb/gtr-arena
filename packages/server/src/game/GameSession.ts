@@ -319,9 +319,6 @@ export class GameSession {
     const player = this.players.find(p => p.userId === userId);
     if (!player) return;
 
-    // Check full-team forfeit (only during active game)
-    if (!this.gameOver && this.checkTeamForfeit()) return;
-
     // Freeze alive entities during active game (dead/post-game entities stay as-is)
     const entity = this.engine.getEntity(entityId);
     if (!this.gameOver && entity && !entity.dead) {

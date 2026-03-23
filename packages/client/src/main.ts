@@ -298,7 +298,7 @@ function showLobby(): void {
 
   // Lobby escape menu
   const lobbyMenuButtons: EscapeMenuButton[] = [];
-  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+  if (isAdmin) {
     lobbyMenuButtons.push({
       label: 'Playground',
       onClick: () => lobbyScreen?.onPlayground?.(),

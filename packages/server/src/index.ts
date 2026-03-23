@@ -102,7 +102,7 @@ wss.on('connection', (ws: WebSocket) => {
 
     // Heartbeat — respond immediately regardless of auth state
     if (msg.type === 'ping') {
-      ws.send(JSON.stringify({ type: 'pong' }));
+      ws.send(JSON.stringify({ type: 'pong', timestamp: msg.timestamp }));
       return;
     }
 

@@ -1,3 +1,5 @@
+import { keybindManager } from './KeybindManager';
+
 export class DebugHUD {
   readonly element: HTMLElement;
   private fpsEl: HTMLElement;
@@ -40,7 +42,7 @@ export class DebugHUD {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (e.code === 'KeyL') {
+    if (e.code === keybindManager.getCode('toggle_hud')) {
       // Don't toggle if user is typing in an input/textarea
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;

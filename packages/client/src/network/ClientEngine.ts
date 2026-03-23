@@ -98,8 +98,10 @@ export class ClientEngine {
   // Sweep charge (local player only — client-side movement during charge)
   private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number } | null = null;
 
-  // Server latency estimate (ms) — derived from server timestamps
-  latency = 0;
+  /** Round-trip latency in ms — sourced from NetworkManager ping/pong. */
+  get latency(): number {
+    return this.network.rtt;
+  }
 
   // Channel beam visual
   private channelBeam: THREE.Mesh | null = null;
@@ -296,10 +298,6 @@ export class ClientEngine {
 
   /** Handle delta updates (every tick) — positions only when changed, state/buffs only when changed. */
   handleGameStateUpdate(msg: S2C_GameStateUpdate): void {
-    // Update latency estimate from server timestamp
-    const oneWay = Date.now() - msg.timestamp;
-    if (oneWay >= 0) this.latency = oneWay;
-
     // Feed positions into the snapshot buffer for smooth interpolation
     if (msg.positions.length > 0) {
       this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.positions);

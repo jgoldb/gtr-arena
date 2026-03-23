@@ -21,7 +21,10 @@ export class NetworkManager {
   private password: string;
   private mode: 'login' | 'register';
 
-  private static readonly PING_INTERVAL = 15_000;
+  /** Latest round-trip time in milliseconds. */
+  rtt = 0;
+
+  private static readonly PING_INTERVAL = 3_000;
   private static readonly STALE_TIMEOUT = 20_000;
   private static readonly STALE_CHECK_INTERVAL = 5_000;
   private static readonly RECONNECT_BASE_DELAY = 1_000;
@@ -71,7 +74,10 @@ export class NetworkManager {
     this.ws.onmessage = (event) => {
       this.lastMessageTime = Date.now();
       const msg = JSON.parse(event.data) as ServerMessage;
-      if (msg.type === 'pong') return; // heartbeat response, don't forward
+      if (msg.type === 'pong') {
+        if (msg.timestamp) this.rtt = Date.now() - msg.timestamp;
+        return;
+      }
       for (const handler of this.handlers) {
         handler(msg);
       }
@@ -130,7 +136,7 @@ export class NetworkManager {
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.pingTimer = window.setInterval(() => {
-      this.send({ type: 'ping' });
+      this.send({ type: 'ping', timestamp: Date.now() });
     }, NetworkManager.PING_INTERVAL);
     this.staleCheckTimer = window.setInterval(() => {
       if (Date.now() - this.lastMessageTime > NetworkManager.STALE_TIMEOUT) {

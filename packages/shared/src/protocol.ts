@@ -312,6 +312,7 @@ export interface S2C_Kicked {
 
 export interface S2C_Pong {
   type: 'pong';
+  timestamp: number;
 }
 
 export interface S2C_RejoinGame {
@@ -387,6 +388,7 @@ export interface C2S_ChangePassword {
 
 export interface C2S_Ping {
   type: 'ping';
+  timestamp: number;
 }
 
 export interface AdminUserRecord {

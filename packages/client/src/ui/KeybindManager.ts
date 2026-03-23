@@ -36,6 +36,7 @@ const DEFAULT_BINDS: { id: string; label: string; code: string }[] = [
   // Utility
   { id: 'rest', label: 'Rest', code: 'KeyR' },
   { id: 'target_of_target', label: 'Target of Target', code: 'KeyF' },
+  { id: 'toggle_hud', label: 'HUD', code: 'KeyL' },
 ];
 
 /** Friendly display name for a KeyboardEvent.code */
