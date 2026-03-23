@@ -112,12 +112,14 @@ wss.on('connection', (ws: WebSocket) => {
       if (result.success) {
         userId = result.userId;
         const displayUsername = result.username!;
+        const dbId = auth.getDbId(result.userId)!;
         ws.send(JSON.stringify({
           type: 'auth_result',
           success: true,
           userId: result.userId,
           username: displayUsername,
           isAdmin: result.isAdmin || false,
+          xp: db.getUserXp(dbId),
         }));
         lobby.addUser(result.userId, displayUsername, ws);
       } else {

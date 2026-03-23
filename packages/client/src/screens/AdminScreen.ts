@@ -1,5 +1,6 @@
 import type { NetworkManager } from '../network/NetworkManager';
 import type { AdminUserRecord } from '@gtr/shared';
+import { xpToLevel } from '@gtr/shared';
 
 export class AdminScreen {
   readonly element: HTMLDivElement;
@@ -51,7 +52,7 @@ export class AdminScreen {
 
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
-    for (const col of ['ID', 'Username', 'Created', 'Last Played', 'Games', 'Wins', 'Losses', 'Win %', 'Status', '']) {
+    for (const col of ['ID', 'Username', 'Level', 'Created', 'Last Played', 'Games', 'Status', '']) {
       const th = document.createElement('th');
       th.textContent = col;
       th.style.cssText = `
@@ -83,10 +84,6 @@ export class AdminScreen {
       tr.addEventListener('mouseenter', () => tr.style.background = 'rgba(100, 120, 200, 0.05)');
       tr.addEventListener('mouseleave', () => tr.style.background = '');
 
-      const winPct = user.gamesPlayed > 0
-        ? ((user.wins / user.gamesPlayed) * 100).toFixed(1) + '%'
-        : '-';
-
       let banStatus = '-';
       if (user.bannedUntil === 'permanent') {
         banStatus = 'Permanent';
@@ -102,12 +99,10 @@ export class AdminScreen {
       const cells = [
         String(user.id),
         user.username,
+        String(xpToLevel(user.xp)),
         new Date(user.createdAt + 'Z').toLocaleDateString(),
         lastPlayed,
         String(user.gamesPlayed),
-        String(user.wins),
-        String(user.losses),
-        winPct,
         banStatus,
       ];
 

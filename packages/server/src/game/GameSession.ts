@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo } from '@gtr/shared';
-import { MAPS, MAP_LIST } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult } from '@gtr/shared';
+import { MAPS, MAP_LIST, xpToLevel, calculateXpGain } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
 import type { AuthManager } from '../auth/AuthManager.js';
@@ -50,6 +50,9 @@ export class GameSession {
   private disconnectedPlayers = new Map<string, { timer: ReturnType<typeof setTimeout> }>();
   onGracePeriodExpired: ((userId: string) => void) | null = null;
   private static readonly DISCONNECT_GRACE_PERIOD_MS = 120_000; // 2 minutes
+
+  // Per-player match stats (survives entity removal)
+  private matchStats = new Map<string, PlayerMatchStats>();
 
   // Rematch state
   private rematchRequester: string | null = null;
@@ -102,6 +105,11 @@ export class GameSession {
       this.engine.addEntity(entity);
       this.entityIdByUserId.set(p.userId, entityId);
       this.userIdByEntityId.set(entityId, p.userId);
+    }
+
+    // Initialize match stats for every player (persists through disconnects)
+    for (const p of this.players) {
+      this.matchStats.set(p.userId, { kills: 0, deaths: 0, damageDealt: 0, healingDone: 0 });
     }
 
     // Wire engine callbacks
@@ -390,7 +398,7 @@ export class GameSession {
       gasClouds: fullState.gasClouds,
       chemicalPools: fullState.chemicalPools,
       disconnectedEntityIds,
-      ...(this.gameOver ? { gameOver: { winningTeam: this.getWinningTeam() } } : {}),
+      ...(this.gameOver ? { gameOver: { winningTeam: this.getWinningTeam(), playerResults: this.buildPlayerResults() } } : {}),
       ...(arenaTimeRemaining !== undefined ? { arenaTimeRemaining } : {}),
     };
     this.sendToUser(userId, rejoinMsg);
@@ -447,6 +455,17 @@ export class GameSession {
     return this.winningTeamResult;
   }
 
+  /** Build results array for all original players (including disconnected). */
+  private buildPlayerResults(): PlayerMatchResult[] {
+    return this.players.map(p => ({
+      userId: p.userId,
+      username: p.username,
+      team: p.team,
+      characterId: p.characterId,
+      stats: this.matchStats.get(p.userId) ?? { kills: 0, deaths: 0, damageDealt: 0, healingDone: 0 },
+    }));
+  }
+
   private handleGameOver(winningTeam: number): void {
     this.gameOver = true;
     this.winningTeamResult = winningTeam;
@@ -458,7 +477,8 @@ export class GameSession {
     this.disconnectedPlayers.clear();
 
     const allPresent = this.allPlayersPresent;
-    const msg: S2C_GameOver = { type: 'game_over', winningTeam, allPlayersPresent: allPresent };
+    const playerResults = this.buildPlayerResults();
+    const msg: S2C_GameOver = { type: 'game_over', winningTeam, allPlayersPresent: allPresent, playerResults };
     this.broadcast(msg);
 
     // Notify entity deaths
@@ -476,16 +496,32 @@ export class GameSession {
     this.recordStats(winningTeam);
   }
 
-  /** Record win/loss stats for every player in this game. Called once at game end. */
+  /** Record win/loss stats and award XP for every player in this game. Called once at game end. */
   private recordStats(winningTeam: number): void {
     if (this.statsRecorded) return;
     this.statsRecorded = true;
 
+    // Build a map of dbId → level for all players so we can look up opponent levels
+    const playerInfos: { userId: string; dbId: number; team: number; characterId: string; level: number }[] = [];
     for (const p of this.players) {
       const dbId = this.auth.getDbId(p.userId);
       if (dbId == null) continue;
-      const won = p.team === winningTeam;
-      this.db.recordGameResult(dbId, p.characterId, won);
+      const xp = this.db.getUserXp(dbId);
+      playerInfos.push({ userId: p.userId, dbId, team: p.team, characterId: p.characterId, level: xpToLevel(xp) });
+    }
+
+    for (const info of playerInfos) {
+      const won = info.team === winningTeam;
+      this.db.recordGameResult(info.dbId, info.characterId, won);
+
+      // Find highest-level opponent
+      const highestOpponentLevel = playerInfos
+        .filter(o => o.team !== info.team)
+        .reduce((max, o) => Math.max(max, o.level), 1);
+
+      const xpGain = calculateXpGain(info.level, highestOpponentLevel, won);
+      const newXp = this.db.addXp(info.dbId, xpGain);
+      this.sendToUser(info.userId, { type: 'xp_update', xp: newXp });
     }
   }
 

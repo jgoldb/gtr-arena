@@ -44,6 +44,7 @@ let currentState: AppState = 'auth';
 let network: NetworkManager | null = null;
 let localUserId = '';
 let isAdmin = false;
+let localXp = 0;
 let awaitingReconnectResult = false;
 
 // Active screens / engines
@@ -282,13 +283,14 @@ function showLobby(): void {
   currentState = 'lobby';
   hideGameUI();
 
-  lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin);
+  lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin, localXp);
   lobbyScreen.onPlayground = () => startPlayground();
   lobbyScreen.onLogout = () => {
     network?.disconnect();
     network = null;
     localUserId = '';
     isAdmin = false;
+    localXp = 0;
     sessionStorage.removeItem('gtr_username');
     showAuth();
   };
@@ -940,6 +942,7 @@ function handleServerMessage(msg: ServerMessage): void {
       if (msg.success) {
         localUserId = msg.userId;
         isAdmin = msg.isAdmin ?? false;
+        localXp = msg.xp ?? 0;
         // Update stored username to the original registered casing from the server
         if (msg.username) {
           sessionStorage.setItem('gtr_username', msg.username);
@@ -983,11 +986,20 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
 
     case 'user_profile':
-      lobbyScreen?.showProfileDialog(msg.profile);
+      if (msg.broadcast) {
+        lobbyScreen?.updateOpenProfileDialog(msg.profile);
+      } else {
+        lobbyScreen?.showProfileDialog(msg.profile);
+      }
       break;
 
     case 'leaderboard':
       lobbyScreen?.showLeaderboard(msg.entries);
+      break;
+
+    case 'xp_update':
+      localXp = msg.xp;
+      lobbyScreen?.updateXp(msg.xp);
       break;
 
     case 'game_lobby_state':
@@ -1097,6 +1109,7 @@ function handleServerMessage(msg: ServerMessage): void {
       network = null;
       localUserId = '';
       isAdmin = false;
+      localXp = 0;
       sessionStorage.removeItem('gtr_username');
       showAuth();
       // Show the reason on the auth screen after it renders

@@ -1,3 +1,68 @@
+// ── XP / Level utilities ──────────────────────────────────────────────────
+//
+// Formula:  xpForLevel(n) = 100 · (n − 1)^2.2
+//
+// Level 1→2 costs 100 XP.  Each successive gap grows super-linearly, so
+// higher levels take progressively more effort with mild acceleration.
+// No level cap; climbing simply becomes impractical at very high levels.
+
+/** Cumulative XP required to reach a given level. Level 1 = 0 XP. */
+export function xpForLevel(level: number): number {
+  if (level <= 1) return 0;
+  return Math.floor(100 * Math.pow(level - 1, 2.2));
+}
+
+/** Convert raw XP into a level number (minimum level 1). */
+export function xpToLevel(xp: number): number {
+  if (xp <= 0) return 1;
+  // Analytical estimate, then adjust for floor() rounding
+  let level = 1 + Math.floor(Math.pow(xp / 100, 1 / 2.2));
+  while (xpForLevel(level + 1) <= xp) level++;
+  return level;
+}
+
+/** XP progress within the current level: { current, needed } */
+export function xpProgress(xp: number): { current: number; needed: number } {
+  const level = xpToLevel(xp);
+  const base = xpForLevel(level);
+  const next = xpForLevel(level + 1);
+  return { current: xp - base, needed: next - base };
+}
+
+/**
+ * Calculate XP gained from a match.
+ *
+ * @param playerLevel  - The player's level
+ * @param opponentLevel - The highest-level opponent in the match
+ * @param won          - Whether the player won
+ *
+ * Baseline: lvl 1 vs lvl 1 → winner 160 XP, loser 80 XP.
+ * Base XP grows with player level (60 + 20 * level).
+ * Penalty when opponent is lower — accelerating with each level of gap.
+ * Modest fixed bonus when opponent is higher (10 * playerLevel).
+ * Winners earn 2x losers.
+ */
+export function calculateXpGain(playerLevel: number, opponentLevel: number, won: boolean): number {
+  const base = 60 + 20 * playerLevel;
+
+  if (!won) return base;
+
+  // Win XP adjusted by opponent level difference
+  const levelDiff = opponentLevel - playerLevel;
+  let adjusted = base;
+  if (levelDiff < 0) {
+    // Opponent lower — triangular penalty: gap 1→5%, 2→15%, 3→30%, 4→50%, 5→75%…
+    const gap = -levelDiff;
+    const penalty = 0.05 * gap * (gap + 1) / 2;
+    adjusted = base * Math.max(0.1, 1 - penalty);
+  } else if (levelDiff > 0) {
+    // Opponent higher — modest flat bonus based on player's own level
+    adjusted = base + 10 * playerLevel;
+  }
+
+  return Math.round(adjusted * 2);
+}
+
 // ── Shared entity interface (no Three.js dependency) ──────────────────────
 
 export interface Positionable {
@@ -94,6 +159,14 @@ export interface GameLobbyPlayer {
 }
 
 export type GameFormat = '1v1' | '2v2' | '3v3';
+
+/** Per-player stats accumulated during a match. */
+export interface PlayerMatchStats {
+  kills: number;
+  deaths: number;
+  damageDealt: number;
+  healingDone: number;
+}
 
 export function getMaxPlayers(format: GameFormat): number {
   switch (format) {
