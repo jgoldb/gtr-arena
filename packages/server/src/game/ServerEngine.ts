@@ -1241,6 +1241,15 @@ export class ServerEngine {
     if (gasChanged) this.lastBroadcastGasCloudIds = gasIdSig;
     if (chemChanged) this.lastBroadcastChemPoolSig = chemSig;
 
+    // Skip broadcast entirely when nothing changed — avoids sending empty messages
+    const hasPositions = positions.length > 0;
+    const hasStates = states.length > 0;
+    const hasBuffs = changedBuffs.length > 0;
+    const hasEvents = this.pendingEvents.length > 0;
+    if (!hasPositions && !hasStates && !hasBuffs && !gasChanged && !chemChanged && !hasEvents) {
+      return;
+    }
+
     const msg: S2C_GameStateUpdate = {
       type: 'game_state_update',
       tick: this.tick,
@@ -1248,11 +1257,11 @@ export class ServerEngine {
       positions,
     };
 
-    if (states.length > 0) msg.states = states;
-    if (changedBuffs.length > 0) msg.buffs = changedBuffs;
+    if (hasStates) msg.states = states;
+    if (hasBuffs) msg.buffs = changedBuffs;
     if (gasChanged) msg.gasClouds = gasClouds;
     if (chemChanged) msg.chemicalPools = chemPools;
-    if (this.pendingEvents.length > 0) msg.events = this.pendingEvents as S2C_GameStateUpdate['events'];
+    if (hasEvents) msg.events = this.pendingEvents as S2C_GameStateUpdate['events'];
 
     this.onBroadcast?.(msg);
   }
