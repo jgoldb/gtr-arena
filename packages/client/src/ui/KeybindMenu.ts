@@ -57,9 +57,7 @@ export class KeybindMenu {
     let lastCategory = '';
     for (const entry of entries) {
       // Category headers
-      const cat = entry.id.startsWith('move_') ? 'Movement'
-        : entry.id.startsWith('action_') ? 'Action Bar'
-        : 'Utility';
+      const cat = entry.category;
       if (cat !== lastCategory) {
         lastCategory = cat;
         const header = document.createElement('div');

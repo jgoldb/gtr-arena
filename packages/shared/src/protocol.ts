@@ -283,6 +283,13 @@ export interface S2C_RematchFailed {
   reason: string;
 }
 
+export interface UserCharacterStatsEntry {
+  characterId: string;
+  gamesPlayed: number;
+  wins: number;
+  losses: number;
+}
+
 export interface UserProfileData {
   username: string;
   xp: number;
@@ -291,6 +298,7 @@ export interface UserProfileData {
   losses: number;
   createdAt: string;
   lastPlayed: string | null;
+  characterStats?: UserCharacterStatsEntry[];
 }
 
 export interface S2C_UserProfile {

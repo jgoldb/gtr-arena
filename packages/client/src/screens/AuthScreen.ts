@@ -18,6 +18,7 @@ export class AuthScreen {
   private sourceNode: AudioBufferSourceNode | null = null;
   private fadingOut = false;
   private readonly onVisibilityChange = () => this.handleVisibilityChange();
+  private readonly onUserGesture = () => this.resumeAudioCtx();
 
   constructor(onAuth: (result: AuthResult) => void) {
     this.onAuth = onAuth;
@@ -909,15 +910,33 @@ export class AuthScreen {
       source.connect(gain);
       source.start();
 
-      // Fade in over 2 seconds (unless tab is already hidden)
-      if (!document.hidden) {
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
+
+      // If the browser suspended the context (no user gesture yet),
+      // wait for any interaction to resume it; otherwise fade in now.
+      if (ctx.state === 'suspended') {
+        for (const evt of ['pointerdown', 'keydown'] as const) {
+          document.addEventListener(evt, this.onUserGesture, { once: false });
+        }
+      } else if (!document.hidden) {
         gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 2);
       }
-
-      document.addEventListener('visibilitychange', this.onVisibilityChange);
     } catch {
       // Audio playback not available — silent fail
     }
+  }
+
+  private resumeAudioCtx(): void {
+    if (!this.audioCtx || this.fadingOut) return;
+    this.audioCtx.resume().then(() => {
+      // Remove gesture listeners once resumed
+      for (const evt of ['pointerdown', 'keydown'] as const) {
+        document.removeEventListener(evt, this.onUserGesture);
+      }
+      if (!this.fadingOut && this.gainNode && this.audioCtx && !document.hidden) {
+        this.gainNode.gain.linearRampToValueAtTime(0.5, this.audioCtx.currentTime + 2);
+      }
+    });
   }
 
   private handleVisibilityChange(): void {
@@ -955,6 +974,9 @@ export class AuthScreen {
   private fadeOutMusic(): void {
     this.fadingOut = true;
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    for (const evt of ['pointerdown', 'keydown'] as const) {
+      document.removeEventListener(evt, this.onUserGesture);
+    }
     if (!this.audioCtx || !this.gainNode) return;
     const ctx = this.audioCtx;
     const gain = this.gainNode;

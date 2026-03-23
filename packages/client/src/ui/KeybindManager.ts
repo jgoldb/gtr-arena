@@ -11,6 +11,7 @@
 export interface KeybindEntry {
   id: string;
   label: string;
+  category: string;
   defaultCode: string;
   code: string;
 }
@@ -18,29 +19,29 @@ export interface KeybindEntry {
 const STORAGE_KEY = 'gtr_keybinds';
 
 /** Default keybind definitions — order here = order in the UI */
-const DEFAULT_BINDS: { id: string; label: string; code: string }[] = [
+const DEFAULT_BINDS: { id: string; label: string; category: string; code: string }[] = [
   // Movement
-  { id: 'move_forward', label: 'Run Forward', code: 'KeyW' },
-  { id: 'move_left', label: 'Strafe Left', code: 'KeyA' },
-  { id: 'move_backward', label: 'Backpedal', code: 'KeyS' },
-  { id: 'move_right', label: 'Strafe Right', code: 'KeyD' },
+  { id: 'move_forward', label: 'Run Forward', category: 'Movement', code: 'KeyW' },
+  { id: 'move_left', label: 'Strafe Left', category: 'Movement', code: 'KeyA' },
+  { id: 'move_backward', label: 'Backpedal', category: 'Movement', code: 'KeyS' },
+  { id: 'move_right', label: 'Strafe Right', category: 'Movement', code: 'KeyD' },
+  { id: 'jump', label: 'Jump', category: 'Movement', code: 'Space' },
+  { id: 'rest', label: 'Rest', category: 'Movement', code: 'KeyR' },
   // Action bar slots
-  { id: 'action_1', label: 'Action Bar 1', code: 'Digit1' },
-  { id: 'action_2', label: 'Action Bar 2', code: 'Digit2' },
-  { id: 'action_3', label: 'Action Bar 3', code: 'Digit3' },
-  { id: 'action_4', label: 'Action Bar 4', code: 'Digit4' },
-  { id: 'action_5', label: 'Action Bar 5', code: 'Digit5' },
-  { id: 'action_6', label: 'Action Bar 6', code: 'Digit6' },
-  { id: 'action_7', label: 'Action Bar 7', code: 'KeyQ' },
-  { id: 'action_8', label: 'Action Bar 8', code: 'KeyE' },
-  // Movement (cont.)
-  { id: 'jump', label: 'Jump', code: 'Space' },
-  // Utility
-  { id: 'rest', label: 'Rest', code: 'KeyR' },
-  { id: 'target_nearest_enemy', label: 'Target Nearest Enemy', code: 'Tab' },
-  { id: 'target_of_target', label: 'Assist Target', code: 'KeyF' },
-  { id: 'toggle_hud', label: 'Toggle HUD', code: 'KeyL' },
-  { id: 'toggle_game_menu', label: 'Game Menu', code: 'Escape' },
+  { id: 'action_1', label: 'Action Bar 1', category: 'Action Bar', code: 'Digit1' },
+  { id: 'action_2', label: 'Action Bar 2', category: 'Action Bar', code: 'Digit2' },
+  { id: 'action_3', label: 'Action Bar 3', category: 'Action Bar', code: 'Digit3' },
+  { id: 'action_4', label: 'Action Bar 4', category: 'Action Bar', code: 'Digit4' },
+  { id: 'action_5', label: 'Action Bar 5', category: 'Action Bar', code: 'Digit5' },
+  { id: 'action_6', label: 'Action Bar 6', category: 'Action Bar', code: 'Digit6' },
+  { id: 'action_7', label: 'Action Bar 7', category: 'Action Bar', code: 'KeyQ' },
+  { id: 'action_8', label: 'Action Bar 8', category: 'Action Bar', code: 'KeyE' },
+  // Targeting
+  { id: 'target_nearest_enemy', label: 'Target Nearest Enemy', category: 'Targeting', code: 'Tab' },
+  { id: 'target_of_target', label: 'Assist Target', category: 'Targeting', code: 'KeyF' },
+  // Interface
+  { id: 'toggle_hud', label: 'Toggle HUD', category: 'Interface', code: 'KeyL' },
+  { id: 'toggle_game_menu', label: 'Game Menu', category: 'Interface', code: 'Escape' },
 ];
 
 // ---- Combo helpers ----
@@ -125,6 +126,7 @@ export class KeybindManager {
       this.binds.set(def.id, {
         id: def.id,
         label: def.label,
+        category: def.category,
         defaultCode: def.code,
         code: def.code,
       });

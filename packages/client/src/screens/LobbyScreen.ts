@@ -1,6 +1,6 @@
 import type { NetworkManager } from '../network/NetworkManager';
 import type { LobbyUser, LobbyGameInfo, GameFormat, UserProfileData } from '@gtr/shared';
-import { MAP_LIST, xpToLevel, xpProgress } from '@gtr/shared';
+import { MAP_LIST, CHARACTER_LIST, xpToLevel, xpProgress } from '@gtr/shared';
 
 export class LobbyScreen {
   readonly element: HTMLDivElement;
@@ -974,6 +974,61 @@ export class LobbyScreen {
     addStat('Losses', String(profile.losses), '#cc6666');
 
     body.appendChild(statsGrid);
+
+    // Per-character stats
+    if (profile.characterStats && profile.characterStats.length > 0) {
+      const charSection = document.createElement('div');
+      charSection.style.cssText = 'margin-top: 20px;';
+
+      const charHeader = document.createElement('div');
+      charHeader.textContent = 'CHARACTER STATS';
+      charHeader.style.cssText = 'font-size: 10px; font-weight: 600; letter-spacing: 1.5px; color: rgba(120,140,180,0.5); margin-bottom: 10px; text-transform: uppercase;';
+      charSection.appendChild(charHeader);
+
+      // Sort by games played descending
+      const sorted = [...profile.characterStats].sort((a, b) => b.gamesPlayed - a.gamesPlayed);
+      for (const cs of sorted) {
+        const charInfo = CHARACTER_LIST.find(c => c.id === cs.characterId);
+        const name = charInfo?.name ?? cs.characterId;
+        const charWinRate = cs.gamesPlayed > 0 ? (cs.wins / cs.gamesPlayed * 100) : 0;
+
+        const row = document.createElement('div');
+        row.style.cssText = `
+          display: flex; align-items: center; justify-content: space-between;
+          background: rgba(15,18,35,0.6); border: 1px solid rgba(80,100,180,0.08);
+          border-radius: 6px; padding: 10px 14px; margin-bottom: 6px;
+        `;
+
+        const nameEl = document.createElement('div');
+        nameEl.textContent = name;
+        nameEl.style.cssText = 'font-size: 13px; font-weight: 600; color: #dde2f0;';
+
+        const statsEl = document.createElement('div');
+        statsEl.style.cssText = 'display: flex; gap: 12px; align-items: center; font-size: 12px;';
+
+        const gamesEl = document.createElement('span');
+        gamesEl.textContent = `${cs.gamesPlayed} played`;
+        gamesEl.style.cssText = 'color: #8ab4f8;';
+
+        const winsEl = document.createElement('span');
+        winsEl.textContent = `${cs.wins}W`;
+        winsEl.style.cssText = 'color: #66cc88;';
+
+        const lossesEl = document.createElement('span');
+        lossesEl.textContent = `${cs.losses}L`;
+        lossesEl.style.cssText = 'color: #cc6666;';
+
+        const wrEl = document.createElement('span');
+        wrEl.textContent = cs.gamesPlayed > 0 ? `${charWinRate.toFixed(0)}%` : '-';
+        wrEl.style.cssText = `color: ${charWinRate >= 50 ? '#66cc88' : '#cc8866'}; font-weight: 600; min-width: 32px; text-align: right;`;
+
+        statsEl.append(gamesEl, winsEl, lossesEl, wrEl);
+        row.append(nameEl, statsEl);
+        charSection.appendChild(row);
+      }
+
+      body.appendChild(charSection);
+    }
 
     // Close button
     const closeRow = document.createElement('div');

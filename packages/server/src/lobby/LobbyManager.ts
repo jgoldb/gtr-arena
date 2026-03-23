@@ -420,6 +420,7 @@ export class LobbyManager {
       return;
     }
 
+    const charStats = this.db.getUserCharacterStats(dbId);
     const msg: S2C_UserProfile = {
       type: 'user_profile',
       profile: {
@@ -430,6 +431,12 @@ export class LobbyManager {
         losses: row.losses,
         createdAt: row.created_at,
         lastPlayed: row.last_played,
+        characterStats: charStats.map(c => ({
+          characterId: c.character_id,
+          gamesPlayed: c.games_played,
+          wins: c.wins,
+          losses: c.losses,
+        })),
       },
     };
     this.send(user.socket, msg);
@@ -706,6 +713,7 @@ export class LobbyManager {
       const rows = this.db.getAllUsersWithStats();
       const row = rows.find(r => r.id === targetUserId);
       if (row) {
+        const broadcastCharStats = this.db.getUserCharacterStats(targetUserId);
         const profileMsg: S2C_UserProfile = {
           type: 'user_profile',
           broadcast: true,
@@ -717,6 +725,12 @@ export class LobbyManager {
             losses: row.losses,
             createdAt: row.created_at,
             lastPlayed: row.last_played,
+            characterStats: broadcastCharStats.map(c => ({
+              characterId: c.character_id,
+              gamesPlayed: c.games_played,
+              wins: c.wins,
+              losses: c.losses,
+            })),
           },
         };
         for (const u of this.users.values()) {
