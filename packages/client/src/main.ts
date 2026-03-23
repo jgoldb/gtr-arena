@@ -1007,8 +1007,14 @@ function handleServerMessage(msg: ServerMessage): void {
         }
         network?.disconnect();
         network = null;
-        showAuth();
-        setTimeout(() => authScreen?.showError(errorMsg), 0);
+        if (authScreen) {
+          // Already on the auth screen — just show the error without rebuilding
+          authScreen.showError(errorMsg);
+        } else {
+          // Re-auth failed during gameplay — need to rebuild the auth screen
+          showAuth();
+          setTimeout(() => authScreen?.showError(errorMsg), 0);
+        }
       }
       break;
 
