@@ -526,6 +526,8 @@ export interface S2C_GameStateSnapshot {
   buffs: EntityBuffSnapshot[];
   gasClouds: GasCloudSnapshot[];
   chemicalPools: ChemicalPoolSnapshot[];
+  /** Seconds remaining until arena doors open. Undefined = already open. */
+  arenaTimeRemaining?: number;
 }
 
 export interface S2C_XpUpdate {

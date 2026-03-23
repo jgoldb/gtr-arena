@@ -1,19 +1,29 @@
 import * as THREE from 'three';
 
+type Lane = 'left' | 'center' | 'right';
+
 interface CombatTextEntry {
   element: HTMLElement;
   target: THREE.Object3D;
   offsetY: number; // accumulates upward drift in screen-px
+  offsetX: number; // accumulates horizontal drift in screen-px
   elapsed: number;
   jitterX: number;
   isCrit: boolean;
+  lane: Lane; // left = damage, center = misc text, right = healing
+  isIncoming: boolean; // true = damage/healing received by local player (flips direction + tints color)
 }
 
 const DURATION = 1.5; // seconds
 const RISE_SPEED = 60; // pixels per second
+const DRIFT_SPEED = 25; // horizontal drift pixels per second
 const FONT_SIZE = 22;
 const STAGGER_SPACING = 26; // px between stacked entries
 const STAGGER_WINDOW = 0.4; // seconds — entries within this age count as overlapping
+
+// Incoming tints — visually separate damage you take from damage you deal
+const INCOMING_DAMAGE_COLOR = '#ff5555';
+const INCOMING_CRIT_COLOR = '#ff8800';
 
 export class FloatingCombatText {
   readonly element: HTMLElement;
@@ -32,11 +42,11 @@ export class FloatingCombatText {
     `;
   }
 
-  /** Count recent entries on the same target to compute a vertical stagger offset. */
-  private getStaggerOffset(target: THREE.Object3D): number {
+  /** Count recent entries on the same target+lane to compute a vertical stagger offset. */
+  private getStaggerOffset(target: THREE.Object3D, lane: Lane): number {
     let count = 0;
     for (const entry of this.entries) {
-      if (entry.target === target && entry.elapsed < STAGGER_WINDOW) count++;
+      if (entry.target === target && entry.lane === lane && entry.elapsed < STAGGER_WINDOW) count++;
     }
     return -(count * STAGGER_SPACING);
   }
@@ -70,47 +80,57 @@ export class FloatingCombatText {
     `;
     this.element.appendChild(el);
 
+    const lane: Lane = 'center';
     this.entries.push({
       element: el,
       target,
-      offsetY: this.getStaggerOffset(target),
+      offsetY: this.getStaggerOffset(target, lane),
+      offsetX: 0,
       elapsed: 0,
       jitterX,
       isCrit: false,
+      lane,
+      isIncoming: false,
     });
   }
 
-  spawn(target: THREE.Object3D, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge'): void {
+  spawn(target: THREE.Object3D, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge', isIncoming = false): void {
     const el = document.createElement('div');
 
     let text: string;
     let color: string;
     let fontSize: number;
+    let lane: Lane;
     switch (type) {
       case 'heal':
         text = `+${amount}`;
         color = '#22ff44';
         fontSize = FONT_SIZE;
+        lane = 'right';
         break;
       case 'crit':
         text = `${amount}`;
-        color = '#ffcc00';
+        color = isIncoming ? INCOMING_CRIT_COLOR : '#ffcc00';
         fontSize = FONT_SIZE * 1.6;
+        lane = 'left';
         break;
       case 'miss':
         text = 'Miss';
         color = '#aaaaaa';
         fontSize = FONT_SIZE;
+        lane = 'left';
         break;
       case 'dodge':
         text = 'Dodge';
         color = '#aaaaaa';
         fontSize = FONT_SIZE;
+        lane = 'left';
         break;
       default:
         text = `${amount}`;
-        color = '#ffffff';
+        color = isIncoming ? INCOMING_DAMAGE_COLOR : '#ffffff';
         fontSize = FONT_SIZE;
+        lane = 'left';
         break;
     }
     el.textContent = text;
@@ -142,10 +162,13 @@ export class FloatingCombatText {
     this.entries.push({
       element: el,
       target,
-      offsetY: this.getStaggerOffset(target),
+      offsetY: this.getStaggerOffset(target, lane),
+      offsetX: 0,
       elapsed: 0,
       jitterX,
       isCrit: type === 'crit',
+      lane,
+      isIncoming,
     });
   }
 
@@ -160,7 +183,13 @@ export class FloatingCombatText {
         continue;
       }
 
-      entry.offsetY += RISE_SPEED * dt;
+      // Incoming scrolls down, outgoing scrolls up; lane drift is always the same direction
+      entry.offsetY += RISE_SPEED * dt * (entry.isIncoming ? -1 : 1);
+      if (entry.lane === 'left') {
+        entry.offsetX -= DRIFT_SPEED * dt;
+      } else if (entry.lane === 'right') {
+        entry.offsetX += DRIFT_SPEED * dt;
+      }
 
       // Project target's head position to screen
       const worldPos = new THREE.Vector3();
@@ -192,7 +221,7 @@ export class FloatingCombatText {
         ? 1 + scaleBonus * (1 - entry.elapsed / 0.15)
         : 1;
 
-      entry.element.style.left = `${screenX}px`;
+      entry.element.style.left = `${screenX + entry.offsetX}px`;
       entry.element.style.top = `${screenY - entry.offsetY}px`;
       entry.element.style.transform = `translate(${entry.jitterX}px, 0) translate(-50%, -50%) scale(${scale.toFixed(2)})`;
       entry.element.style.opacity = `${opacity.toFixed(2)}`;

@@ -542,6 +542,14 @@ export class ServerEngine {
           } as S2C_CombatEvent);
           return;
         }
+        // Hostile channel start — notify for auto-targeting
+        this.pendingEvents.push({
+          type: 'combat_event',
+          sourceEntityId: entity.id,
+          targetEntityId: target.id,
+          amount: 0,
+          combatType: 'damage',
+        } as S2C_CombatEvent);
       }
     }
 

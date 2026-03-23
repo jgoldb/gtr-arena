@@ -251,6 +251,9 @@ export class ServerCombatSystem {
         }
         if (actualDamage > 0) {
           this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+        } else if (damage === 0) {
+          // 0-damage hostile ability (e.g. debuff-only) — still notify for auto-targeting
+          this.onCombatText?.(attacker, target, 0, 'damage');
         }
 
         if (ability.appliesDebuff) {

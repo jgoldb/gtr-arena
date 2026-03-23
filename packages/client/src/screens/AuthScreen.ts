@@ -273,11 +273,17 @@ export class AuthScreen {
       "I'm fucked!",
       "I loved her...",
       "Where's Brad?",
-      "I'll never get glad :(",
-      "Yeah I'm huge.",
+      "I'll never get glad 😟",
+      "Yeah I'm huge",
       "Joel?",
       "Can't believe I'm actually 300 lbs...",
       "Am I gay?",
+      "Cord??",
+      "I'm Looksmaxxing right now",
+      "What's on the Dash tonight?",
+      "Wish I had some bird right about now...",
+      "T levels are tanking",
+      "Shoulda stayed on the damn couch"
     ];
     bubble.textContent = astroThoughts[Math.floor(Math.random() * astroThoughts.length)];
     bubble.style.cssText = `
@@ -303,7 +309,7 @@ export class AuthScreen {
     let bubbleDone = false; // prevents re-triggering after pop-out
     let bubbleShowTime = 0;
     let bubbleScale = 0;
-    const BUBBLE_DURATION = 2500; // visible for 2.5s
+    const BUBBLE_DURATION = 3500; // visible for 3.5s
     const BUBBLE_TRIGGER = 0.35; // show at 35% of journey
     const BUBBLE_POP_SPEED = 0.07; // scale change per frame at 60fps
 

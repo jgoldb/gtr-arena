@@ -402,12 +402,15 @@ function startMultiplayer(msg: S2C_GameStart): void {
   clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
+    // Skip 0-amount damage text (e.g. debuff-only abilities, hostile channel starts)
+    if (amount === 0 && type !== 'miss' && type !== 'dodge') return;
     const localId = clientEngine!.localId;
     const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
     if (isLocalInvolved) {
       const mesh = clientEngine!.getEntityMesh(targetEntityId);
       if (mesh && mpCombatText) {
-        mpCombatText.spawn(mesh, amount, type as any);
+        const isIncoming = targetEntityId === localId;
+        mpCombatText.spawn(mesh, amount, type as any, isIncoming);
       }
     }
     if (targetEntityId === localId) {
@@ -477,12 +480,15 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
   clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
+    // Skip 0-amount damage text (e.g. debuff-only abilities, hostile channel starts)
+    if (amount === 0 && type !== 'miss' && type !== 'dodge') return;
     const localId = clientEngine!.localId;
     const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
     if (isLocalInvolved) {
       const mesh = clientEngine!.getEntityMesh(targetEntityId);
       if (mesh && mpCombatText) {
-        mpCombatText.spawn(mesh, amount, type as any);
+        const isIncoming = targetEntityId === localId;
+        mpCombatText.spawn(mesh, amount, type as any, isIncoming);
       }
     }
     if (targetEntityId === localId) {
@@ -1550,8 +1556,9 @@ async function startPlayground(): Promise<void> {
   document.body.appendChild(unitTooltip.element);
 
   engine.combatSystem.onCombatText = (target, amount, type) => {
-    combatText.spawn(target.mesh, amount, type);
-    if (target === engine.playerController) playerFrame.showCombatText(amount, type);
+    const isIncoming = target === engine.playerController;
+    combatText.spawn(target.mesh, amount, type, isIncoming);
+    if (isIncoming) playerFrame.showCombatText(amount, type);
     else if (target === engine.targetingSystem.currentTarget) targetFrame.showCombatText(amount, type);
   };
 

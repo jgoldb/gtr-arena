@@ -99,6 +99,11 @@ export class ClientEngine {
   // Sweep charge (local player only — client-side movement during charge)
   private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number } | null = null;
 
+  // Track tab visibility for fast-forwarding client-side timers on restore
+  private wasHidden = false;
+  private hiddenAt = 0;
+  private onVisibilityChange: (() => void) | null = null;
+
   /** Round-trip latency in ms — sourced from NetworkManager ping/pong. */
   get latency(): number {
     return this.network.rtt;
@@ -201,6 +206,15 @@ export class ClientEngine {
     this.snapshotBuffer.pushPositions(0, Date.now(), initialEntities.map(e => ({
       id: e.id, x: e.x, y: e.y, z: e.z, rotationY: e.rotationY, isMoving: e.isMoving,
     })));
+
+    // Track tab visibility so we can fast-forward client-side timers on restore
+    this.onVisibilityChange = () => {
+      if (document.hidden) {
+        this.wasHidden = true;
+        this.hiddenAt = performance.now();
+      }
+    };
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
 
   private createRemoteEntity(snap: EntitySnapshot): RemoteEntity {
@@ -286,6 +300,10 @@ export class ClientEngine {
     if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
+    }
+    if (this.onVisibilityChange) {
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+      this.onVisibilityChange = null;
     }
   }
 
@@ -380,6 +398,19 @@ export class ClientEngine {
       const pool = this.chemPools.get(cpSnap.id);
       if (pool && cpSnap.consumed && !pool.consumed) {
         pool.consumed = true;
+      }
+    }
+
+    // Sync arena countdown timer from server keyframe
+    if (msg.arenaTimeRemaining !== undefined && msg.arenaTimeRemaining > 0) {
+      const script = this.mapManager.getScript();
+      const openTime = (script && 'OPEN_TIME' in script) ? (script as any).OPEN_TIME as number : 30;
+      this.mapManager.setElapsed(openTime - msg.arenaTimeRemaining);
+    } else if (msg.arenaTimeRemaining === undefined || msg.arenaTimeRemaining <= 0) {
+      // No arenaTimeRemaining means doors are already open — ensure client matches
+      const script = this.mapManager.getScript();
+      if (script && 'opened' in script && !(script as any).opened) {
+        this.mapManager.forceOpenDoors();
       }
     }
   }
@@ -571,6 +602,14 @@ export class ClientEngine {
 
   handleCombatEvent(msg: S2C_CombatEvent): void {
     this.onCombatText?.(msg.sourceEntityId, msg.targetEntityId, msg.amount, msg.combatType);
+
+    // Auto-target attacker when player has no target
+    if (msg.targetEntityId === this.localEntityId && !this.selectedTargetId && msg.combatType !== 'heal') {
+      const attacker = this.remoteEntities.get(msg.sourceEntityId);
+      if (attacker) {
+        this.selectTarget(attacker.targetable);
+      }
+    }
   }
 
   handleAbilityEffect(msg: S2C_AbilityEffect): void {
@@ -787,9 +826,60 @@ export class ClientEngine {
     const dt = Math.min((now - this.lastFrameTime) / 1000, 0.1);
     this.lastFrameTime = now;
 
+    // When the tab was backgrounded, RAF was paused and dt was clamped to 0.1s.
+    // Fast-forward all client-side timers by the real elapsed gap so they don't
+    // appear frozen when the tab is restored.
+    if (this.wasHidden) {
+      this.wasHidden = false;
+      const gap = (now - this.hiddenAt) / 1000;
+      if (gap > 0.2) this.fastForwardTimers(gap);
+    }
+
     this.update(dt);
     this.renderer.renderer.render(this.scene, this.camera);
   };
+
+  /**
+   * Fast-forward client-side timers after the tab was backgrounded.
+   * The arena countdown is wall-clock-based (ArenaScript getter) so it self-
+   * corrects automatically — we only need to catch up cooldowns, buff
+   * remaining timers, gas cloud / chem pool visuals, and sweep charge.
+   */
+  private fastForwardTimers(gap: number): void {
+    // Cooldowns
+    for (const [id, cd] of this.cooldowns) {
+      cd.remaining = Math.max(0, cd.remaining - gap);
+      if (cd.remaining <= 0) this.cooldowns.delete(id);
+    }
+
+    // Buff remaining timers (local + remote)
+    for (const b of this.localBuffs) {
+      if (b.duration > 0) b.remaining = Math.max(0, b.remaining - gap);
+    }
+    for (const entity of this.remoteEntities.values()) {
+      for (const b of entity.buffs) {
+        if (b.duration > 0) b.remaining = Math.max(0, b.remaining - gap);
+      }
+    }
+
+    // Gas cloud visuals
+    for (const [id, cloud] of this.gasClouds) {
+      cloud.elapsed += gap;
+    }
+
+    // Chem pool visuals
+    for (const [id, pool] of this.chemPools) {
+      pool.elapsed += gap;
+      if (pool.consumed) pool.consumeElapsed += gap;
+    }
+
+    // Sweep charge — if we were mid-charge when backgrounded, it's certainly
+    // finished by now.  Clear it so the player isn't stuck in a charge state.
+    if (this.sweepCharge) {
+      this.sweepCharge = null;
+      this.playerController.charging = false;
+    }
+  }
 
   private update(dt: number): void {
     // God mode: +300% movement speed

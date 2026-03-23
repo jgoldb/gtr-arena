@@ -28,6 +28,7 @@ export class CombatSystem {
   onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: Targetable) => void;
   onFlinchDamage?: (target: Targetable) => void;
+  onHostileAction?: (attacker: Targetable, target: Targetable) => void;
   onEnterCombat?: (entity: Targetable) => void;
   onLeaveCombat?: (entity: Targetable) => void;
 
@@ -293,6 +294,7 @@ export class CombatSystem {
 
       // Combat entry rules (regardless of outcome)
       if (target.isHostileTo(attacker)) {
+        this.onHostileAction?.(attacker, target);
         this.enterCombat(attacker);
         this.enterCombat(target);
       } else if (target.inCombat) {
@@ -320,6 +322,8 @@ export class CombatSystem {
     if (attacker.dead || target.dead) return;
 
     const roll = Math.random();
+    this.onHostileAction?.(attacker, target);
+
     if (roll < CombatSystem.MISS_CHANCE) {
       this.onCombatText?.(target, 0, 'miss');
       this.enterCombat(attacker);
@@ -369,6 +373,7 @@ export class CombatSystem {
   applyChannelTickDamage(attacker: Targetable, target: Targetable, tickDamage: number, damageMultiplier = 1): void {
     if (attacker.dead || target.dead) return;
 
+    this.onHostileAction?.(attacker, target);
     const godMult = this.godModeEntities.has(attacker) ? CombatSystem.GOD_MODE_DAMAGE_MULT : 1;
     const adjustedTick = Math.round(tickDamage * damageMultiplier * godMult);
     const isCrit = Math.random() < attacker.critChance;
@@ -415,6 +420,7 @@ export class CombatSystem {
   applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {
     if (attacker.dead || target.dead) return;
 
+    this.onHostileAction?.(attacker, target);
     const outcome = this.rollOutcome(attacker, target);
 
     if (outcome === 'miss') {

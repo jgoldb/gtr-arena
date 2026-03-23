@@ -112,8 +112,18 @@ export class GameSession {
       this.matchStats.set(p.userId, { kills: 0, deaths: 0, damageDealt: 0, healingDone: 0 });
     }
 
-    // Wire engine callbacks
-    this.engine.onBroadcast = (msg) => this.broadcast(msg);
+    // Wire engine callbacks — inject arenaTimeRemaining into keyframe snapshots
+    this.engine.onBroadcast = (msg) => {
+      if (msg.type === 'game_state_snapshot' && this.arenaPreparationActive && this.arenaCountdownStartedAt > 0) {
+        const arenaOpenTime = this.mapInfo?.arenaOpenTime ?? 30;
+        const elapsedMs = Date.now() - this.arenaCountdownStartedAt;
+        const remainingSec = arenaOpenTime - elapsedMs / 1000;
+        if (remainingSec > 0) {
+          (msg as import('@gtr/shared').S2C_GameStateSnapshot).arenaTimeRemaining = remainingSec;
+        }
+      }
+      this.broadcast(msg);
+    };
     this.engine.onSendToPlayer = (entityId, msg) => this.sendToEntity(entityId, msg);
     this.engine.onGameOver = (winningTeam) => this.handleGameOver(winningTeam);
   }

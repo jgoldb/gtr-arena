@@ -214,6 +214,13 @@ export class Engine {
       }
     };
 
+    // Auto-target attacker when player has no target
+    this.combatSystem.onHostileAction = (attacker, target) => {
+      if (target === this.playerController && !this.targetingSystem.currentTarget) {
+        this.targetingSystem.currentTarget = attacker;
+      }
+    };
+
   }
 
   start(): void {
@@ -358,6 +365,7 @@ export class Engine {
       }
       // Enter combat for hostile channel targets
       if (target && target.isHostileTo(this.playerController)) {
+        this.combatSystem.onHostileAction?.(this.playerController, target);
         this.combatSystem.enterCombat(this.playerController);
         this.combatSystem.enterCombat(target);
         // Channel start can miss on hostile targets (entire channel fails)
@@ -626,6 +634,7 @@ export class Engine {
           if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
 
           if (target.isHostileTo(pool.owner)) {
+            this.combatSystem.onHostileAction?.(pool.owner, target);
             const poolGodImmune = this.godMode && target === this.playerController;
             const actualPoolDmg = poolGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, pool.initialDamage, pool.owner);
             target.hp = Math.max(0, target.hp - actualPoolDmg);
@@ -674,6 +683,7 @@ export class Engine {
       // Tick damage
       while (dot.elapsed >= dot.nextTickAt && dot.nextTickAt <= dot.totalDuration) {
         if (!dot.target.dead) {
+          this.combatSystem.onHostileAction?.(dot.owner, dot.target);
           const dotGodImmune = this.godMode && dot.target === this.playerController;
           const actualDotDmg = dotGodImmune ? 0 : this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
           dot.target.hp = Math.max(0, dot.target.hp - actualDotDmg);
@@ -745,6 +755,7 @@ export class Engine {
       while (cloud.elapsed >= cloud.nextTickAt && cloud.nextTickAt <= cloud.duration) {
         for (const target of cloud.affectedTargets) {
           if (target.dead) continue;
+          this.combatSystem.onHostileAction?.(cloud.owner, target);
           const cloudGodImmune = this.godMode && target === this.playerController;
           const actualCloudDmg = cloudGodImmune ? 0 : this.combatSystem.processDamageAbsorb(target, cloud.damagePerTick, cloud.owner);
           target.hp = Math.max(0, target.hp - actualCloudDmg);
