@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getCharacterStats, type CharacterId } from '@gtr/shared';
 import type { Ability } from '../../combat/Ability';
 
 export interface AnimationInput {
@@ -12,9 +13,9 @@ export interface AnimationInput {
 
 export abstract class CharacterModel {
   readonly group: THREE.Group;
-  abstract readonly id: string;
-  abstract readonly displayName: string;
-  abstract readonly abilities: readonly Ability[];
+  readonly id: CharacterId;
+  readonly displayName: string;
+  readonly abilities: readonly Ability[];
 
   // Skeleton bone groups (pivots for animation)
   protected bodyGroup = new THREE.Group();
@@ -32,17 +33,15 @@ export abstract class CharacterModel {
   protected smoothedTurnSpeed = 0;
   protected smoothedStrafeDir = 0;
 
-  // Base stats (defined by each character)
-  abstract readonly baseMaxHp: number;
-  abstract readonly baseMaxMana: number;
-
-  // Auto-attack stats (defined by each character)
-  abstract readonly autoAttackDamageMin: number;
-  abstract readonly autoAttackDamageMax: number;
-  abstract readonly autoAttackSpeed: number; // seconds between swings
-  abstract readonly autoAttackRange: number;
-  abstract readonly critChance: number;  // 0–1
-  abstract readonly dodgeChance: number; // 0–1
+  // Base stats (pulled from shared character definitions)
+  readonly baseMaxHp: number;
+  readonly baseMaxMana: number;
+  readonly autoAttackDamageMin: number;
+  readonly autoAttackDamageMax: number;
+  readonly autoAttackSpeed: number; // seconds between swings
+  readonly autoAttackRange: number;
+  readonly critChance: number;  // 0–1
+  readonly dodgeChance: number; // 0–1
 
   rollAutoAttackDamage(): number {
     return this.autoAttackDamageMin + Math.floor(
@@ -86,7 +85,20 @@ export abstract class CharacterModel {
   private static readonly DEATH_DURATION = 1.5;
   protected deathTime = -1; // -1 = alive, >= 0 = seconds since death
 
-  constructor() {
+  constructor(characterId: CharacterId) {
+    const stats = getCharacterStats(characterId);
+    this.id = stats.id;
+    this.displayName = stats.displayName;
+    this.abilities = stats.abilities;
+    this.baseMaxHp = stats.baseMaxHp;
+    this.baseMaxMana = stats.baseMaxMana;
+    this.autoAttackDamageMin = stats.autoAttackDamageMin;
+    this.autoAttackDamageMax = stats.autoAttackDamageMax;
+    this.autoAttackSpeed = stats.autoAttackSpeed;
+    this.autoAttackRange = stats.autoAttackRange;
+    this.critChance = stats.critChance;
+    this.dodgeChance = stats.dodgeChance;
+
     this.group = new THREE.Group();
     this.initSkeleton();
     this.buildModel();

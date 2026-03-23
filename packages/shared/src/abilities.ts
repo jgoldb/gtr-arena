@@ -323,7 +323,7 @@ export const Chudmax: Ability = {
   name: 'Chudmax',
   icon: '🧬',
   range: yardsToUnits(15),
-  manaCost: 15,
+  manaCost: 150,
   cooldown: 1.5,
   castTime: 3,
   damage: 80,

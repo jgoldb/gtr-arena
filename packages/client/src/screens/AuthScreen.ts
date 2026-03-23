@@ -269,7 +269,17 @@ export class AuthScreen {
     `;
     // Main bubble
     const bubble = document.createElement('div');
-    bubble.textContent = "I'm fucked!";
+    const astroThoughts = [
+      "I'm fucked!",
+      "I loved her...",
+      "Where's Brad?",
+      "I'll never get glad :(",
+      "Yeah I'm huge.",
+      "Joel?",
+      "Can't believe I'm actually 300 lbs...",
+      "Am I gay?",
+    ];
+    bubble.textContent = astroThoughts[Math.floor(Math.random() * astroThoughts.length)];
     bubble.style.cssText = `
       background: #fff; color: #111; font-family: 'Comic Sans MS', 'Segoe UI', sans-serif;
       font-size: 15px; font-weight: 700; padding: 8px 14px; border-radius: 18px;
@@ -345,7 +355,7 @@ export class AuthScreen {
         speed: 0.0004 + Math.random() * 0.0003,
         rotation: Math.random() * Math.PI * 2,
         rotSpeed: (Math.random() - 0.5) * 0.03,
-        size: 180 + Math.random() * 50,
+        size: 250 + Math.random() * 60,
       };
     };
 
@@ -392,6 +402,7 @@ export class AuthScreen {
         if (!astronaut && now >= astroSpawnTime) {
           astronaut = spawnAstronaut();
           astroEl.style.display = 'block';
+          bubble.textContent = astroThoughts[Math.floor(Math.random() * astroThoughts.length)];
           bubbleVisible = false;
           bubbleDone = false;
           bubbleShowTime = 0;
@@ -444,8 +455,12 @@ export class AuthScreen {
               const anchorY = pos.y - Math.cos(r) * (drawH / 2);
               bubbleWrap.style.left = `${anchorX}px`;
               bubbleWrap.style.top = `${anchorY}px`;
-              // transform-origin is 0% 100% (bottom-left), translate to center bubble horizontally
-              bubbleWrap.style.transform = `translate(-50%, -100%) rotate(${r}rad) scale(${bubbleScale})`;
+              // Dampen rotation so bubble leans with astronaut but stays readable
+              let bubbleR = r % (Math.PI * 2);
+              if (bubbleR > Math.PI) bubbleR -= Math.PI * 2;
+              if (bubbleR < -Math.PI) bubbleR += Math.PI * 2;
+              bubbleR *= 0.25;
+              bubbleWrap.style.transform = `translate(-50%, -100%) rotate(${bubbleR}rad) scale(${bubbleScale})`;
             }
           }
         }

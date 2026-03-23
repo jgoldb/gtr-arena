@@ -34,8 +34,8 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
   'janitor': {
     id: 'janitor',
     displayName: 'The Janitor',
-    baseMaxHp: 475,
-    baseMaxMana: 48,
+    baseMaxHp: 3008,
+    baseMaxMana: 1231,
     autoAttackDamageMin: 11,
     autoAttackDamageMax: 19,
     autoAttackSpeed: 2.5,
@@ -47,8 +47,8 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
   'dr-retardo': {
     id: 'dr-retardo',
     displayName: 'Dr. Retardo',
-    baseMaxHp: 369,
-    baseMaxMana: 125,
+    baseMaxHp: 2449,
+    baseMaxMana: 3112,
     autoAttackDamageMin: 3,
     autoAttackDamageMax: 6,
     autoAttackSpeed: 1.2,
@@ -62,3 +62,11 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
 export function getCharacterStats(id: CharacterId): CharacterStats {
   return CHARACTERS[id];
 }
+
+// ── Regen constants (shared by client RegenSystem & ServerRegenSystem) ──
+
+export const REGEN_TICK_INTERVAL = 2.5;       // seconds between regen ticks
+export const HP_REGEN_AMOUNT = 24;              // hp restored per tick
+export const MANA_REGEN_AMOUNT = 32;            // mana restored per tick
+export const MANA_REGEN_DELAY = 5;             // seconds after last mana use before regen resumes
+export const RESTING_MANA_MULTIPLIER = 5;      // mana regen multiplier while resting (5x)
