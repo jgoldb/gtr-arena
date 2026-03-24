@@ -1,6 +1,6 @@
 import type { NetworkManager } from '../network/NetworkManager';
 import type { AdminUserRecord } from '@gtr/shared';
-import { xpToLevel } from '@gtr/shared';
+import { xpToLevel, xpForLevel } from '@gtr/shared';
 
 export class AdminScreen {
   readonly element: HTMLDivElement;
@@ -151,7 +151,7 @@ export class AdminScreen {
       resetPwBtn.style.fontSize = '12px';
       resetPwBtn.style.marginRight = '6px';
       resetPwBtn.addEventListener('click', () => {
-        this.network.send({ type: 'admin_reset_password', targetUserId: user.id });
+        this.showResetPasswordConfirm(user);
       });
       actionTd.appendChild(resetPwBtn);
 
@@ -161,6 +161,13 @@ export class AdminScreen {
       resetStatsBtn.style.marginRight = '6px';
       resetStatsBtn.addEventListener('click', () => this.showResetStatsConfirm(user));
       actionTd.appendChild(resetStatsBtn);
+
+      const xpBtn = this.makeButton('XP', 'rgba(80, 60, 120, 0.8)');
+      xpBtn.style.padding = '4px 12px';
+      xpBtn.style.fontSize = '12px';
+      xpBtn.style.marginRight = '6px';
+      xpBtn.addEventListener('click', () => this.showSetXpDialog(user));
+      actionTd.appendChild(xpBtn);
 
       const delBtn = this.makeButton('Delete', 'rgba(140, 30, 30, 0.8)');
       delBtn.style.padding = '4px 12px';
@@ -295,6 +302,160 @@ export class AdminScreen {
     });
 
     this.element.appendChild(this.overlay);
+  }
+
+  private showResetPasswordConfirm(user: AdminUserRecord): void {
+    if (this.overlay) this.overlay.remove();
+
+    this.overlay = document.createElement('div');
+    this.overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.7);
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(20, 20, 35, 0.98), rgba(10, 10, 20, 0.98));
+      border: 1px solid rgba(60, 130, 200, 0.4);
+      border-radius: 8px; padding: 30px 40px; max-width: 400px;
+    `;
+
+    const title = document.createElement('div');
+    title.textContent = 'Reset Password';
+    title.style.cssText = 'color: #6699cc; font-size: 18px; font-weight: bold; margin-bottom: 12px;';
+
+    const msg = document.createElement('div');
+    msg.textContent = `Are you sure you want to reset the password for "${user.username}"? A new random password will be generated.`;
+    msg.style.cssText = 'color: #aaa; font-size: 14px; line-height: 1.5; margin-bottom: 24px;';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display: flex; gap: 12px; justify-content: flex-end;';
+
+    const cancelBtn = this.makeButton('Cancel', 'rgba(40, 40, 60, 0.8)');
+    cancelBtn.addEventListener('click', () => {
+      this.overlay?.remove();
+      this.overlay = null;
+    });
+
+    const confirmBtn = this.makeButton('Reset Password', 'rgba(40, 70, 120, 0.9)');
+    confirmBtn.addEventListener('click', () => {
+      this.network.send({ type: 'admin_reset_password', targetUserId: user.id });
+      this.overlay?.remove();
+      this.overlay = null;
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(confirmBtn);
+
+    dialog.appendChild(title);
+    dialog.appendChild(msg);
+    dialog.appendChild(btnRow);
+    this.overlay.appendChild(dialog);
+
+    this.overlay.addEventListener('click', (e) => {
+      if (e.target === this.overlay) {
+        this.overlay?.remove();
+        this.overlay = null;
+      }
+    });
+
+    this.element.appendChild(this.overlay);
+  }
+
+  private showSetXpDialog(user: AdminUserRecord): void {
+    if (this.overlay) this.overlay.remove();
+
+    this.overlay = document.createElement('div');
+    this.overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.7);
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(20, 20, 35, 0.98), rgba(10, 10, 20, 0.98));
+      border: 1px solid rgba(140, 100, 200, 0.4);
+      border-radius: 8px; padding: 30px 40px; max-width: 400px;
+    `;
+
+    const title = document.createElement('div');
+    title.textContent = `Set XP — ${user.username}`;
+    title.style.cssText = 'color: #aa88dd; font-size: 18px; font-weight: bold; margin-bottom: 6px;';
+
+    const currentInfo = document.createElement('div');
+    currentInfo.textContent = `Current: ${user.xp.toLocaleString()} XP (Level ${xpToLevel(user.xp)})`;
+    currentInfo.style.cssText = 'color: #888; font-size: 13px; margin-bottom: 16px;';
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '0';
+    input.step = '1';
+    input.value = String(user.xp);
+    input.style.cssText = `
+      width: 100%; box-sizing: border-box; padding: 10px 14px;
+      background: rgba(0, 0, 0, 0.4); color: #ddd; font-size: 16px;
+      border: 1px solid rgba(140, 100, 200, 0.3); border-radius: 4px;
+      outline: none; font-family: monospace;
+    `;
+
+    const levelPreview = document.createElement('div');
+    levelPreview.style.cssText = 'color: #aa88dd; font-size: 14px; margin-top: 10px; margin-bottom: 20px;';
+
+    const updatePreview = () => {
+      const val = parseInt(input.value);
+      if (isNaN(val) || val < 0) {
+        levelPreview.textContent = 'Enter a valid positive number';
+        levelPreview.style.color = '#cc4444';
+      } else {
+        const lvl = xpToLevel(val);
+        const nextLvlXp = xpForLevel(lvl + 1);
+        levelPreview.textContent = `= Level ${lvl}  (next level at ${nextLvlXp.toLocaleString()} XP)`;
+        levelPreview.style.color = '#aa88dd';
+      }
+    };
+    updatePreview();
+    input.addEventListener('input', updatePreview);
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display: flex; gap: 12px; justify-content: flex-end;';
+
+    const cancelBtn = this.makeButton('Cancel', 'rgba(40, 40, 60, 0.8)');
+    cancelBtn.addEventListener('click', () => {
+      this.overlay?.remove();
+      this.overlay = null;
+    });
+
+    const confirmBtn = this.makeButton('Set XP', 'rgba(100, 60, 160, 0.9)');
+    confirmBtn.addEventListener('click', () => {
+      const val = parseInt(input.value);
+      if (isNaN(val) || val < 0) return;
+      this.network.send({ type: 'admin_set_xp', targetUserId: user.id, xp: val });
+      this.overlay?.remove();
+      this.overlay = null;
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(confirmBtn);
+
+    dialog.appendChild(title);
+    dialog.appendChild(currentInfo);
+    dialog.appendChild(input);
+    dialog.appendChild(levelPreview);
+    dialog.appendChild(btnRow);
+    this.overlay.appendChild(dialog);
+
+    this.overlay.addEventListener('click', (e) => {
+      if (e.target === this.overlay) {
+        this.overlay?.remove();
+        this.overlay = null;
+      }
+    });
+
+    this.element.appendChild(this.overlay);
+    input.focus();
+    input.select();
   }
 
   private showBanDialog(user: AdminUserRecord): void {

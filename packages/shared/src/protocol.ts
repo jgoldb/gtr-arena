@@ -409,6 +409,12 @@ export interface C2S_AdminResetStats {
   targetUserId: number;
 }
 
+export interface C2S_AdminSetXp {
+  type: 'admin_set_xp';
+  targetUserId: number;
+  xp: number;
+}
+
 export interface C2S_ChangePassword {
   type: 'change_password';
   currentPassword: string;
@@ -539,6 +545,7 @@ export interface S2C_GameStateSnapshot {
 export interface S2C_XpUpdate {
   type: 'xp_update';
   xp: number;
+  adminSet?: boolean;
 }
 
 export interface S2C_GodModeUpdate {
@@ -582,6 +589,7 @@ export type ClientMessage =
   | C2S_AdminUnbanUser
   | C2S_AdminResetPassword
   | C2S_AdminResetStats
+  | C2S_AdminSetXp
   | C2S_ChangePassword
   | C2S_Ping
   | C2S_DebugAddXp;

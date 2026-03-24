@@ -360,9 +360,219 @@ export class LobbyScreen {
     this.xpText.textContent = `${progress.current} / ${progress.needed} XP`;
   }
 
-  updateXp(xp: number): void {
+  updateXp(xp: number, oldXp?: number): void {
+    const oldLevel = oldXp !== undefined ? xpToLevel(oldXp) : xpToLevel(this.localXp);
     this.localXp = xp;
-    this.renderLevelDisplay();
+    const newLevel = xpToLevel(xp);
+
+    if (oldXp !== undefined && newLevel > oldLevel) {
+      this.playLevelUpAnimation(oldLevel, newLevel);
+    } else {
+      this.renderLevelDisplay();
+    }
+  }
+
+  private playLevelUpAnimation(oldLevel: number, newLevel: number): void {
+    // Re-render badge showing the OLD level so we can animate the transition
+    this.levelBadgeContainer.innerHTML = '';
+    this.levelBadgeContainer.appendChild(this.createLevelBadge(oldLevel, 52));
+
+    // Inject level-up keyframes once
+    if (!this.element.querySelector('#lby-levelup-style')) {
+      const style = document.createElement('style');
+      style.id = 'lby-levelup-style';
+      style.textContent = `
+        @keyframes lby-levelup-glow {
+          0% { box-shadow: 0 0 8px rgba(200,170,60,0.4); }
+          20% { box-shadow: 0 0 30px rgba(255,215,0,0.9), 0 0 60px rgba(255,200,50,0.5), 0 0 90px rgba(255,180,0,0.3); }
+          50% { box-shadow: 0 0 40px rgba(255,225,50,1), 0 0 80px rgba(255,200,50,0.6), 0 0 120px rgba(255,180,0,0.35); }
+          80% { box-shadow: 0 0 20px rgba(255,215,0,0.7), 0 0 50px rgba(255,200,50,0.3); }
+          100% { box-shadow: 0 0 8px rgba(200,170,60,0.4); }
+        }
+        @keyframes lby-levelup-spin {
+          0% { transform: rotate(0deg) scale(1); }
+          30% { transform: rotate(10deg) scale(1.15); }
+          60% { transform: rotate(-5deg) scale(1.2); }
+          100% { transform: rotate(0deg) scale(1); }
+        }
+        @keyframes lby-levelup-number-out {
+          0% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(0.3); filter: blur(4px); }
+        }
+        @keyframes lby-levelup-number-in {
+          0% { opacity: 0; transform: scale(2.5); filter: blur(6px); }
+          50% { opacity: 1; transform: scale(1.1); filter: blur(0); }
+          70% { transform: scale(0.95); }
+          100% { opacity: 1; transform: scale(1); filter: blur(0); }
+        }
+        @keyframes lby-levelup-burst {
+          0% { transform: scale(0); opacity: 1; }
+          50% { transform: scale(2.5); opacity: 0.6; }
+          100% { transform: scale(4); opacity: 0; }
+        }
+        @keyframes lby-levelup-sparkle {
+          0% { opacity: 0; transform: translate(0, 0) scale(0); }
+          20% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: translate(var(--sx), var(--sy)) scale(0); }
+        }
+      `;
+      this.element.appendChild(style);
+    }
+
+    const container = this.levelBadgeContainer;
+    const badge = container.querySelector('div') as HTMLDivElement;
+    if (!badge) { this.renderLevelDisplay(); return; }
+
+    // Wrap badge for animation
+    container.style.position = 'relative';
+
+    // Gold burst ring behind the badge
+    const burst = document.createElement('div');
+    burst.style.cssText = `
+      position: absolute; top: 50%; left: 50%; width: 52px; height: 52px;
+      margin-top: -26px; margin-left: -26px;
+      border-radius: 50%; pointer-events: none;
+      background: radial-gradient(circle, rgba(255,215,0,0.6), rgba(255,180,0,0.2), transparent 70%);
+      animation: lby-levelup-burst 1.2s ease-out forwards;
+    `;
+    container.appendChild(burst);
+
+    // Sparkle particles
+    for (let i = 0; i < 8; i++) {
+      const angle = (Math.PI * 2 * i) / 8;
+      const dist = 30 + Math.random() * 20;
+      const sparkle = document.createElement('div');
+      sparkle.style.cssText = `
+        position: absolute; top: 50%; left: 50%; width: 4px; height: 4px;
+        margin-top: -2px; margin-left: -2px;
+        border-radius: 50%; pointer-events: none;
+        background: #ffd700; box-shadow: 0 0 6px #ffd700;
+        --sx: ${Math.cos(angle) * dist}px; --sy: ${Math.sin(angle) * dist}px;
+        animation: lby-levelup-sparkle ${0.8 + Math.random() * 0.6}s ${0.1 + Math.random() * 0.3}s ease-out forwards;
+        opacity: 0;
+      `;
+      container.appendChild(sparkle);
+    }
+
+    // Animate the badge itself: glow + subtle spin
+    badge.style.animation = 'lby-levelup-glow 3s ease-in-out, lby-levelup-spin 1.5s ease-in-out';
+    badge.style.borderRadius = '50%';
+
+    // Find the level number element inside the badge (last child div with the level text)
+    const levelNumEl = badge.querySelector('div:last-child') as HTMLDivElement;
+    if (levelNumEl) {
+      // Fade out old number
+      levelNumEl.style.animation = 'lby-levelup-number-out 0.8s ease-in forwards';
+
+      // After fade-out, swap to new number and burst it in
+      setTimeout(() => {
+        levelNumEl.textContent = String(newLevel);
+        const fontSize = newLevel >= 100 ? 52 * 0.32 : newLevel >= 10 ? 52 * 0.4 : 52 * 0.46;
+        levelNumEl.style.fontSize = `${fontSize}px`;
+        levelNumEl.style.animation = 'lby-levelup-number-in 1s ease-out forwards';
+      }, 800);
+    }
+
+    // Update XP bar and text immediately
+    const progress = xpProgress(this.localXp);
+    const pct = progress.needed > 0 ? (progress.current / progress.needed) * 100 : 0;
+    this.xpBarFill.style.width = `${pct}%`;
+    this.xpText.textContent = `${progress.current} / ${progress.needed} XP`;
+
+    // After animation completes (~3s), clean up and show congratulations
+    setTimeout(() => {
+      // Clean up particles and burst
+      burst.remove();
+      container.querySelectorAll('[style*="lby-levelup-sparkle"]').forEach(el => el.remove());
+
+      // Reset badge animation
+      if (badge) badge.style.animation = '';
+
+      // Re-render cleanly
+      this.renderLevelDisplay();
+
+      // Show the congrats dialog
+      this.showLevelUpDialog(newLevel);
+    }, 3000);
+  }
+
+  private showLevelUpDialog(level: number): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      animation: lby-fade-in 0.15s ease both;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(14,16,32,0.98), rgba(6,8,18,0.99));
+      border: 1px solid rgba(200,170,60,0.3);
+      border-radius: 12px; padding: 0; min-width: 320px; overflow: hidden; text-align: center;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 40px rgba(200,170,60,0.1);
+      animation: lby-fade-in 0.25s ease both;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    `;
+
+    // Header with golden gradient
+    const header = document.createElement('div');
+    header.style.cssText = `
+      background: linear-gradient(135deg, rgba(80,60,10,0.6), rgba(60,40,5,0.4));
+      padding: 28px 32px 16px; border-bottom: 1px solid rgba(200,170,60,0.15);
+      position: relative; overflow: hidden;
+    `;
+    // Decorative glow
+    const glow = document.createElement('div');
+    glow.style.cssText = `
+      position: absolute; top: -30px; left: 50%; transform: translateX(-50%);
+      width: 200px; height: 100px;
+      background: radial-gradient(circle, rgba(255,215,0,0.15), transparent 70%);
+      pointer-events: none;
+    `;
+    header.appendChild(glow);
+
+    const titleEl = document.createElement('div');
+    titleEl.textContent = 'LEVEL UP';
+    titleEl.style.cssText = `
+      font-size: 12px; font-weight: 700; letter-spacing: 3px;
+      color: rgba(200,180,120,0.7); position: relative;
+    `;
+    header.appendChild(titleEl);
+
+    // Body
+    const body = document.createElement('div');
+    body.style.cssText = 'padding: 28px 32px 32px; display: flex; flex-direction: column; align-items: center; gap: 16px;';
+
+    // Large level badge
+    const badge = this.createLevelBadge(level, 80);
+    body.appendChild(badge);
+
+    const congratsEl = document.createElement('div');
+    congratsEl.textContent = `Congratulations!`;
+    congratsEl.style.cssText = `
+      font-size: 20px; font-weight: 700;
+      color: #e8d48c;
+      text-shadow: 0 0 12px rgba(200,170,60,0.3);
+    `;
+    body.appendChild(congratsEl);
+
+    const msgEl = document.createElement('div');
+    msgEl.textContent = `You have reached level ${level}.`;
+    msgEl.style.cssText = 'font-size: 14px; color: rgba(200,205,220,0.7); line-height: 1.5;';
+    body.appendChild(msgEl);
+
+    // Close button
+    const closeBtn = this.makeButton('Continue', 'linear-gradient(135deg, #5a4a1a, #3a3210)', 'linear-gradient(135deg, #6a5a2a, #4a4220)');
+    closeBtn.style.cssText += '; margin-top: 8px; border-color: rgba(200,170,60,0.25); color: #e8d48c; padding: 10px 32px;';
+    closeBtn.addEventListener('click', () => overlay.remove());
+    body.appendChild(closeBtn);
+
+    dialog.append(header, body);
+    overlay.appendChild(dialog);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    this.element.appendChild(overlay);
   }
 
   // ── Public API ────────────────────────────────────────────────────

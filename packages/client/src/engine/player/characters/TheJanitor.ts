@@ -434,6 +434,7 @@ export class TheJanitor extends CharacterModel {
     if (abilityId === 'big-boot') return 0.55;
     if (abilityId === 'fart-bomb') return 0.6;
     if (abilityId === 'sweep') return 1.0;
+    if (abilityId === 'jimmy-legs') return 0.7;
     return 0.6; // bucket-splash default
   }
 
@@ -450,6 +451,8 @@ export class TheJanitor extends CharacterModel {
       this.animateCrashOut(t);
     } else if (abilityId === 'sweep') {
       this.animateSweep(t);
+    } else if (abilityId === 'jimmy-legs') {
+      this.animateJimmyLegs(t);
     }
   }
 
@@ -728,6 +731,74 @@ export class TheJanitor extends CharacterModel {
     // Blend mop rotation from default pose to horizontal two-handed grip
     this.mopGroup.rotation.x = baseRotX + (horizRotX - baseRotX) * mopBlend;
     this.mopGroup.rotation.z = horizRotZ * mopBlend;
+  }
+
+  private animateJimmyLegs(t: number): void {
+    const baseRotX = TheJanitor.MOP_BASE_ROT_X;
+    // Target mop angle: more vertical so the head reaches down toward feet
+    const sweepRotX = 0.3;
+
+    let leftArmX: number;
+    let rightArmX: number;
+    let leftArmZ: number;
+    let rightArmZ: number;
+    let bodyRotX: number;
+    let bodyRotY: number;
+    let bodyY: number;
+    let mopBlend: number; // 0 = default, 1 = sweep position
+
+    if (t < 0.15) {
+      // Grip: hide bucket, left arm crosses to mop, raise arms up
+      const p = t / 0.15;
+      const ease = p * p;
+      rightArmX = -1.8 * ease;
+      leftArmX = -1.0 * ease;
+      leftArmZ = 0.4 * ease;
+      rightArmZ = -0.1 * ease;
+      bodyRotX = -0.1 * ease;
+      bodyRotY = -0.08 * ease;
+      bodyY = 0.02 * ease;
+      mopBlend = ease;
+      this.bucketGroup.visible = ease < 0.5;
+    } else if (t < 0.45) {
+      // Sweep down: fast downward arc, mop sweeps at foot level
+      const p = (t - 0.15) / 0.30;
+      const ease = 1 - Math.pow(1 - p, 3);
+      rightArmX = -1.8 + 3.8 * ease;
+      leftArmX = -1.0 + 2.8 * ease;
+      leftArmZ = 0.4 - 0.15 * ease;
+      rightArmZ = -0.1 + 0.1 * ease;
+      bodyRotX = -0.1 + 0.4 * ease;
+      bodyRotY = -0.08 + 0.16 * ease;
+      bodyY = 0.02 - 0.08 * ease;
+      mopBlend = 1;
+      this.bucketGroup.visible = false;
+    } else {
+      // Recovery: return to normal, bucket reappears
+      const p = (t - 0.45) / 0.55;
+      const ease = p * p * (3 - 2 * p);
+      rightArmX = 2.0 * (1 - ease);
+      leftArmX = 1.8 * (1 - ease);
+      leftArmZ = 0.25 * (1 - ease);
+      rightArmZ = 0;
+      bodyRotX = 0.3 * (1 - ease);
+      bodyRotY = 0.08 * (1 - ease);
+      bodyY = -0.06 * (1 - ease);
+      mopBlend = 1 - ease;
+      this.bucketGroup.visible = ease > 0.5;
+    }
+
+    this.leftArmGroup.rotation.x += leftArmX;
+    this.rightArmGroup.rotation.x += rightArmX;
+    this.leftArmGroup.rotation.z += leftArmZ;
+    this.rightArmGroup.rotation.z += rightArmZ;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.bodyGroup.rotation.y += bodyRotY;
+    this.bodyGroup.position.y += bodyY;
+
+    // Blend mop from default angle to sweep angle (more vertical for extended reach)
+    this.mopGroup.rotation.x = baseRotX + (sweepRotX - baseRotX) * mopBlend;
+    this.mopGroup.rotation.z = 0;
   }
 
   protected override animateCombatStance(weight: number): void {

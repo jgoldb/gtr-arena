@@ -20,7 +20,7 @@ import { ArenaFrames } from './ui/ArenaFrames';
 import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
-import { getCharacterStats } from '@gtr/shared';
+import { getCharacterStats, xpToLevel } from '@gtr/shared';
 import type { Ability } from './engine/combat/Ability';
 import type { Targetable } from './engine/types';
 
@@ -46,6 +46,7 @@ let network: NetworkManager | null = null;
 let localUserId = '';
 let isAdmin = false;
 let localXp = 0;
+let pendingLevelUpFrom: number | null = null; // old XP before a level-up that happened while lobby was not visible
 let awaitingReconnectResult = false;
 
 // Active screens / engines
@@ -298,6 +299,12 @@ function showLobby(): void {
   lobbyScreen.onAdmin = () => showAdmin();
   lobbyScreen.onMenu = () => lobbyEscapeMenu?.open();
   document.body.appendChild(lobbyScreen.element);
+
+  // Trigger pending level-up animation if one occurred while lobby was hidden
+  if (pendingLevelUpFrom !== null) {
+    lobbyScreen.updateXp(localXp, pendingLevelUpFrom);
+    pendingLevelUpFrom = null;
+  }
 
   // Lobby escape menu
   const lobbyMenuButtons: EscapeMenuButton[] = [];
@@ -1051,10 +1058,20 @@ function handleServerMessage(msg: ServerMessage): void {
       lobbyScreen?.showLeaderboard(msg.entries);
       break;
 
-    case 'xp_update':
+    case 'xp_update': {
+      const oldXp = localXp;
       localXp = msg.xp;
-      lobbyScreen?.updateXp(msg.xp);
+      if (msg.adminSet) {
+        // Admin-set XP: just update display, no animation or congrats
+        if (lobbyScreen) lobbyScreen.updateXp(msg.xp);
+      } else if (lobbyScreen) {
+        lobbyScreen.updateXp(msg.xp, oldXp);
+      } else if (xpToLevel(msg.xp) > xpToLevel(oldXp)) {
+        // Lobby not visible yet (e.g. game over screen) — remember for when it opens
+        pendingLevelUpFrom = oldXp;
+      }
       break;
+    }
 
     case 'game_lobby_state':
       if (currentState !== 'game-lobby') showGameLobby();

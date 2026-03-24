@@ -202,6 +202,9 @@ export class LobbyManager {
       case 'admin_reset_stats':
         this.handleAdminResetStats(userId, msg.targetUserId);
         break;
+      case 'admin_set_xp':
+        this.handleAdminSetXp(userId, msg.targetUserId, msg.xp);
+        break;
       case 'change_password':
         this.handleChangePassword(userId, msg.currentPassword, msg.newPassword);
         break;
@@ -712,7 +715,73 @@ export class LobbyManager {
       if (targetSocketId) {
         const targetUser = this.users.get(targetSocketId);
         if (targetUser) {
-          this.send(targetUser.socket, { type: 'xp_update', xp: 0 });
+          this.send(targetUser.socket, { type: 'xp_update', xp: 0, adminSet: true });
+        }
+      }
+
+      // Broadcast updated profile to all lobby users so open inspect dialogs refresh
+      const rows = this.db.getAllUsersWithStats();
+      const row = rows.find(r => r.id === targetUserId);
+      if (row) {
+        const broadcastCharStats = this.db.getUserCharacterStats(targetUserId);
+        const profileMsg: S2C_UserProfile = {
+          type: 'user_profile',
+          broadcast: true,
+          profile: {
+            username: LobbyManager.gmTag(row.username, row.is_admin === 1),
+            xp: row.xp,
+            gamesPlayed: row.games_played,
+            wins: row.wins,
+            losses: row.losses,
+            createdAt: row.created_at,
+            lastPlayed: row.last_played,
+            characterStats: broadcastCharStats.map(c => ({
+              characterId: c.character_id,
+              gamesPlayed: c.games_played,
+              wins: c.wins,
+              losses: c.losses,
+            })),
+          },
+        };
+        for (const u of this.users.values()) {
+          if (!u.gameSessionId) {
+            this.send(u.socket, profileMsg);
+          }
+        }
+      }
+
+      this.handleAdminGetUsers(userId);
+    }
+  }
+
+  private handleAdminSetXp(userId: string, targetUserId: number, xp: number): void {
+    const user = this.users.get(userId);
+    if (!user || !this.auth.getIsAdmin(userId)) {
+      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
+      return;
+    }
+
+    if (!Number.isFinite(xp) || xp < 0) {
+      this.send(user.socket, { type: 'admin_result', action: 'set_xp', success: false, error: 'Invalid XP value' });
+      return;
+    }
+
+    const success = this.db.setXp(targetUserId, xp);
+    const result: S2C_AdminResult = {
+      type: 'admin_result',
+      action: 'set_xp',
+      success,
+      error: success ? undefined : 'User not found',
+    };
+    this.send(user.socket, result);
+
+    if (success) {
+      // Notify the target user if they're online so their lobby XP/level updates in real time
+      const targetSocketId = this.auth.getUserIdByDbId(targetUserId);
+      if (targetSocketId) {
+        const targetUser = this.users.get(targetSocketId);
+        if (targetUser) {
+          this.send(targetUser.socket, { type: 'xp_update', xp, adminSet: true });
         }
       }
 

@@ -180,6 +180,13 @@ export class GtrDatabase {
     return this.getUserXp(userId);
   }
 
+  setXp(userId: number, xp: number): boolean {
+    const row = this.db.prepare('SELECT id FROM users WHERE id = ?').get(userId) as { id: number } | undefined;
+    if (!row) return false;
+    this.db.prepare('UPDATE users SET xp = ? WHERE id = ?').run(Math.max(0, xp), userId);
+    return true;
+  }
+
   getAllUsersWithStats(): { id: number; username: string; is_admin: number; created_at: string; xp: number; games_played: number; wins: number; losses: number; banned_until: string | null; last_played: string | null }[] {
     return this.db.prepare(`
       SELECT u.id, u.username, u.is_admin, u.created_at, u.banned_until, u.last_played,
