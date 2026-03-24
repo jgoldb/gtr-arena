@@ -1,6 +1,6 @@
 // ── Distance conversion ─────────────────────────────────────────────────
 // 1 yard = 0.6 world units.
-// Melee range (5 yd) = 3 world units, matching existing auto-attack ranges.
+// Melee range (3 yd) = 1.8 world units, matching existing auto-attack ranges.
 export const YARDS_TO_UNITS = 0.6;
 
 export function yardsToUnits(yards: number): number {
@@ -307,7 +307,7 @@ export const BigBoot: Ability = {
   id: 'big-boot',
   name: 'Big Boot',
   icon: '🥾',
-  range: yardsToUnits(5),
+  range: yardsToUnits(3),
   manaCost: 180,
   cooldown: 18,
   damage: 50,
@@ -461,7 +461,7 @@ export const JimmyLegs: Ability = {
   id: 'jimmy-legs',
   name: 'Jimmy Legs',
   icon: '🦵',
-  range: yardsToUnits(5),
+  range: yardsToUnits(3),
   manaCost: 100,
   cooldown: 1.5,
   damage: 49,
@@ -475,7 +475,7 @@ export const JanitorsHelper: Ability = {
   id: 'janitors-helper',
   name: "Janitor's Helper",
   icon: '😴',
-  range: yardsToUnits(5),
+  range: yardsToUnits(3),
   manaCost: 175,
   cooldown: 30,
   castTime: 0.5,
