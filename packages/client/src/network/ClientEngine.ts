@@ -319,10 +319,9 @@ export class ClientEngine {
 
   /** Handle delta updates (every tick) — positions only when changed, state/buffs only when changed. */
   handleGameStateUpdate(msg: S2C_GameStateUpdate): void {
-    // Feed positions into the snapshot buffer for smooth interpolation
-    if (msg.positions.length > 0) {
-      this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.positions);
-    }
+    // Always feed into the snapshot buffer — even when no positions changed,
+    // the buffer needs continuous timestamps for adaptive delay & interpolation.
+    this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.positions);
 
     // Apply state deltas (only present for entities whose state changed)
     if (msg.states) {
@@ -468,6 +467,7 @@ export class ClientEngine {
     });
 
     this.remoteEntities.delete(entityId);
+    this.snapshotBuffer.removeEntity(entityId);
   }
 
   /** Apply state deltas to local player and remote entities. */
@@ -1141,7 +1141,10 @@ export class ClientEngine {
         if (!this.targetingSystem.groundTargetBlocked) {
           this.onGroundTargetConfirmed?.();
         }
-      } else {
+      } else if (!this.input.isMouseButtonDown('right')) {
+        // Only process target selection on normal left clicks — not while
+        // right-click drag (pointer lock) is active, to avoid accidentally
+        // clearing the current target.
         this.targetingSystem.processClick(leftClick.x, leftClick.y);
         const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
         if (newTargetId !== this.selectedTargetId) {

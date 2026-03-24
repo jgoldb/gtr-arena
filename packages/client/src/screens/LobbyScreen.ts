@@ -462,21 +462,32 @@ export class LobbyScreen {
       info.appendChild(hostLine);
       info.appendChild(metaLine);
 
-      const isFull = game.playerCount >= game.maxPlayers;
-      const joinBtn = this.makeButton('Join', isFull ? '#3a3a4a' : '#2a6e3c', isFull ? '#3a3a4a' : '#348a4c');
-      if (isFull) {
-        joinBtn.textContent = 'Full';
-        joinBtn.style.cursor = 'default';
-        joinBtn.style.opacity = '0.5';
-        joinBtn.style.pointerEvents = 'none';
+      let actionEl: HTMLElement;
+      if (game.inProgress) {
+        actionEl = document.createElement('span');
+        actionEl.textContent = 'In Progress';
+        actionEl.style.cssText = `
+          font-size: 12px; font-weight: 600; color: rgba(255,190,60,0.8);
+          padding: 6px 14px; border-radius: 4px;
+          background: rgba(255,190,60,0.1); border: 1px solid rgba(255,190,60,0.15);
+        `;
       } else {
-        joinBtn.addEventListener('click', () => {
-          this.network.send({ type: 'join_game', gameId: game.gameId });
-        });
+        const isFull = game.playerCount >= game.maxPlayers;
+        actionEl = this.makeButton('Join', isFull ? '#3a3a4a' : '#2a6e3c', isFull ? '#3a3a4a' : '#348a4c');
+        if (isFull) {
+          actionEl.textContent = 'Full';
+          actionEl.style.cursor = 'default';
+          actionEl.style.opacity = '0.5';
+          actionEl.style.pointerEvents = 'none';
+        } else {
+          actionEl.addEventListener('click', () => {
+            this.network.send({ type: 'join_game', gameId: game.gameId });
+          });
+        }
       }
 
       row.appendChild(info);
-      row.appendChild(joinBtn);
+      row.appendChild(actionEl);
       this.gameListEl.appendChild(row);
     }
   }

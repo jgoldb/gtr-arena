@@ -6,10 +6,17 @@ import type { EntityPositionData, EntityStateDelta } from '@gtr/shared';
  *
  * Instead of lerping toward the latest server position (exponential chase),
  * this stores timestamped snapshots and linearly interpolates between two
- * known states. The client renders INTERP_DELAY_MS behind real-time so
- * there are always two snapshots to interpolate between.
+ * known states. The client renders behind real-time so there are always
+ * two snapshots to interpolate between.
  *
- * This is the same technique WoW and most MMOs use for remote entity movement.
+ * Key improvements over a fixed-delay approach:
+ * - Adaptive delay: adjusts based on measured network jitter so the buffer
+ *   rarely runs dry, even at 100-200ms+ RTT.
+ * - Position carry-forward: every snapshot contains positions for ALL known
+ *   entities, not just those the server included in that tick's delta.
+ * - Linear extrapolation: when renderTime overshoots all buffered snapshots
+ *   (packet loss / jitter spike), entities continue along their last known
+ *   velocity instead of freezing, capped to prevent runaway drift.
  */
 
 interface BufferedSnapshot {
@@ -30,7 +37,22 @@ export interface InterpolatedPosition {
 export class SnapshotBuffer {
   private snapshots: BufferedSnapshot[] = [];
   private static readonly MAX_BUFFER_SIZE = 30; // ~1.5s at 20Hz
-  private static readonly INTERP_DELAY_MS = 100; // render 2 ticks behind
+
+  // ── Adaptive delay ──────────────────────────────────────────────────
+  // Instead of a fixed 100ms, we measure inter-packet arrival jitter and
+  // set the delay to cover ~95th percentile (mean + 2*stddev), clamped
+  // to a reasonable range. This keeps the buffer fed on real connections
+  // while staying responsive on LAN.
+  private static readonly MIN_DELAY_MS = 50;   // floor (LAN)
+  private static readonly MAX_DELAY_MS = 300;  // ceiling (bad connection)
+  private static readonly JITTER_ALPHA = 0.05; // EWMA smoothing factor
+  private interpDelayMs = 100; // initial guess, adapts quickly
+  private lastReceiveTime = 0;
+  private avgInterval = 50;    // EWMA of inter-packet interval
+  private avgJitter = 0;       // EWMA of absolute deviation from avgInterval
+
+  // ── Extrapolation ───────────────────────────────────────────────────
+  private static readonly MAX_EXTRAPOLATION_MS = 200; // don't extrapolate beyond this
 
   // Full entity state maintained incrementally from server deltas
   private entityStates = new Map<string, EntitySnapshot>();
@@ -40,9 +62,42 @@ export class SnapshotBuffer {
 
   /**
    * Push a position update from a game_state_update message.
+   * Carries forward positions from the previous snapshot for entities
+   * not included in this update, so every snapshot is "complete".
    */
   pushPositions(tick: number, serverTimestamp: number, positions: EntityPositionData[]): void {
+    const now = performance.now();
+
+    // ── Update adaptive delay from arrival jitter ──
+    if (this.lastReceiveTime > 0) {
+      const interval = now - this.lastReceiveTime;
+      const jitter = Math.abs(interval - this.avgInterval);
+      const a = SnapshotBuffer.JITTER_ALPHA;
+      this.avgInterval = this.avgInterval * (1 - a) + interval * a;
+      this.avgJitter = this.avgJitter * (1 - a) + jitter * a;
+
+      // Target delay = average interval + 2x jitter (covers ~95th percentile)
+      const target = this.avgInterval + this.avgJitter * 2;
+      this.interpDelayMs = Math.max(
+        SnapshotBuffer.MIN_DELAY_MS,
+        Math.min(SnapshotBuffer.MAX_DELAY_MS, target),
+      );
+    }
+    this.lastReceiveTime = now;
+
+    // ── Build position map with carry-forward ──
     const posMap = new Map<string, EntityPositionData>();
+
+    // Start with all positions from the previous snapshot (carry-forward)
+    if (this.snapshots.length > 0) {
+      const prev = this.snapshots[this.snapshots.length - 1];
+      for (const [id, p] of prev.positions) {
+        // Carry forward with isMoving = false (entity didn't send an update → stationary)
+        posMap.set(id, { ...p, isMoving: false });
+      }
+    }
+
+    // Overwrite with fresh data from this tick
     for (const p of positions) {
       posMap.set(p.id, p);
     }
@@ -50,7 +105,7 @@ export class SnapshotBuffer {
     this.snapshots.push({
       tick,
       serverTimestamp,
-      receiveTime: performance.now(),
+      receiveTime: now,
       positions: posMap,
     });
 
@@ -125,7 +180,21 @@ export class SnapshotBuffer {
   }
 
   /**
+   * Remove a disconnected/removed entity from carried-forward positions
+   * so it doesn't linger in future snapshots.
+   */
+  removeEntity(entityId: string): void {
+    this.entityStates.delete(entityId);
+    this.entityBuffs.delete(entityId);
+    // Remove from latest snapshot so it won't carry forward
+    if (this.snapshots.length > 0) {
+      this.snapshots[this.snapshots.length - 1].positions.delete(entityId);
+    }
+  }
+
+  /**
    * Get the interpolated position for a remote entity at the current render time.
+   * Uses adaptive delay, position carry-forward, and linear extrapolation.
    * Returns null if there are not enough snapshots yet.
    */
   getInterpolatedPosition(entityId: string): InterpolatedPosition | null {
@@ -138,7 +207,7 @@ export class SnapshotBuffer {
       return null;
     }
 
-    const renderTime = performance.now() - SnapshotBuffer.INTERP_DELAY_MS;
+    const renderTime = performance.now() - this.interpDelayMs;
 
     // Find the two snapshots that bracket renderTime
     let before: BufferedSnapshot | null = null;
@@ -152,17 +221,56 @@ export class SnapshotBuffer {
       }
     }
 
-    // If renderTime is beyond all snapshots, use the last known position
+    // ── Extrapolation: renderTime is beyond all snapshots ──
     if (!before || !after) {
-      const latest = this.snapshots[this.snapshots.length - 1];
-      const pos = latest.positions.get(entityId);
-      if (!pos) return null;
-      return { x: pos.x, y: pos.y, z: pos.z, rotationY: pos.rotationY, isMoving: pos.isMoving };
+      const len = this.snapshots.length;
+      const latest = this.snapshots[len - 1];
+      const prev = this.snapshots[len - 2];
+
+      const latestPos = latest.positions.get(entityId);
+      const prevPos = prev.positions.get(entityId);
+
+      // No position data at all
+      if (!latestPos) return null;
+
+      // Can't compute velocity → return latest position
+      if (!prevPos) {
+        return { x: latestPos.x, y: latestPos.y, z: latestPos.z, rotationY: latestPos.rotationY, isMoving: latestPos.isMoving };
+      }
+
+      // Linear extrapolation based on velocity between last two snapshots
+      const dt = latest.receiveTime - prev.receiveTime;
+      if (dt <= 0) {
+        return { x: latestPos.x, y: latestPos.y, z: latestPos.z, rotationY: latestPos.rotationY, isMoving: latestPos.isMoving };
+      }
+
+      const overshoot = renderTime - latest.receiveTime;
+      // Cap extrapolation to prevent runaway drift
+      const extrapTime = Math.min(overshoot, SnapshotBuffer.MAX_EXTRAPOLATION_MS);
+
+      // Only extrapolate if the entity was actually moving
+      if (!latestPos.isMoving) {
+        return { x: latestPos.x, y: latestPos.y, z: latestPos.z, rotationY: latestPos.rotationY, isMoving: false };
+      }
+
+      const vx = (latestPos.x - prevPos.x) / dt;
+      const vy = (latestPos.y - prevPos.y) / dt;
+      const vz = (latestPos.z - prevPos.z) / dt;
+
+      return {
+        x: latestPos.x + vx * extrapTime,
+        y: latestPos.y + vy * extrapTime,
+        z: latestPos.z + vz * extrapTime,
+        rotationY: latestPos.rotationY, // don't extrapolate rotation
+        isMoving: latestPos.isMoving,
+      };
     }
 
+    // ── Normal interpolation between two bracketing snapshots ──
     const beforePos = before.positions.get(entityId);
     const afterPos = after.positions.get(entityId);
 
+    // With carry-forward, both should always exist, but handle edge cases
     if (!beforePos && !afterPos) return null;
     if (!beforePos) return { x: afterPos!.x, y: afterPos!.y, z: afterPos!.z, rotationY: afterPos!.rotationY, isMoving: afterPos!.isMoving };
     if (!afterPos) return { x: beforePos.x, y: beforePos.y, z: beforePos.z, rotationY: beforePos.rotationY, isMoving: beforePos.isMoving };
@@ -212,5 +320,10 @@ export class SnapshotBuffer {
 
   get hasEnoughData(): boolean {
     return this.snapshots.length >= 2;
+  }
+
+  /** Current adaptive interpolation delay (for debug display). */
+  get currentDelayMs(): number {
+    return this.interpDelayMs;
   }
 }

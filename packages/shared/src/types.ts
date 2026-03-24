@@ -142,6 +142,7 @@ export interface LobbyGameInfo {
   hostUsername: string;
   playerCount: number;
   maxPlayers: number;
+  inProgress?: boolean;
 }
 
 export interface LobbyUser {

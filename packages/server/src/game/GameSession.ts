@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult } from '@gtr/shared';
-import { MAPS, MAP_LIST, xpToLevel, calculateXpGain } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
+import { MAPS, MAP_LIST, xpToLevel, calculateXpGain, getMaxPlayers } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
 import type { AuthManager } from '../auth/AuthManager.js';
@@ -461,6 +461,19 @@ export class GameSession {
 
   getPlayerIds(): string[] {
     return this.players.map(p => p.userId);
+  }
+
+  getLobbyInfo(): LobbyGameInfo {
+    return {
+      gameId: this.gameId,
+      format: this.format,
+      mapId: this.mapId,
+      mapName: this.mapInfo?.name ?? this.mapId,
+      hostUsername: this.players[0]?.username ?? 'Unknown',
+      playerCount: this.players.length,
+      maxPlayers: getMaxPlayers(this.format),
+      inProgress: true,
+    };
   }
 
   private winningTeamResult = -1;

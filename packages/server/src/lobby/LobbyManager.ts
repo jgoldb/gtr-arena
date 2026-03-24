@@ -503,6 +503,7 @@ export class LobbyManager {
       if (session.isEmpty()) {
         session.stop();
         this.gameSessions.delete(gameId);
+        this.broadcastLobbyState();
       }
     };
     return session;
@@ -531,6 +532,7 @@ export class LobbyManager {
 
     this.gameSessions.set(newGameId, newSession);
     newSession.start();
+    this.broadcastLobbyState();
   }
 
   // ── Admin ────────────────────────────────────────────────────────────
@@ -792,6 +794,9 @@ export class LobbyManager {
     for (const lobby of this.gameLobbies.values()) {
       games.push(lobby.getInfo());
     }
+    for (const session of this.gameSessions.values()) {
+      games.push(session.getLobbyInfo());
+    }
 
     const msg: S2C_LobbyState = { type: 'lobby_state', users, games };
 
@@ -816,6 +821,9 @@ export class LobbyManager {
     const games: LobbyGameInfo[] = [];
     for (const lobby of this.gameLobbies.values()) {
       games.push(lobby.getInfo());
+    }
+    for (const session of this.gameSessions.values()) {
+      games.push(session.getLobbyInfo());
     }
 
     this.send(user.socket, { type: 'lobby_state', users, games });

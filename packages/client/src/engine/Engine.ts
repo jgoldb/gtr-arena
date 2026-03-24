@@ -1183,7 +1183,10 @@ export class Engine {
         if (!this.targetingSystem.groundTargetBlocked) {
           this.onGroundTargetConfirmed?.();
         }
-      } else {
+      } else if (!this.input.isMouseButtonDown('right')) {
+        // Only process target selection on normal left clicks — not while
+        // right-click drag (pointer lock) is active, to avoid accidentally
+        // clearing the current target.
         this.targetingSystem.processClick(click.x, click.y);
       }
     }
