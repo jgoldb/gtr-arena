@@ -757,11 +757,13 @@ export class ClientEngine {
   // ── Network commands ──────────────────────────────────────────────────
 
   sendAbility(abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
+    const serverTimestamp = this.snapshotBuffer.getCurrentRenderServerTimestamp();
     this.network.send({
       type: 'use_ability',
       abilityId,
       targetEntityId,
       ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetZ: groundTarget.z } : {}),
+      ...(serverTimestamp !== null ? { serverTimestamp } : {}),
     });
   }
 

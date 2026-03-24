@@ -326,4 +326,31 @@ export class SnapshotBuffer {
   get currentDelayMs(): number {
     return this.interpDelayMs;
   }
+
+  /**
+   * Get the server timestamp corresponding to the current render time.
+   * This is the server time the client is "seeing" right now, accounting
+   * for interpolation delay. Used for lag compensation — the client sends
+   * this with ability requests so the server can rewind to the right moment.
+   */
+  getCurrentRenderServerTimestamp(): number | null {
+    if (this.snapshots.length < 2) return null;
+
+    const renderTime = performance.now() - this.interpDelayMs;
+
+    // Find the two snapshots bracketing renderTime
+    for (let i = 0; i < this.snapshots.length - 1; i++) {
+      if (this.snapshots[i].receiveTime <= renderTime && this.snapshots[i + 1].receiveTime > renderTime) {
+        const before = this.snapshots[i];
+        const after = this.snapshots[i + 1];
+        const totalTime = after.receiveTime - before.receiveTime;
+        const elapsed = renderTime - before.receiveTime;
+        const t = totalTime > 0 ? Math.max(0, Math.min(1, elapsed / totalTime)) : 1;
+        return before.serverTimestamp + (after.serverTimestamp - before.serverTimestamp) * t;
+      }
+    }
+
+    // renderTime is beyond all snapshots (extrapolation) — return latest
+    return this.snapshots[this.snapshots.length - 1].serverTimestamp;
+  }
 }

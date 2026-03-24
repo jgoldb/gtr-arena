@@ -253,7 +253,8 @@ export class GameSession {
         this.engine.requestAbility(
           entityId, msg.abilityId, msg.targetEntityId ?? null,
           msg.groundTargetX !== undefined && msg.groundTargetZ !== undefined
-            ? { x: msg.groundTargetX, z: msg.groundTargetZ } : undefined
+            ? { x: msg.groundTargetX, z: msg.groundTargetZ } : undefined,
+          msg.serverTimestamp
         );
         break;
       case 'set_target':

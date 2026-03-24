@@ -60,6 +60,8 @@ export interface C2S_UseAbility {
   targetEntityId: string | null;
   groundTargetX?: number;
   groundTargetZ?: number;
+  /** Server timestamp the client was rendering when the ability was fired (lag compensation). */
+  serverTimestamp?: number;
 }
 
 export interface C2S_SetTarget {

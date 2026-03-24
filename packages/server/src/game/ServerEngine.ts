@@ -134,9 +134,18 @@ export class ServerEngine {
   private static readonly INTERRUPT_COOLDOWN = 1;
   private static readonly KEYFRAME_INTERVAL = 100; // full snapshot every 5 seconds
   private static readonly BOTTLE_CHUCK_IMPACT_DELAY = 0.825; // animation wind-up + flight time
-  // Latency tolerance for range checks — prevents high-ping players from having
-  // abilities rejected when target was in range on their screen
-  private static readonly RANGE_TOLERANCE = yardsToUnits(2);
+  // Range tolerance for residual latency (sub-tick timing, interpolation granularity).
+  // Reduced from 2 yards now that server-side position rewind handles the bulk of lag compensation.
+  private static readonly RANGE_TOLERANCE = yardsToUnits(1);
+
+  // ── Lag compensation: position history for server-side rewind ──
+  private positionHistory: Array<{
+    serverTimestamp: number;
+    positions: Map<string, { x: number; z: number; rotationY: number }>;
+  }> = [];
+  private static readonly MAX_REWIND_MS = 400;
+  // ~10 ticks at 20Hz (400ms / 50ms = 8, +2 margin)
+  private static readonly MAX_HISTORY_TICKS = Math.ceil(400 / ServerEngine.TICK_MS) + 2;
 
   // Event queue (flushed each tick)
   private pendingEvents: ServerMessage[] = [];
@@ -358,7 +367,8 @@ export class ServerEngine {
     if (entity) entity.isAutoAttacking = false;
   }
 
-  requestAbility(entityId: string, abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
+  requestAbility(entityId: string, abilityId: string, targetEntityId: string | null,
+                 groundTarget?: { x: number; z: number }, clientServerTimestamp?: number): void {
     const entity = this.getEntity(entityId);
     if (!entity || this.frozenEntities.has(entityId)) return;
 
@@ -370,7 +380,7 @@ export class ServerEngine {
       this.cancelCasting(entityId);
     }
 
-    // Ground-targeted AoE abilities
+    // Ground-targeted AoE abilities — no rewind (by design: lead your targets)
     if (ability.groundTargeted && groundTarget) {
       const result = this.useGroundTargetAbility(entity, ability, groundTarget.x, groundTarget.z);
       if (result.success) {
@@ -390,10 +400,16 @@ export class ServerEngine {
       target = entity;
     }
 
+    // Lag compensation: rewind target to where the client saw them
+    let targetPosOverride: { x: number; z: number; rotationY: number } | undefined;
+    if (target && clientServerTimestamp !== undefined) {
+      targetPosOverride = this.getRewindPosition(target.id, clientServerTimestamp) ?? undefined;
+    }
+
     if (ability.castTime) {
-      this.startCasting(entity, ability, target);
+      this.startCasting(entity, ability, target, targetPosOverride);
     } else {
-      const result = this.combatSystem.useAbility(ability, entity, target);
+      const result = this.combatSystem.useAbility(ability, entity, target, targetPosOverride);
       if (result.success) {
         this.onAbilitySuccess(entity, ability);
       } else if (result.errorMessage) {
@@ -500,6 +516,68 @@ export class ServerEngine {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    this.positionHistory.length = 0;
+  }
+
+  // ── Lag compensation: position history ────────────────────────────────
+
+  /** Record all entity positions for this tick (called once per broadcast). */
+  private recordPositionHistory(serverTimestamp: number): void {
+    const positions = new Map<string, { x: number; z: number; rotationY: number }>();
+    for (const e of this.entities) {
+      positions.set(e.id, { x: e.x, z: e.z, rotationY: e.rotationY });
+    }
+    this.positionHistory.push({ serverTimestamp, positions });
+    while (this.positionHistory.length > ServerEngine.MAX_HISTORY_TICKS) {
+      this.positionHistory.shift();
+    }
+  }
+
+  /**
+   * Get the rewound position for an entity at a past server timestamp.
+   * Returns null if the timestamp is too old, in the future, or the entity
+   * has no history — caller should fall back to current positions.
+   */
+  private getRewindPosition(entityId: string, clientServerTimestamp: number): { x: number; z: number; rotationY: number } | null {
+    if (this.positionHistory.length === 0) return null;
+
+    const now = Date.now();
+    const rewindAmount = now - clientServerTimestamp;
+
+    // Reject timestamps in the future or too far in the past
+    if (rewindAmount < 0 || rewindAmount > ServerEngine.MAX_REWIND_MS) return null;
+
+    // Find the two history entries bracketing the requested timestamp
+    for (let i = 0; i < this.positionHistory.length - 1; i++) {
+      const before = this.positionHistory[i];
+      const after = this.positionHistory[i + 1];
+      if (before.serverTimestamp <= clientServerTimestamp && after.serverTimestamp > clientServerTimestamp) {
+        const beforePos = before.positions.get(entityId);
+        const afterPos = after.positions.get(entityId);
+        if (!beforePos && !afterPos) return null;
+        if (!beforePos) return afterPos ? { ...afterPos } : null;
+        if (!afterPos) return { ...beforePos };
+
+        const totalTime = after.serverTimestamp - before.serverTimestamp;
+        const elapsed = clientServerTimestamp - before.serverTimestamp;
+        const t = totalTime > 0 ? Math.max(0, Math.min(1, elapsed / totalTime)) : 1;
+        return {
+          x: beforePos.x + (afterPos.x - beforePos.x) * t,
+          z: beforePos.z + (afterPos.z - beforePos.z) * t,
+          rotationY: beforePos.rotationY + (afterPos.rotationY - beforePos.rotationY) * t,
+        };
+      }
+    }
+
+    // Timestamp is at or after our latest entry — use latest
+    const last = this.positionHistory[this.positionHistory.length - 1];
+    if (last.serverTimestamp <= clientServerTimestamp) {
+      const pos = last.positions.get(entityId);
+      return pos ? { ...pos } : null;
+    }
+
+    // Timestamp is before all history entries — too old
+    return null;
   }
 
   // ── Main tick ───────────────────────────────────────────────────────────
@@ -575,7 +653,8 @@ export class ServerEngine {
 
   // ── Casting ──────────────────────────────────────────────────────────
 
-  private startCasting(entity: ServerEntity, ability: Ability, target: ServerEntity | null): void {
+  private startCasting(entity: ServerEntity, ability: Ability, target: ServerEntity | null,
+                       targetPosOverride?: { x: number; z: number; rotationY: number }): void {
     if (this.castingStates.has(entity.id)) {
       this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Already casting' });
       return;
@@ -585,7 +664,8 @@ export class ServerEngine {
       return;
     }
 
-    const validation = this.combatSystem.validateAbility(ability, entity, target);
+    // Use rewound position for initial cast validation only — mid-cast checks use current positions
+    const validation = this.combatSystem.validateAbility(ability, entity, target, targetPosOverride);
     if (!validation.success) {
       if (validation.errorMessage) {
         this.onSendToPlayer?.(entity.id, { type: 'error', message: validation.errorMessage });
@@ -1154,23 +1234,28 @@ export class ServerEngine {
   // ── State broadcast ─────────────────────────────────────────────────
 
   private broadcastGameState(): void {
+    // Capture timestamp once — used for both broadcast and position history
+    // so the client's serverTimestamp matches our rewind buffer exactly.
+    const serverTimestamp = Date.now();
+    this.recordPositionHistory(serverTimestamp);
+
     const isKeyframe = this.tick % ServerEngine.KEYFRAME_INTERVAL === 0;
 
     if (isKeyframe) {
-      this.broadcastKeyframe();
+      this.broadcastKeyframe(serverTimestamp);
       // On keyframe ticks, flush events separately (keyframe msg type has no events field)
       for (const event of this.pendingEvents) {
         this.onBroadcast?.(event);
       }
     } else {
       // On delta ticks, bundle events into the update message to reduce WebSocket frames
-      this.broadcastDelta();
+      this.broadcastDelta(serverTimestamp);
     }
     this.pendingEvents = [];
   }
 
   /** Full keyframe — sent periodically and used by clients to reset state. */
-  private broadcastKeyframe(): void {
+  private broadcastKeyframe(serverTimestamp: number): void {
     const entities: EntitySnapshot[] = this.entities.map(e => {
       const snapshot = e.toSnapshot();
       const casting = this.castingStates.get(e.id);
@@ -1191,7 +1276,7 @@ export class ServerEngine {
     const msg: S2C_GameStateSnapshot = {
       type: 'game_state_snapshot',
       tick: this.tick,
-      timestamp: Date.now(),
+      timestamp: serverTimestamp,
       entities,
       buffs,
       gasClouds,
@@ -1220,7 +1305,7 @@ export class ServerEngine {
   }
 
   /** Delta update — positions always, state/buffs only when changed. */
-  private broadcastDelta(): void {
+  private broadcastDelta(serverTimestamp: number): void {
     // Positions: only include entities whose position/rotation actually changed
     const positions: EntityPositionData[] = [];
     for (const e of this.entities) {
@@ -1345,7 +1430,7 @@ export class ServerEngine {
     const msg: S2C_GameStateUpdate = {
       type: 'game_state_update',
       tick: this.tick,
-      timestamp: Date.now(),
+      timestamp: serverTimestamp,
       positions,
     };
 

@@ -20,10 +20,9 @@ export class ServerCombatSystem {
   private static readonly COMBAT_DURATION = 5;
   private static readonly MISS_CHANCE = 0.03;
   private static readonly GOD_MODE_DAMAGE_MULT = 11; // +1000% damage
-  // Generous range tolerance to compensate for client-server latency.
-  // Without this, high-latency players get abilities rejected at range boundaries
-  // because the target has moved by the time the server processes the request.
-  private static readonly RANGE_TOLERANCE = yardsToUnits(2);
+  // Range tolerance for residual latency (sub-tick timing, interpolation granularity).
+  // Reduced from 2 yards now that server-side position rewind handles the bulk of lag compensation.
+  private static readonly RANGE_TOLERANCE = yardsToUnits(1);
   private combatTimers = new Map<ServerEntity, number>();
   private regenSystem: ServerRegenSystem;
   private buffSystem: ServerBuffSystem;
@@ -146,7 +145,8 @@ export class ServerCombatSystem {
   validateAbility(
     ability: Ability,
     attacker: ServerEntity,
-    target: ServerEntity | null
+    target: ServerEntity | null,
+    targetPosOverride?: { x: number; z: number; rotationY: number }
   ): CombatResult {
     if (attacker.dead) {
       return { success: false, error: 'dead', errorMessage: 'You are dead' };
@@ -172,14 +172,17 @@ export class ServerCombatSystem {
       }
     }
     if (ability.requiresHostileTarget && target) {
-      const dist = this.getDistance(attacker.x, attacker.z, target.x, target.z);
+      // Use rewound target position for range/facing/LoS if available (lag compensation)
+      const tx = targetPosOverride?.x ?? target.x;
+      const tz = targetPosOverride?.z ?? target.z;
+      const dist = this.getDistance(attacker.x, attacker.z, tx, tz);
       if (dist > ability.range! + ServerCombatSystem.RANGE_TOLERANCE) {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
       }
-      if (!this.collision.hasLineOfSight(attacker.x, attacker.z, target.x, target.z)) {
+      if (!this.collision.hasLineOfSight(attacker.x, attacker.z, tx, tz)) {
         return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
       }
-      if (!this.isFacing(attacker.x, attacker.z, attacker.rotationY, target.x, target.z)) {
+      if (!this.isFacing(attacker.x, attacker.z, attacker.rotationY, tx, tz)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
       }
     }
@@ -188,11 +191,13 @@ export class ServerCombatSystem {
         return { success: false, error: 'no-target', errorMessage: 'No target' };
       }
       if (ability.range) {
-        const dist = this.getDistance(attacker.x, attacker.z, target.x, target.z);
+        const tx = targetPosOverride?.x ?? target.x;
+        const tz = targetPosOverride?.z ?? target.z;
+        const dist = this.getDistance(attacker.x, attacker.z, tx, tz);
         if (dist > ability.range + ServerCombatSystem.RANGE_TOLERANCE) {
           return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
         }
-        if (!this.collision.hasLineOfSight(attacker.x, attacker.z, target.x, target.z)) {
+        if (!this.collision.hasLineOfSight(attacker.x, attacker.z, tx, tz)) {
           return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
         }
       }
@@ -203,9 +208,10 @@ export class ServerCombatSystem {
   useAbility(
     ability: Ability,
     attacker: ServerEntity,
-    target: ServerEntity | null
+    target: ServerEntity | null,
+    targetPosOverride?: { x: number; z: number; rotationY: number }
   ): CombatResult {
-    const validation = this.validateAbility(ability, attacker, target);
+    const validation = this.validateAbility(ability, attacker, target, targetPosOverride);
     if (!validation.success) return validation;
 
     if (!attacker.godMode) {

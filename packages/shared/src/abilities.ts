@@ -288,25 +288,25 @@ export const BottleChuck: Ability = {
   id: 'bottle-chuck',
   name: 'Bottle Chuck',
   icon: '⚗️',
-  range: yardsToUnits(20),
+  range: yardsToUnits(24),
   manaCost: 180,
   cooldown: 4,
   damage: 0,
-  damageMin: 166,
-  damageMax: 191,
+  damageMin: 244,
+  damageMax: 271,
   requiresHostileTarget: false,
   groundTargeted: true,
-  aoeRadius: yardsToUnits(2),
+  aoeRadius: yardsToUnits(4),
   appliesDebuff: BrokenGlassDebuff,
   description:
-    'Toss a bottle of volatile chemicals at a location, dealing 166-191 damage and slowing all enemies in the area by 70% for 2 sec.',
+    'Toss a bottle of volatile chemicals at a location, dealing 244-271 damage and slowing all enemies in the area by 70% for 2 sec.',
 };
 
 export const Discombobulate: Ability = {
   id: 'discombobulate',
   name: 'Discombobulate',
   icon: '🌀',
-  range: yardsToUnits(15),
+  range: yardsToUnits(20),
   manaCost: 245,
   cooldown: 10,
   castTime: 1.5,
@@ -350,14 +350,14 @@ export const Chudmax: Ability = {
   manaCost: 275,
   cooldown: 1.5,
   castTime: 3,
-  damage: 540,
-  healAmount: 660,
+  damage: 720,
+  healAmount: 900,
   requiresHostileTarget: false,
   requiresTarget: true,
   isChannel: true,
   channelTicks: 3,
   description:
-    'Channel the chud at your target for 3 seconds. Heals friendly targets for 660 or damages hostile targets for 540 over the duration.',
+    'Channel the chud at your target for 3 seconds. Heals friendly targets for 900 or damages hostile targets for 720 over the duration.',
 };
 
 export const FullRetard: Ability = {
