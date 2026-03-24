@@ -1,5 +1,5 @@
 import { DR_RESET_TIMER, DR_MULTIPLIERS } from '@gtr/shared';
-import type { BuffDefinition } from '@gtr/shared';
+import type { BuffDefinition, BuffEffect } from '@gtr/shared';
 import type { ServerEntity } from './ServerEntity.js';
 
 export interface ActiveBuff {
@@ -7,6 +7,7 @@ export interface ActiveBuff {
   remaining: number;
   shieldRemaining?: number;
   appliedAt: number;
+  stacks?: number;
 }
 
 interface DREntry {
@@ -66,12 +67,16 @@ export class ServerBuffSystem {
       if (definition.shieldAmount !== undefined) {
         existing.shieldRemaining = definition.shieldAmount;
       }
+      if (definition.maxStacks !== undefined && existing.stacks !== undefined) {
+        existing.stacks = Math.min(existing.stacks + (definition.stacks ?? 1), definition.maxStacks);
+      }
     } else {
       buffs.push({
         definition,
         remaining: effectiveDuration,
         shieldRemaining: definition.shieldAmount,
         appliedAt: Date.now(),
+        stacks: definition.stacks,
       });
     }
     return true;
@@ -82,6 +87,34 @@ export class ServerBuffSystem {
     if (!buffs) return;
     const buff = buffs.find(b => b.definition.id === buffId);
     if (buff) buff.remaining = remaining;
+  }
+
+  addStacks(target: ServerEntity, buffId: string, amount: number): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const buff = buffs.find(b => b.definition.id === buffId);
+    if (buff && buff.stacks !== undefined && buff.definition.maxStacks !== undefined) {
+      buff.stacks = Math.min(buff.stacks + amount, buff.definition.maxStacks);
+    }
+  }
+
+  removeStacks(target: ServerEntity, buffId: string, amount: number): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const buff = buffs.find(b => b.definition.id === buffId);
+    if (buff && buff.stacks !== undefined) {
+      buff.stacks = Math.max(0, buff.stacks - amount);
+      if (buff.stacks <= 0 && !buff.definition.allowZeroStacks) {
+        this.remove(target, buffId);
+      }
+    }
+  }
+
+  getStacks(target: ServerEntity, buffId: string): number {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return 0;
+    const buff = buffs.find(b => b.definition.id === buffId);
+    return buff?.stacks ?? 0;
   }
 
   remove(target: ServerEntity, buffId: string): void {
@@ -120,13 +153,17 @@ export class ServerBuffSystem {
     return buffs.some(b => b.definition.id === buffId && b.definition.type === 'buff');
   }
 
+  private isEffectActive(buff: ActiveBuff, effect: BuffEffect): boolean {
+    return effect.minStacks === undefined || (buff.stacks !== undefined && buff.stacks >= effect.minStacks);
+  }
+
   getAutoAttackSpeedMultiplier(target: ServerEntity): number {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return 1;
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'autoAttackSpeedPercent') mult += effect.value / 100;
+        if (effect.type === 'autoAttackSpeedPercent' && this.isEffectActive(buff, effect)) mult += effect.value / 100;
       }
     }
     return mult;
@@ -138,7 +175,7 @@ export class ServerBuffSystem {
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'movementSpeedPercent') mult += effect.value / 100;
+        if (effect.type === 'movementSpeedPercent' && this.isEffectActive(buff, effect)) mult += effect.value / 100;
       }
     }
     return Math.max(0, mult);
@@ -147,13 +184,13 @@ export class ServerBuffSystem {
   isStunned(target: ServerEntity): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
-    return buffs.some(b => b.definition.effects.some(e => e.type === 'stun'));
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'stun' && this.isEffectActive(b, e)));
   }
 
   isSleeping(target: ServerEntity): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
-    return buffs.some(b => b.definition.effects.some(e => e.type === 'sleep'));
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'sleep' && this.isEffectActive(b, e)));
   }
 
   removeSleepEffects(target: ServerEntity): void {
@@ -172,7 +209,7 @@ export class ServerBuffSystem {
   isDiscombobulated(target: ServerEntity): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
-    return buffs.some(b => b.definition.effects.some(e => e.type === 'discombobulate'));
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'discombobulate' && this.isEffectActive(b, e)));
   }
 
   getAutoAttackDamageTakenMultiplier(target: ServerEntity): number {
@@ -181,7 +218,7 @@ export class ServerBuffSystem {
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'autoAttackDamageTakenPercent') mult += effect.value / 100;
+        if (effect.type === 'autoAttackDamageTakenPercent' && this.isEffectActive(buff, effect)) mult += effect.value / 100;
       }
     }
     return mult;
@@ -193,7 +230,7 @@ export class ServerBuffSystem {
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'manaCostPercent') mult += effect.value / 100;
+        if (effect.type === 'manaCostPercent' && this.isEffectActive(buff, effect)) mult += effect.value / 100;
       }
     }
     return Math.max(0, mult);
@@ -205,7 +242,7 @@ export class ServerBuffSystem {
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'damageDealtPercent') mult += effect.value / 100;
+        if (effect.type === 'damageDealtPercent' && this.isEffectActive(buff, effect)) mult += effect.value / 100;
       }
     }
     return mult;

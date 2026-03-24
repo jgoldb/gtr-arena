@@ -1,5 +1,6 @@
 import type { Targetable } from '../engine/types';
 import type { ActiveBuff } from '../engine/combat/BuffSystem';
+import { getBuffDescription } from '@gtr/shared';
 
 export interface UnitFrameOptions {
   localPlayer?: Targetable;
@@ -286,6 +287,20 @@ export class UnitFrame {
     `;
     icon.appendChild(timer);
 
+    // Stack count (bottom-left corner)
+    const stackCount = document.createElement('span');
+    stackCount.style.cssText = `
+      position: absolute;
+      bottom: -1px;
+      left: 1px;
+      font-size: 9px;
+      font-weight: bold;
+      color: #fff;
+      text-shadow: 1px 1px 1px rgba(0,0,0,0.9);
+      z-index: 2;
+    `;
+    icon.appendChild(stackCount);
+
     // Tooltip hover
     icon.addEventListener('mouseenter', () => {
       this.tooltipHoveredEl = icon;
@@ -327,18 +342,22 @@ export class UnitFrame {
       margin-top: 4px;
     ">${remaining} second${remaining !== 1 ? 's' : ''} remaining</div>`;
 
+    const stackLabel = aura.stacks !== undefined ? ` (${aura.stacks})` : '';
+    const desc = getBuffDescription(aura.definition, aura.stacks);
+    const descHtml = desc.replace(/\n/g, '<br>');
+
     this.tooltipEl.innerHTML = `
       <div style="
         color: #ffd100;
         font-size: 14px;
         font-weight: bold;
         margin-bottom: 4px;
-      ">${aura.definition.name}</div>
+      ">${aura.definition.name}${stackLabel}</div>
       <div style="
         color: #eee;
         font-size: 12px;
         line-height: 1.4;
-      ">${aura.definition.description}</div>
+      ">${descHtml}</div>
       ${durationLabel}
     `;
 
@@ -389,6 +408,15 @@ export class UnitFrame {
         (el.children[2] as HTMLElement).textContent = hasFiniteDuration
           ? (aura.remaining < 10 ? aura.remaining.toFixed(1) : Math.ceil(aura.remaining).toString())
           : '';
+        // Stack count
+        const stackEl = el.children[3] as HTMLElement;
+        if (aura.stacks !== undefined && aura.stacks > 0) {
+          stackEl.textContent = String(aura.stacks);
+          stackEl.style.display = '';
+        } else {
+          stackEl.textContent = '';
+          stackEl.style.display = 'none';
+        }
         // Refresh tooltip if this icon is hovered
         if (this.tooltipHoveredEl === el) {
           this.refreshTooltip(el);

@@ -91,7 +91,7 @@ export class GameLobbyScreen {
     this.charListEl = document.createElement('div');
     this.charListEl.style.cssText = 'display: flex; gap: 12px; justify-content: center;';
 
-    for (const char of CHARACTER_LIST) {
+    for (const char of CHARACTER_LIST.filter(c => !c.playgroundOnly)) {
       const card = document.createElement('div');
       card.className = 'glby-char-card';
       card.style.cssText = `

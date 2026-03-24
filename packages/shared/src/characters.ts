@@ -1,10 +1,12 @@
-import type { Ability } from './abilities.js';
+import type { Ability, BuffDefinition } from './abilities.js';
 import {
   Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper,
   BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom,
+  Shank,
+  TweakingBuff,
 } from './abilities.js';
 
-export type CharacterId = 'janitor' | 'dr-retardo';
+export type CharacterId = 'janitor' | 'dr-retardo' | 'crackhead';
 
 export interface CharacterStats {
   id: CharacterId;
@@ -20,17 +22,15 @@ export interface CharacterStats {
   hpRegen: number;       // hp restored per regen tick
   manaRegen: number;     // mana restored per regen tick
   abilities: readonly Ability[];
+  startingBuffs?: readonly BuffDefinition[];
+  playgroundOnly?: boolean;
 }
 
 export interface CharacterInfo {
   id: CharacterId;
   name: string;
+  playgroundOnly?: boolean;
 }
-
-export const CHARACTER_LIST: CharacterInfo[] = [
-  { id: 'janitor', name: 'The Janitor' },
-  { id: 'dr-retardo', name: 'Dr. Retardo' },
-];
 
 export const CHARACTERS: Record<CharacterId, CharacterStats> = {
   'janitor': {
@@ -63,7 +63,30 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     manaRegen: 48,
     abilities: [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom],
   },
+  'crackhead': {
+    id: 'crackhead',
+    displayName: 'Crackhead',
+    baseMaxHp: 2188,
+    baseMaxMana: 1232,
+    autoAttackDamageMin: 130,
+    autoAttackDamageMax: 170,
+    autoAttackSpeed: 2.0,
+    autoAttackRange: 1.8,
+    critChance: 0.15,
+    dodgeChance: 0.10,
+    hpRegen: 28,
+    manaRegen: 16,
+    abilities: [Shank],
+    startingBuffs: [TweakingBuff],
+    playgroundOnly: true,
+  },
 };
+
+export const CHARACTER_LIST: CharacterInfo[] = (Object.values(CHARACTERS) as CharacterStats[]).map(c => ({
+  id: c.id,
+  name: c.displayName,
+  playgroundOnly: c.playgroundOnly,
+}));
 
 export function getCharacterStats(id: CharacterId): CharacterStats {
   return CHARACTERS[id];

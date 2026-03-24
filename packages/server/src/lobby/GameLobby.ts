@@ -1,7 +1,7 @@
 import type { CharacterId } from '@gtr/shared';
 import type { GameFormat, LobbyGameInfo, GameLobbyPlayer } from '@gtr/shared';
 import type { S2C_GameLobbyState } from '@gtr/shared';
-import { getMaxPlayers, MAPS } from '@gtr/shared';
+import { getMaxPlayers, MAPS, CHARACTERS } from '@gtr/shared';
 
 interface LobbyPlayer {
   userId: string;
@@ -63,6 +63,8 @@ export class GameLobby {
   selectCharacter(userId: string, characterId: CharacterId): void {
     const player = this.players.find(p => p.userId === userId);
     if (player && !player.lockedIn) {
+      const stats = CHARACTERS[characterId];
+      if (stats?.playgroundOnly) return;
       player.characterId = characterId;
     }
   }

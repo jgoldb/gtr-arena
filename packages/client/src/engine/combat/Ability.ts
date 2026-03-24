@@ -32,6 +32,7 @@ export {
   JimmyLegs,
   KaboomStun,
   Kaboom,
+  Shank,
   ArenaPreparationBuff,
   RestingBuff,
 } from '@gtr/shared';

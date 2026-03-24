@@ -1,4 +1,4 @@
-import type { ServerMessage, S2C_GameStart, S2C_RejoinGame } from '@gtr/shared';
+import type { ServerMessage, S2C_GameStart, S2C_RejoinGame, PlayerMatchResult } from '@gtr/shared';
 import { AuthScreen } from './screens/AuthScreen';
 import { LobbyScreen } from './screens/LobbyScreen';
 import { GameLobbyScreen } from './screens/GameLobbyScreen';
@@ -20,7 +20,7 @@ import { ArenaFrames } from './ui/ArenaFrames';
 import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
-import { getCharacterStats, xpToLevel } from '@gtr/shared';
+import { getCharacterStats, xpToLevel, CHARACTER_LIST } from '@gtr/shared';
 import type { Ability } from './engine/combat/Ability';
 import type { Targetable } from './engine/types';
 
@@ -573,7 +573,7 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
 
   // If the game ended while we were disconnected, show game over immediately
   if (msg.gameOver) {
-    showGameOver(msg.gameOver.winningTeam, false);
+    showGameOver(msg.gameOver.winningTeam, false, msg.gameOver.playerResults);
   }
 }
 
@@ -756,8 +756,8 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     },
   });
   document.body.appendChild(mpActionBar.element);
-  mpActionBar.clearAllSlots();
-  abilities.forEach((ab, i) => mpActionBar!.setSlotAbility(i, ab));
+  const charId = (localSnap?.characterId ?? 'janitor') as string;
+  mpActionBar.loadAbilities(charId, abilities);
 
   // Cast bar
   mpCastBarContainer = document.createElement('div');
@@ -855,11 +855,13 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
         remaining: b.remaining,
         shieldRemaining: b.shieldRemaining,
         appliedAt: Date.now(),
+        stacks: b.stacks,
       }));
       const pDebuffList = pBuffs.filter(b => b.type === 'debuff').map(b => ({
         definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'debuff', description: b.description, effects: [] },
         remaining: b.remaining,
         appliedAt: Date.now(),
+        stacks: b.stacks,
       }));
       mpPlayerFrame.update(player, pBuffList, pDebuffList);
     }
@@ -876,11 +878,13 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
           remaining: b.remaining,
           shieldRemaining: b.shieldRemaining,
           appliedAt: Date.now(),
+          stacks: b.stacks,
         }));
         const tDebuffs = rawBuffs.filter(b => b.type === 'debuff').map(b => ({
           definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'debuff', description: b.description, effects: [] },
           remaining: b.remaining,
           appliedAt: Date.now(),
+          stacks: b.stacks,
         }));
         mpTargetFrame.update(targetTarget, tBuffs, tDebuffs);
       } else {
@@ -1144,7 +1148,7 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
 
     case 'game_over':
-      showGameOver(msg.winningTeam, msg.allPlayersPresent);
+      showGameOver(msg.winningTeam, msg.allPlayersPresent, msg.playerResults);
       break;
 
     case 'rematch_challenge':
@@ -1241,7 +1245,7 @@ const btnStyle = `
   cursor: pointer; outline: none;
 `;
 
-function showGameOver(winningTeam: number, allPlayersPresent: boolean): void {
+function showGameOver(winningTeam: number, allPlayersPresent: boolean, playerResults: PlayerMatchResult[]): void {
   if (!clientEngine) return;
   mpGameOver = true;
   const won = clientEngine.playerController.team === winningTeam;
@@ -1257,9 +1261,9 @@ function showGameOver(winningTeam: number, allPlayersPresent: boolean): void {
   gameOverBox.style.cssText = `
     background: linear-gradient(to bottom, rgba(20, 20, 35, 0.95), rgba(10, 10, 20, 0.95));
     border: 1px solid ${won ? 'rgba(80, 200, 100, 0.5)' : 'rgba(200, 80, 80, 0.5)'};
-    border-radius: 8px; padding: 40px 50px; text-align: center;
+    border-radius: 8px; padding: 30px 36px; text-align: center;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    min-width: 320px; pointer-events: auto; position: relative;
+    min-width: 560px; pointer-events: auto; position: relative;
   `;
 
   const dismissBtn = document.createElement('button');
@@ -1280,17 +1284,133 @@ function showGameOver(winningTeam: number, allPlayersPresent: boolean): void {
 
   const title = document.createElement('div');
   title.textContent = won ? 'Victory!' : 'Defeat';
-  title.style.cssText = `color: ${won ? '#44cc44' : '#cc4444'}; font-size: 36px; font-weight: bold; margin-bottom: 24px;`;
+  title.style.cssText = `color: ${won ? '#44cc44' : '#cc4444'}; font-size: 32px; font-weight: bold; margin-bottom: 20px;`;
   gameOverBox.appendChild(title);
+
+  // ── Scoreboard table ──────────────────────────────────────────────
+  const getCharName = (charId: string) => CHARACTER_LIST.find(c => c.id === charId)?.name ?? charId;
+  const formatNum = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+
+  // Sort: winning team first, then by damage within each team
+  const winners = playerResults.filter(p => p.team === winningTeam).sort((a, b) => b.stats.damageDealt - a.stats.damageDealt);
+  const losers = playerResults.filter(p => p.team !== winningTeam).sort((a, b) => b.stats.damageDealt - a.stats.damageDealt);
+
+  const headerCellStyle = `
+    padding: 6px 12px; font-size: 11px; font-weight: bold; text-transform: uppercase;
+    color: #888; letter-spacing: 0.5px; border-bottom: 1px solid rgba(255,255,255,0.1);
+    white-space: nowrap;
+  `;
+  const cellStyle = `padding: 7px 12px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.05); white-space: nowrap;`;
+  const numCellStyle = `${cellStyle} text-align: right; font-variant-numeric: tabular-nums;`;
+
+  const table = document.createElement('table');
+  table.style.cssText = 'width: 100%; border-collapse: collapse; margin-bottom: 20px;';
+
+  // Header row
+  const thead = document.createElement('thead');
+  thead.innerHTML = `<tr>
+    <th style="${headerCellStyle} text-align: left;">Player</th>
+    <th style="${headerCellStyle} text-align: right;">Lvl</th>
+    <th style="${headerCellStyle} text-align: right;">KB</th>
+    <th style="${headerCellStyle} text-align: right;">Deaths</th>
+    <th style="${headerCellStyle} text-align: right;">Damage</th>
+    <th style="${headerCellStyle} text-align: right;">Healing</th>
+    <th style="${headerCellStyle} text-align: right;">XP</th>
+  </tr>`;
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+
+  const renderTeamRows = (players: PlayerMatchResult[], isWinningTeam: boolean) => {
+    if (players.length === 0) return;
+
+    // Team divider
+    const divider = document.createElement('tr');
+    const divCell = document.createElement('td');
+    divCell.colSpan = 7;
+    divCell.style.cssText = `
+      padding: 6px 12px 4px; font-size: 11px; font-weight: bold; text-transform: uppercase;
+      color: ${isWinningTeam ? '#5a5' : '#a55'}; letter-spacing: 0.5px;
+      border-bottom: 1px solid ${isWinningTeam ? 'rgba(80,200,100,0.2)' : 'rgba(200,80,80,0.2)'};
+      text-align: left;
+    `;
+    divCell.textContent = isWinningTeam ? 'Winners' : 'Losers';
+    divider.appendChild(divCell);
+    tbody.appendChild(divider);
+
+    for (const p of players) {
+      const row = document.createElement('tr');
+      const rowBg = isWinningTeam ? 'rgba(40, 80, 40, 0.15)' : 'rgba(80, 40, 40, 0.15)';
+      row.style.cssText = `background: ${rowBg};`;
+
+      // Player name + character
+      const nameCell = document.createElement('td');
+      nameCell.style.cssText = `${cellStyle} text-align: left;`;
+      nameCell.innerHTML = `<span style="color: #eee; font-weight: bold;">${p.username}</span>` +
+        `<span style="color: #777; font-size: 11px; margin-left: 6px;">${getCharName(p.characterId)}</span>`;
+      row.appendChild(nameCell);
+
+      // Level
+      const lvlCell = document.createElement('td');
+      lvlCell.style.cssText = numCellStyle;
+      lvlCell.style.color = '#ccc';
+      lvlCell.textContent = String(p.level);
+      row.appendChild(lvlCell);
+
+      // Killing Blows
+      const kbCell = document.createElement('td');
+      kbCell.style.cssText = numCellStyle;
+      kbCell.style.color = p.stats.kills > 0 ? '#e8c35a' : '#666';
+      kbCell.textContent = String(p.stats.kills);
+      row.appendChild(kbCell);
+
+      // Deaths
+      const deathCell = document.createElement('td');
+      deathCell.style.cssText = numCellStyle;
+      deathCell.style.color = p.stats.deaths > 0 ? '#c44' : '#666';
+      deathCell.textContent = String(p.stats.deaths);
+      row.appendChild(deathCell);
+
+      // Damage
+      const dmgCell = document.createElement('td');
+      dmgCell.style.cssText = numCellStyle;
+      dmgCell.style.color = '#e07040';
+      dmgCell.textContent = formatNum(p.stats.damageDealt);
+      row.appendChild(dmgCell);
+
+      // Healing
+      const healCell = document.createElement('td');
+      healCell.style.cssText = numCellStyle;
+      healCell.style.color = p.stats.healingDone > 0 ? '#44cc44' : '#666';
+      healCell.textContent = formatNum(p.stats.healingDone);
+      row.appendChild(healCell);
+
+      // XP Earned
+      const xpCell = document.createElement('td');
+      xpCell.style.cssText = numCellStyle;
+      xpCell.style.color = '#b080e0';
+      xpCell.textContent = `+${formatNum(p.xpGained)}`;
+      row.appendChild(xpCell);
+
+      tbody.appendChild(row);
+    }
+  };
+
+  renderTeamRows(winners, true);
+  renderTeamRows(losers, false);
+  table.appendChild(tbody);
+  gameOverBox.appendChild(table);
+
+  // ── Buttons ───────────────────────────────────────────────────────
 
   // Rematch section (only if all players are still present)
   if (allPlayersPresent) {
     const rematchSection = document.createElement('div');
-    rematchSection.style.cssText = 'margin-bottom: 20px;';
+    rematchSection.style.cssText = 'margin-bottom: 12px;';
 
     // Map mode toggle
     const mapModeRow = document.createElement('div');
-    mapModeRow.style.cssText = 'display: flex; gap: 8px; justify-content: center; margin-bottom: 12px;';
+    mapModeRow.style.cssText = 'display: flex; gap: 8px; justify-content: center; margin-bottom: 10px;';
 
     const toggleBtnStyle = (active: boolean) => `
       padding: 8px 18px; font-size: 13px; font-weight: bold;
@@ -1682,7 +1802,7 @@ async function startPlayground(): Promise<void> {
   document.body.appendChild(castBarContainer);
 
   // Helper: apply post-cast effects
-  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs'];
+  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank'];
 
   // Ground targeting state
   let pendingGroundAbility: Ability | null = null;
@@ -1731,6 +1851,9 @@ async function startPlayground(): Promise<void> {
       if (target && !target.dead) {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
       }
+    }
+    if (ability.id === 'shank') {
+      engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
     }
 
     // Melee abilities automatically engage auto-attack on the target
@@ -1805,9 +1928,8 @@ async function startPlayground(): Promise<void> {
   });
   pgActionBar = actionBar;
   document.body.appendChild(actionBar.element);
-  const loadAbilities = (abilities: readonly Ability[]) => { actionBar.clearAllSlots(); abilities.forEach((ab, i) => actionBar.setSlotAbility(i, ab)); };
-  loadAbilities(engine.playerController.abilities);
-  engine.onCharacterChange = (abilities) => { cancelGroundTargeting(); loadAbilities(abilities); };
+  actionBar.loadAbilities(engine.playerController.characterId, engine.playerController.abilities);
+  engine.onCharacterChange = (abilities) => { cancelGroundTargeting(); actionBar.loadAbilities(engine.playerController.characterId, engine.playerController.abilities); };
   engine.onAutoAttackError = (message) => errorText.show(message);
   engine.onRestError = (message) => errorText.show(message);
   engine.onGodModeToggle = (active) => toggleGodModeOverlay(active);

@@ -7,7 +7,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, Sweep } from '@gtr/shared';
+import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, Sweep, getBuffDescription, getCharacterStats } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -186,6 +186,12 @@ export class ServerEngine {
   onBroadcast?: (msg: ServerMessage) => void;
   onSendToPlayer?: (entityId: string, msg: ServerMessage) => void;
   onGameOver?: (winningTeam: number) => void;
+  /** Fired whenever damage is dealt (sourceEntityId, targetEntityId, amount). */
+  onStatDamage?: (sourceEntityId: string, targetEntityId: string, amount: number) => void;
+  /** Fired whenever healing is done (sourceEntityId, targetEntityId, amount). */
+  onStatHeal?: (sourceEntityId: string, targetEntityId: string, amount: number) => void;
+  /** Fired when an entity is killed (killerEntityId, victimEntityId). */
+  onStatKill?: (killerEntityId: string, victimEntityId: string) => void;
   private gameOverFired = false;
 
   constructor(obstacles: import('@gtr/shared').ObstacleConfig[]) {
@@ -205,6 +211,14 @@ export class ServerEngine {
         amount,
         combatType: type,
       } as S2C_CombatEvent);
+      // Track match stats
+      if (amount > 0) {
+        if (type === 'heal') {
+          this.onStatHeal?.(source.id, target.id, amount);
+        } else if (type === 'damage' || type === 'crit') {
+          this.onStatDamage?.(source.id, target.id, amount);
+        }
+      }
     };
 
     this.combatSystem.onFlinchDamage = (target) => {
@@ -231,6 +245,10 @@ export class ServerEngine {
           casting.totalTime = Math.min(casting.totalTime + ServerEngine.CAST_PUSHBACK, maxTime);
         }
       }
+    };
+
+    this.combatSystem.onEntityKilled = (killer, victim) => {
+      this.onStatKill?.(killer.id, victim.id);
     };
 
     this.combatSystem.onSleepApplied = (attacker, target) => {
@@ -272,6 +290,16 @@ export class ServerEngine {
   applyArenaPreparation(): void {
     for (const entity of this.entities) {
       this.buffSystem.apply(entity, ArenaPreparationBuff);
+      this.applyStartingBuffs(entity);
+    }
+  }
+
+  private applyStartingBuffs(entity: ServerEntity): void {
+    const stats = getCharacterStats(entity.characterId);
+    if (stats.startingBuffs) {
+      for (const buff of stats.startingBuffs) {
+        this.buffSystem.apply(entity, buff);
+      }
     }
   }
 
@@ -1200,9 +1228,13 @@ export class ServerEngine {
             this.pendingEvents.push({
               type: 'combat_event', sourceEntityId: cloud.owner.id, targetEntityId: entity.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
+            this.onStatDamage?.(cloud.owner.id, entity.id, actualDmg);
           }
           this.combatSystem.enterCombat(entity);
-          if (entity.hp <= 0 && !entity.dead) entity.die();
+          if (entity.hp <= 0 && !entity.dead) {
+            entity.die();
+            this.onStatKill?.(cloud.owner.id, entity.id);
+          }
         }
         cloud.nextTickAt += cloud.tickInterval;
       }
@@ -1268,11 +1300,13 @@ export class ServerEngine {
             this.pendingEvents.push({
               type: 'combat_event', sourceEntityId: pool.owner.id, targetEntityId: entity.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
+            this.onStatDamage?.(pool.owner.id, entity.id, actualDmg);
           }
           this.combatSystem.enterCombat(pool.owner);
           this.combatSystem.enterCombat(entity);
           if (entity.hp <= 0 && !entity.dead) {
             entity.die();
+            this.onStatKill?.(pool.owner.id, entity.id);
           } else {
             this.buffSystem.apply(entity, pool.dot);
             this.activeDots.push({
@@ -1307,9 +1341,13 @@ export class ServerEngine {
             this.pendingEvents.push({
               type: 'combat_event', sourceEntityId: dot.owner.id, targetEntityId: dot.target.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
+            this.onStatDamage?.(dot.owner.id, dot.target.id, actualDmg);
           }
           this.combatSystem.enterCombat(dot.target);
-          if (dot.target.hp <= 0 && !dot.target.dead) dot.target.die();
+          if (dot.target.hp <= 0 && !dot.target.dead) {
+            dot.target.die();
+            this.onStatKill?.(dot.owner.id, dot.target.id);
+          }
         }
         dot.nextTickAt += dot.tickInterval;
       }
@@ -1351,10 +1389,14 @@ export class ServerEngine {
               this.pendingEvents.push({
                 type: 'combat_event', sourceEntityId: aura.entity.id, targetEntityId: other.id, amount: dmg, combatType: 'damage',
               } as S2C_CombatEvent);
+              this.onStatDamage?.(aura.entity.id, other.id, dmg);
             }
             this.combatSystem.enterCombat(aura.entity);
             this.combatSystem.enterCombat(other);
-            if (other.hp <= 0 && !other.dead) other.die();
+            if (other.hp <= 0 && !other.dead) {
+              other.die();
+              this.onStatKill?.(aura.entity.id, other.id);
+            }
           }
         }
 
@@ -1606,10 +1648,12 @@ export class ServerEngine {
           type: b.definition.type,
           remaining: b.remaining,
           duration: b.definition.duration,
-          description: b.definition.description,
+          description: getBuffDescription(b.definition, b.stacks),
           shieldRemaining: b.shieldRemaining,
           effects: b.definition.effects.length > 0 ? b.definition.effects : undefined,
           unremovable: b.definition.unremovable || undefined,
+          stacks: b.stacks,
+          maxStacks: b.definition.maxStacks,
         })),
         drTimers: drTimers.length > 0 ? drTimers : undefined,
       };

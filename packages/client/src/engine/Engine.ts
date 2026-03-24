@@ -6,6 +6,7 @@ import { PlayerController } from './player/PlayerController';
 import { yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
+import { getCharacterStats } from '@gtr/shared';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
 import { TargetingSystem } from './targeting/TargetingSystem';
@@ -288,12 +289,22 @@ export class Engine {
   applyArenaPreparation(): void {
     this.arenaPreparationActive = true;
     this.buffSystem.apply(this.playerController, ArenaPreparationBuff);
+    this.applyStartingBuffs();
     const script = this.mapManager.getScript();
     if (script) {
       script.onDoorsOpen = () => {
         this.arenaPreparationActive = false;
         this.buffSystem.remove(this.playerController, ArenaPreparationBuff.id);
       };
+    }
+  }
+
+  private applyStartingBuffs(): void {
+    const stats = getCharacterStats(this.playerController.characterId);
+    if (stats.startingBuffs) {
+      for (const buff of stats.startingBuffs) {
+        this.buffSystem.apply(this.playerController, buff);
+      }
     }
   }
 
@@ -309,6 +320,7 @@ export class Engine {
     if (this.arenaPreparationActive) {
       this.buffSystem.apply(this.playerController, ArenaPreparationBuff);
     }
+    this.applyStartingBuffs();
     this.onCharacterChange?.(this.playerController.abilities);
   }
 

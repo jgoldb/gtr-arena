@@ -83,6 +83,25 @@ export class CombatSystem {
     return dot > 0.5;
   }
 
+  /** Check if attacker is behind the target (180° rear arc) */
+  isBehind(
+    attackerPos: THREE.Vector3,
+    targetPos: THREE.Vector3,
+    targetRotY: number
+  ): boolean {
+    const toAttacker = new THREE.Vector3()
+      .subVectors(attackerPos, targetPos)
+      .normalize();
+    const targetForward = new THREE.Vector3(
+      Math.sin(targetRotY),
+      0,
+      Math.cos(targetRotY)
+    );
+    const dot = targetForward.dot(new THREE.Vector3(toAttacker.x, 0, toAttacker.z).normalize());
+    // dot < 0 → attacker is in the 180° arc behind the target
+    return dot < 0;
+  }
+
   /** Roll hit outcome: miss → dodge → crit → normal */
   private rollOutcome(attacker: Targetable, target: Targetable, canDodge = true): 'miss' | 'dodge' | 'crit' | 'normal' {
     const roll = Math.random();
@@ -263,6 +282,11 @@ export class CombatSystem {
           if (this.buffSystem.hasDebuff(target, ability.bonusDamageRequiresDebuff)) {
             baseDamage = Math.round(baseDamage * (1 + ability.bonusDamagePercent / 100));
           }
+        }
+
+        // Shank: 50% bonus damage from behind
+        if (ability.id === 'shank' && this.isBehind(attacker.mesh.position, target.mesh.position, target.mesh.rotation.y)) {
+          baseDamage = Math.round(baseDamage * 1.5);
         }
 
         // Apply attacker's damage dealt modifier (e.g. Retard Strength)

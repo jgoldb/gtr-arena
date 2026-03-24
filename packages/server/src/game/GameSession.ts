@@ -126,6 +126,34 @@ export class GameSession {
     };
     this.engine.onSendToPlayer = (entityId, msg) => this.sendToEntity(entityId, msg);
     this.engine.onGameOver = (winningTeam) => this.handleGameOver(winningTeam);
+
+    // Wire match stat tracking
+    this.engine.onStatDamage = (sourceEntityId, _targetEntityId, amount) => {
+      const userId = this.userIdByEntityId.get(sourceEntityId);
+      if (userId) {
+        const stats = this.matchStats.get(userId);
+        if (stats) stats.damageDealt += amount;
+      }
+    };
+    this.engine.onStatHeal = (sourceEntityId, _targetEntityId, amount) => {
+      const userId = this.userIdByEntityId.get(sourceEntityId);
+      if (userId) {
+        const stats = this.matchStats.get(userId);
+        if (stats) stats.healingDone += amount;
+      }
+    };
+    this.engine.onStatKill = (killerEntityId, victimEntityId) => {
+      const killerUserId = this.userIdByEntityId.get(killerEntityId);
+      if (killerUserId) {
+        const stats = this.matchStats.get(killerUserId);
+        if (stats) stats.kills += 1;
+      }
+      const victimUserId = this.userIdByEntityId.get(victimEntityId);
+      if (victimUserId) {
+        const stats = this.matchStats.get(victimUserId);
+        if (stats) stats.deaths += 1;
+      }
+    };
   }
 
   start(): void {
@@ -413,7 +441,7 @@ export class GameSession {
       gasClouds: fullState.gasClouds,
       chemicalPools: fullState.chemicalPools,
       disconnectedEntityIds,
-      ...(this.gameOver ? { gameOver: { winningTeam: this.getWinningTeam(), playerResults: this.buildPlayerResults() } } : {}),
+      ...(this.gameOver ? { gameOver: { winningTeam: this.getWinningTeam(), playerResults: this.buildPlayerResults(this.getWinningTeam()) } } : {}),
       ...(arenaTimeRemaining !== undefined ? { arenaTimeRemaining } : {}),
     };
     this.sendToUser(userId, rejoinMsg);
@@ -483,15 +511,38 @@ export class GameSession {
     return this.winningTeamResult;
   }
 
-  /** Build results array for all original players (including disconnected). */
-  private buildPlayerResults(): PlayerMatchResult[] {
-    return this.players.map(p => ({
-      userId: p.userId,
-      username: p.username,
-      team: p.team,
-      characterId: p.characterId,
-      stats: this.matchStats.get(p.userId) ?? { kills: 0, deaths: 0, damageDealt: 0, healingDone: 0 },
-    }));
+  /** Build results array for all original players (including disconnected), with pre-computed XP. */
+  private buildPlayerResults(winningTeam: number): PlayerMatchResult[] {
+    // Compute levels and XP gains before building results
+    const playerInfos = new Map<string, { level: number; xpGained: number }>();
+    const infos: { userId: string; dbId: number; team: number; level: number }[] = [];
+    for (const p of this.players) {
+      const dbId = this.auth.getDbId(p.userId);
+      if (dbId == null) continue;
+      const xp = this.db.getUserXp(dbId);
+      infos.push({ userId: p.userId, dbId, team: p.team, level: xpToLevel(xp) });
+    }
+    for (const info of infos) {
+      const won = info.team === winningTeam;
+      const highestOpponentLevel = infos
+        .filter(o => o.team !== info.team)
+        .reduce((max, o) => Math.max(max, o.level), 1);
+      const xpGained = calculateXpGain(info.level, highestOpponentLevel, won);
+      playerInfos.set(info.userId, { level: info.level, xpGained });
+    }
+
+    return this.players.map(p => {
+      const info = playerInfos.get(p.userId);
+      return {
+        userId: p.userId,
+        username: p.username,
+        team: p.team,
+        characterId: p.characterId,
+        stats: this.matchStats.get(p.userId) ?? { kills: 0, deaths: 0, damageDealt: 0, healingDone: 0 },
+        level: info?.level ?? 1,
+        xpGained: info?.xpGained ?? 0,
+      };
+    });
   }
 
   private handleGameOver(winningTeam: number): void {
@@ -505,7 +556,7 @@ export class GameSession {
     this.disconnectedPlayers.clear();
 
     const allPresent = this.allPlayersPresent;
-    const playerResults = this.buildPlayerResults();
+    const playerResults = this.buildPlayerResults(winningTeam);
     const msg: S2C_GameOver = { type: 'game_over', winningTeam, allPlayersPresent: allPresent, playerResults };
     this.broadcast(msg);
 
@@ -520,7 +571,7 @@ export class GameSession {
       }
     }
 
-    // Record stats for ALL players (including disconnected ones)
+    // Record stats and award XP for ALL players (including disconnected ones)
     this.recordStats(winningTeam);
   }
 

@@ -268,6 +268,10 @@ export interface PlayerMatchResult {
   team: number;
   characterId: string;
   stats: PlayerMatchStats;
+  /** Player level at the start of the match (before XP reward). */
+  level: number;
+  /** XP earned from this match. */
+  xpGained: number;
 }
 
 export interface S2C_GameOver {

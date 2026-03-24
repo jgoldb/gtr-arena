@@ -23,6 +23,8 @@ const SLOT_ACTION_IDS = [
   'action_5', 'action_6', 'action_7', 'action_8',
 ];
 
+const LAYOUT_STORAGE_KEY = 'actionbar_layout';
+
 export class ActionBar {
   readonly element: HTMLElement;
   private slots: ActionBarSlot[] = [];
@@ -35,6 +37,7 @@ export class ActionBar {
   private callbacks: ActionBarCallbacks;
   private dragSourceIndex: number | null = null;
   private unsubKeybinds: (() => void) | null = null;
+  private currentCharacterId: string | null = null;
 
   constructor(callbacks: ActionBarCallbacks) {
     this.callbacks = callbacks;
@@ -104,6 +107,52 @@ export class ActionBar {
   clearAllSlots(): void {
     for (let i = 0; i < this.slots.length; i++) {
       this.setSlotAbility(i, null);
+    }
+  }
+
+  /** Load abilities into slots, restoring any saved layout for this character. */
+  loadAbilities(characterId: string, abilities: readonly Ability[]): void {
+    this.currentCharacterId = characterId;
+    this.clearAllSlots();
+
+    const savedOrder = this.getSavedLayout(characterId);
+    if (savedOrder && savedOrder.length === abilities.length) {
+      // Reorder abilities to match saved layout
+      const abilityMap = new Map(abilities.map(ab => [ab.id, ab]));
+      // Verify all saved IDs still exist in the ability list
+      const allValid = savedOrder.every(id => abilityMap.has(id));
+      if (allValid) {
+        savedOrder.forEach((id, i) => this.setSlotAbility(i, abilityMap.get(id)!));
+        return;
+      }
+    }
+
+    // Default: use the natural order
+    abilities.forEach((ab, i) => this.setSlotAbility(i, ab));
+  }
+
+  private getSavedLayout(characterId: string): string[] | null {
+    try {
+      const json = localStorage.getItem(LAYOUT_STORAGE_KEY);
+      if (!json) return null;
+      const layouts = JSON.parse(json);
+      return layouts[characterId] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private saveCurrentLayout(): void {
+    if (!this.currentCharacterId) return;
+    try {
+      const json = localStorage.getItem(LAYOUT_STORAGE_KEY);
+      const layouts = json ? JSON.parse(json) : {};
+      layouts[this.currentCharacterId] = this.slots
+        .map(s => s.ability?.id ?? null)
+        .filter((id): id is string => id !== null);
+      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layouts));
+    } catch {
+      // localStorage unavailable — silently ignore
     }
   }
 
@@ -320,6 +369,7 @@ export class ActionBar {
         this.slots[index].ability = srcAbility;
         this.renderSlot(this.dragSourceIndex);
         this.renderSlot(index);
+        this.saveCurrentLayout();
       }
       this.dragSourceIndex = null;
     });

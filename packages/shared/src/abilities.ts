@@ -12,6 +12,7 @@ export function yardsToUnits(yards: number): number {
 export interface BuffEffect {
   readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'damageDealtPercent' | 'manaCostPercent';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
+  readonly minStacks?: number; // effect only applies when buff has >= this many stacks
 }
 
 export interface BuffDefinition {
@@ -26,6 +27,23 @@ export interface BuffDefinition {
   readonly shieldReflectPercent?: number;  // % of incoming damage reflected to attacker
   readonly unremovable?: boolean;          // true = cannot be right-click cancelled by player
   readonly drCategory?: string;            // diminishing returns category (e.g. 'root', 'stun')
+  // ── Stackable buff fields ──
+  readonly stacks?: number;               // initial stack count when applied
+  readonly maxStacks?: number;            // maximum stacks allowed
+  readonly allowZeroStacks?: boolean;     // if true, buff persists at 0 stacks instead of expiring
+  readonly descriptionPerStackThreshold?: readonly { readonly minStacks: number; readonly line: string }[];
+}
+
+/** Compute buff description including stack-threshold lines. */
+export function getBuffDescription(def: BuffDefinition, stacks?: number): string {
+  if (!def.descriptionPerStackThreshold || stacks === undefined) return def.description;
+  let desc = def.description;
+  for (const threshold of def.descriptionPerStackThreshold) {
+    if (stacks >= threshold.minStacks) {
+      desc += '\n' + threshold.line;
+    }
+  }
+  return desc;
 }
 
 // ── Diminishing Returns ───────────────────────────────────────────────
@@ -251,6 +269,29 @@ export const JanitorsHelperDebuff: BuffDefinition = {
   description: 'Knocked out cold.',
   effects: [{ type: 'sleep', value: 0 }],
   drCategory: 'sleep',
+};
+
+export const TweakingBuff: BuffDefinition = {
+  id: 'tweaking',
+  name: 'Tweaking',
+  icon: '💊',
+  duration: Infinity,
+  type: 'buff',
+  description: 'Gaining crackhead strength.',
+  effects: [
+    { type: 'movementSpeedPercent', value: 15, minStacks: 25 },
+    { type: 'damageDealtPercent', value: 25, minStacks: 50 },
+    { type: 'autoAttackSpeedPercent', value: 40, minStacks: 75 },
+  ],
+  unremovable: true,
+  stacks: 25,
+  maxStacks: 100,
+  allowZeroStacks: true,
+  descriptionPerStackThreshold: [
+    { minStacks: 25, line: '+15% movement speed' },
+    { minStacks: 50, line: '+25% damage dealt' },
+    { minStacks: 75, line: '+40% attack speed' },
+  ],
 };
 
 // ── Ability definitions ─────────────────────────────────────────────────
@@ -496,4 +537,19 @@ export const Kaboom: Ability = {
   requiresHostileTarget: false,
   description:
     'Mix up a potent batch of chemicals, causing an explosion, knocking back enemies in front of you.',
+};
+
+export const Shank: Ability = {
+  id: 'shank',
+  name: 'Shank',
+  icon: '🔪',
+  range: yardsToUnits(3),
+  manaCost: 60,
+  cooldown: 3,
+  damage: 0,
+  damageMin: 200,
+  damageMax: 240,
+  requiresHostileTarget: true,
+  description:
+    'Quick stab dealing 200-240 damage. If used from behind the target, deals 50% bonus damage. +15 Tweaking.',
 };

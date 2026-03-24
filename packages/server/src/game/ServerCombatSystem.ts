@@ -32,6 +32,7 @@ export class ServerCombatSystem {
   onDirectDamageDealt?: (target: ServerEntity) => void;
   onFlinchDamage?: (target: ServerEntity) => void;
   onSleepApplied?: (attacker: ServerEntity, target: ServerEntity) => void;
+  onEntityKilled?: (killer: ServerEntity, victim: ServerEntity) => void;
 
   constructor(regenSystem: ServerRegenSystem, buffSystem: ServerBuffSystem, collision: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -278,6 +279,7 @@ export class ServerCombatSystem {
         if (target.hp <= 0 && !target.dead) {
           target.die();
           this.combatTimers.delete(target);
+          this.onEntityKilled?.(attacker, target);
         }
       }
 
@@ -332,6 +334,7 @@ export class ServerCombatSystem {
     if (target.hp <= 0 && !target.dead) {
       target.die();
       this.combatTimers.delete(target);
+      this.onEntityKilled?.(attacker, target);
     }
   }
 
@@ -384,6 +387,7 @@ export class ServerCombatSystem {
     if (target.hp <= 0 && !target.dead) {
       target.die();
       this.combatTimers.delete(target);
+      this.onEntityKilled?.(attacker, target);
     }
   }
 
@@ -404,6 +408,7 @@ export class ServerCombatSystem {
     if (target.hp <= 0 && !target.dead) {
       target.die();
       this.combatTimers.delete(target);
+      this.onEntityKilled?.(attacker, target);
     }
 
     this.enterCombat(attacker);
@@ -419,6 +424,7 @@ export class ServerCombatSystem {
       if (attacker.hp <= 0 && !attacker.dead) {
         attacker.die();
         this.combatTimers.delete(attacker);
+        this.onEntityKilled?.(target, attacker);
       }
     }
     return remaining;
@@ -457,6 +463,7 @@ export class ServerCombatSystem {
       if (target.hp <= 0 && !target.dead) {
         target.die();
         this.combatTimers.delete(target);
+        this.onEntityKilled?.(attacker, target);
       }
     }
 

@@ -9,6 +9,7 @@ export interface ActiveBuff {
   remaining: number;
   shieldRemaining?: number; // mutable shield HP (only if definition.shieldAmount)
   appliedAt: number;
+  stacks?: number; // current stack count (only for stackable buffs)
 }
 
 interface DREntry {
@@ -70,12 +71,17 @@ export class BuffSystem {
       if (definition.shieldAmount !== undefined) {
         existing.shieldRemaining = definition.shieldAmount;
       }
+      // For stackable buffs, re-applying adds stacks (capped at max)
+      if (definition.maxStacks !== undefined && existing.stacks !== undefined) {
+        existing.stacks = Math.min(existing.stacks + (definition.stacks ?? 1), definition.maxStacks);
+      }
     } else {
       buffs.push({
         definition,
         remaining: effectiveDuration,
         shieldRemaining: definition.shieldAmount,
         appliedAt: Date.now(),
+        stacks: definition.stacks,
       });
       this.onBuffApplied?.(target, definition);
     }
@@ -87,6 +93,34 @@ export class BuffSystem {
     if (!buffs) return;
     const buff = buffs.find(b => b.definition.id === buffId);
     if (buff) buff.remaining = remaining;
+  }
+
+  addStacks(target: Targetable, buffId: string, amount: number): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const buff = buffs.find(b => b.definition.id === buffId);
+    if (buff && buff.stacks !== undefined && buff.definition.maxStacks !== undefined) {
+      buff.stacks = Math.min(buff.stacks + amount, buff.definition.maxStacks);
+    }
+  }
+
+  removeStacks(target: Targetable, buffId: string, amount: number): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const buff = buffs.find(b => b.definition.id === buffId);
+    if (buff && buff.stacks !== undefined) {
+      buff.stacks = Math.max(0, buff.stacks - amount);
+      if (buff.stacks <= 0 && !buff.definition.allowZeroStacks) {
+        this.remove(target, buffId);
+      }
+    }
+  }
+
+  getStacks(target: Targetable, buffId: string): number {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return 0;
+    const buff = buffs.find(b => b.definition.id === buffId);
+    return buff?.stacks ?? 0;
   }
 
   remove(target: Targetable, buffId: string, silent = false): void {
@@ -124,13 +158,17 @@ export class BuffSystem {
     return buffs.some(b => b.definition.id === buffId && b.definition.type === 'buff');
   }
 
+  private isEffectActive(buff: ActiveBuff, effect: BuffEffect): boolean {
+    return effect.minStacks === undefined || (buff.stacks !== undefined && buff.stacks >= effect.minStacks);
+  }
+
   getAutoAttackSpeedMultiplier(target: Targetable): number {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return 1;
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'autoAttackSpeedPercent') {
+        if (effect.type === 'autoAttackSpeedPercent' && this.isEffectActive(buff, effect)) {
           mult += effect.value / 100;
         }
       }
@@ -144,7 +182,7 @@ export class BuffSystem {
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'movementSpeedPercent') {
+        if (effect.type === 'movementSpeedPercent' && this.isEffectActive(buff, effect)) {
           mult += effect.value / 100;
         }
       }
@@ -155,13 +193,13 @@ export class BuffSystem {
   isStunned(target: Targetable): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
-    return buffs.some(b => b.definition.effects.some(e => e.type === 'stun'));
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'stun' && this.isEffectActive(b, e)));
   }
 
   isSleeping(target: Targetable): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
-    return buffs.some(b => b.definition.effects.some(e => e.type === 'sleep'));
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'sleep' && this.isEffectActive(b, e)));
   }
 
   removeSleepEffects(target: Targetable): void {
@@ -181,7 +219,7 @@ export class BuffSystem {
   isDiscombobulated(target: Targetable): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
-    return buffs.some(b => b.definition.effects.some(e => e.type === 'discombobulate'));
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'discombobulate' && this.isEffectActive(b, e)));
   }
 
   getAutoAttackDamageTakenMultiplier(target: Targetable): number {
@@ -190,7 +228,7 @@ export class BuffSystem {
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'autoAttackDamageTakenPercent') {
+        if (effect.type === 'autoAttackDamageTakenPercent' && this.isEffectActive(buff, effect)) {
           mult += effect.value / 100;
         }
       }
@@ -230,7 +268,7 @@ export class BuffSystem {
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'manaCostPercent') {
+        if (effect.type === 'manaCostPercent' && this.isEffectActive(buff, effect)) {
           mult += effect.value / 100;
         }
       }
@@ -244,7 +282,7 @@ export class BuffSystem {
     let mult = 1;
     for (const buff of buffs) {
       for (const effect of buff.definition.effects) {
-        if (effect.type === 'damageDealtPercent') {
+        if (effect.type === 'damageDealtPercent' && this.isEffectActive(buff, effect)) {
           mult += effect.value / 100;
         }
       }
