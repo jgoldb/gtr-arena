@@ -32,6 +32,19 @@ export class TheJanitor extends CharacterModel {
   private declare splashLaunched: boolean;
   private declare splashBucketTilt: number;
 
+  // Rag for Janitor's Helper
+  private declare ragGroup: THREE.Group;
+
+  // Smoke particle state for Janitor's Helper
+  private static readonly SMOKE_PUFF_COUNT = 8;
+  private static readonly SMOKE_DURATION = 0.7;
+  private declare smokePuffs: THREE.Mesh[];
+  private declare smokeVelocities: THREE.Vector3[];
+  private declare smokeMaterial: THREE.MeshStandardMaterial;
+  private declare smokeActive: boolean;
+  private declare smokeTime: number;
+  private declare smokeLaunched: boolean;
+
   // Crash Out visual state
   private crashOutActive = false;
   private crashOutWeight = 0;
@@ -47,7 +60,9 @@ export class TheJanitor extends CharacterModel {
     this.buildLegs();
     this.buildMop();
     this.buildBucket();
+    this.buildRag();
     this.buildSplashDroplets();
+    this.buildSmokePuffs();
   }
 
   // ── Head ───────────────────────────────────────────────
@@ -365,6 +380,113 @@ export class TheJanitor extends CharacterModel {
     this.splashMaterial.opacity = 0.85;
   }
 
+  // ── Rag (Janitor's Helper prop — right hand) ─────────
+
+  private buildRag(): void {
+    this.ragGroup = new THREE.Group();
+
+    // Main cloth body — bunched-up dirty rag
+    const ragCloth = this.createMesh(
+      new THREE.BoxGeometry(0.16, 0.10, 0.12),
+      0xc8c0b0, // dirty off-white
+      { roughness: 1.0 },
+    );
+    this.ragGroup.add(ragCloth);
+
+    // Wrinkled folds for texture
+    const fold1 = this.createMesh(
+      new THREE.BoxGeometry(0.10, 0.04, 0.07),
+      0xb8b0a0,
+      { roughness: 1.0 },
+    );
+    fold1.position.set(0.02, 0.04, 0.01);
+    fold1.rotation.z = 0.3;
+    this.ragGroup.add(fold1);
+
+    const fold2 = this.createMesh(
+      new THREE.BoxGeometry(0.08, 0.04, 0.08),
+      0xbab2a2,
+      { roughness: 1.0 },
+    );
+    fold2.position.set(-0.03, -0.03, -0.02);
+    fold2.rotation.z = -0.2;
+    fold2.rotation.x = 0.15;
+    this.ragGroup.add(fold2);
+
+    // Stain on the rag — yellowish chemical residue
+    const stain = this.createMesh(
+      new THREE.BoxGeometry(0.07, 0.01, 0.06),
+      0xc4b44a,
+      { roughness: 1.0 },
+    );
+    stain.position.set(0.01, 0.05, -0.02);
+    this.ragGroup.add(stain);
+
+    // Position at hand, same spot as mop grip
+    this.ragGroup.position.set(0, -0.50, -0.06);
+    this.ragGroup.visible = false;
+    this.rightArmGroup.add(this.ragGroup);
+  }
+
+  // ── Smoke puffs (Janitor's Helper particles) ────────
+
+  private buildSmokePuffs(): void {
+    this.smokePuffs = [];
+    this.smokeVelocities = [];
+    this.smokeActive = false;
+    this.smokeTime = 0;
+    this.smokeLaunched = false;
+
+    const geo = new THREE.SphereGeometry(0.04, 5, 5);
+    this.smokeMaterial = new THREE.MeshStandardMaterial({
+      color: 0xeeeeee,
+      roughness: 1.0,
+      metalness: 0,
+      transparent: true,
+      opacity: 0.6,
+    });
+
+    for (let i = 0; i < TheJanitor.SMOKE_PUFF_COUNT; i++) {
+      const puff = new THREE.Mesh(geo, this.smokeMaterial);
+      puff.castShadow = false;
+      puff.visible = false;
+      this.group.add(puff);
+      this.smokePuffs.push(puff);
+      this.smokeVelocities.push(new THREE.Vector3());
+    }
+  }
+
+  private launchSmokePuffs(): void {
+    this.smokeLaunched = true;
+    this.smokeActive = true;
+    this.smokeTime = 0;
+
+    // Get rag position in group-local space
+    this.ragGroup.children[0].updateWorldMatrix(true, false);
+    const worldPos = new THREE.Vector3();
+    this.ragGroup.children[0].getWorldPosition(worldPos);
+    this.group.worldToLocal(worldPos);
+
+    for (let i = 0; i < TheJanitor.SMOKE_PUFF_COUNT; i++) {
+      const puff = this.smokePuffs[i];
+      puff.visible = true;
+      puff.scale.setScalar(0.5 + Math.random() * 0.8);
+      puff.position.copy(worldPos);
+
+      // Smoke drifts upward and forward with random spread
+      const spreadH = (Math.random() - 0.5) * 1.2;
+      const speedFwd = 0.8 + Math.random() * 1.2;
+      const speedUp = 1.0 + Math.random() * 1.5;
+      this.smokeVelocities[i].set(
+        Math.sin(spreadH) * speedFwd,
+        speedUp,
+        -Math.cos(spreadH) * speedFwd * 0.5,
+      );
+    }
+
+    this.smokeMaterial.opacity = 0.6;
+  }
+
   // ── Character-specific animation ──────────────────────
 
   protected override onAnimate(dt: number, _input: AnimationInput): void {
@@ -405,6 +527,28 @@ export class TheJanitor extends CharacterModel {
       }
     }
 
+    // Update smoke puffs (Janitor's Helper)
+    if (this.smokeActive) {
+      this.smokeTime += dt;
+      const life = this.smokeTime / TheJanitor.SMOKE_DURATION;
+
+      for (let i = 0; i < this.smokePuffs.length; i++) {
+        const p = this.smokePuffs[i];
+        if (!p.visible) continue;
+        p.position.addScaledVector(this.smokeVelocities[i], dt);
+        // Smoke decelerates and expands as it rises
+        this.smokeVelocities[i].multiplyScalar(1 - 1.5 * dt);
+        p.scale.multiplyScalar(1 + 1.2 * dt);
+      }
+
+      this.smokeMaterial.opacity = 0.6 * Math.max(0, 1 - life);
+
+      if (life >= 1) {
+        this.smokeActive = false;
+        for (const p of this.smokePuffs) p.visible = false;
+      }
+    }
+
     // Crash Out visual: scale up + red tint
     const wantCrash = this.crashOutActive ? 1 : 0;
     this.crashOutWeight += (wantCrash - this.crashOutWeight) * Math.min(1, 8 * dt);
@@ -435,6 +579,7 @@ export class TheJanitor extends CharacterModel {
     if (abilityId === 'fart-bomb') return 0.6;
     if (abilityId === 'sweep') return 1.0;
     if (abilityId === 'jimmy-legs') return 0.7;
+    if (abilityId === 'janitors-helper') return 0.8;
     return 0.6; // bucket-splash default
   }
 
@@ -453,6 +598,8 @@ export class TheJanitor extends CharacterModel {
       this.animateSweep(t);
     } else if (abilityId === 'jimmy-legs') {
       this.animateJimmyLegs(t);
+    } else if (abilityId === 'janitors-helper') {
+      this.animateJanitorsHelper(t);
     }
   }
 
@@ -801,6 +948,115 @@ export class TheJanitor extends CharacterModel {
     this.mopGroup.rotation.z = 0;
   }
 
+  private animateJanitorsHelper(t: number): void {
+    let rightArmX: number;
+    let rightArmZ: number;
+    let leftArmX: number;
+    let leftArmZ: number;
+    let bodyRotX: number;
+    let bodyY: number;
+
+    if (t < 0.18) {
+      // Sheath: hide bucket + mop, whip out rag, pull arm back
+      this.smokeLaunched = false;
+      const p = t / 0.18;
+      const ease = p * p;
+      rightArmX = -0.8 * ease;    // Pull right arm back and up
+      rightArmZ = -0.15 * ease;   // Tuck inward slightly
+      leftArmX = 0.15 * ease;     // Left arm drops to side
+      leftArmZ = 0.1 * ease;      // Relax outward
+      bodyRotX = -0.06 * ease;     // Lean back slightly (winding up)
+      bodyY = 0;
+      this.mopGroup.visible = ease < 0.3;
+      this.bucketGroup.visible = ease < 0.3;
+      this.ragGroup.visible = ease > 0.3;
+    } else if (t < 0.50) {
+      // Thrust: lunge forward, press rag up and out at face height
+      const p = (t - 0.18) / 0.32;
+      const ease = 1 - Math.pow(1 - p, 3);
+      rightArmX = -0.8 + 2.0 * ease;  // Arm swings forward and up
+      rightArmZ = -0.15 + 0.05 * ease;
+      leftArmX = 0.15;                 // Left arm stays relaxed
+      leftArmZ = 0.1;
+      bodyRotX = -0.06 + 0.32 * ease;  // Body lunges forward
+      bodyY = -0.05 * ease;             // Crouch into the lunge
+
+      this.mopGroup.visible = false;
+      this.bucketGroup.visible = false;
+      this.ragGroup.visible = true;
+
+      // Launch smoke at peak thrust
+      if (!this.smokeLaunched && p > 0.5) {
+        this.launchSmokePuffs();
+      }
+    } else {
+      // Recovery: rag disappears, mop + bucket return
+      const p = (t - 0.50) / 0.50;
+      const ease = p * p * (3 - 2 * p);
+      rightArmX = 1.2 * (1 - ease);
+      rightArmZ = -0.1 * (1 - ease);
+      leftArmX = 0.15 * (1 - ease);
+      leftArmZ = 0.1 * (1 - ease);
+      bodyRotX = 0.26 * (1 - ease);
+      bodyY = -0.05 * (1 - ease);
+      this.ragGroup.visible = ease < 0.4;
+      this.mopGroup.visible = ease > 0.4;
+      this.bucketGroup.visible = ease > 0.4;
+    }
+
+    this.rightArmGroup.rotation.x += rightArmX;
+    this.rightArmGroup.rotation.z += rightArmZ;
+    this.leftArmGroup.rotation.x += leftArmX;
+    this.leftArmGroup.rotation.z += leftArmZ;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.bodyGroup.position.y += bodyY;
+
+    // Ensure mop returns to default rotation when reappearing
+    if (this.mopGroup.visible) {
+      this.mopGroup.rotation.x = TheJanitor.MOP_BASE_ROT_X;
+      this.mopGroup.rotation.z = 0;
+    }
+  }
+
+  // ── Janitor's Helper cast animation (wringing the rag) ────
+  protected override animateCasting(abilityId: string, t: number): void {
+    if (abilityId === 'janitors-helper') {
+      this.animateJanitorsHelperCast(t);
+    }
+  }
+
+  private animateJanitorsHelperCast(t: number): void {
+    // Quick blend-in over first 12% of cast
+    const blend = Math.min(1, t / 0.12);
+
+    // Hide mop & bucket, show rag
+    this.mopGroup.visible = blend < 0.3;
+    this.bucketGroup.visible = blend < 0.3;
+    this.ragGroup.visible = blend > 0.3;
+
+    // Both arms come forward and inward — hands meet to wring the rag
+    this.leftArmGroup.rotation.x += 1.2 * blend;
+    this.leftArmGroup.rotation.z += 0.5 * blend;
+    this.rightArmGroup.rotation.x += 1.2 * blend;
+    this.rightArmGroup.rotation.z -= 0.5 * blend;
+
+    // Wringing motion — alternating twist
+    const wringSpeed = 16;
+    const wring = Math.sin(t * wringSpeed) * 0.15 * blend;
+    this.leftArmGroup.rotation.x += wring;
+    this.rightArmGroup.rotation.x -= wring;
+
+    // Slight cross-arm rocking
+    const rock = Math.sin(t * wringSpeed * 0.5) * 0.08 * blend;
+    this.leftArmGroup.rotation.z += rock;
+    this.rightArmGroup.rotation.z -= rock;
+
+    // Body hunches forward over the rag
+    this.bodyGroup.rotation.x -= 0.15 * blend;
+    // Head looks down at hands
+    this.headGroup.rotation.x -= 0.2 * blend;
+  }
+
   protected override animateCombatStance(weight: number): void {
     // Legs into fighting stance — spread apart, slight bend
     this.leftLegGroup.rotation.z -= 0.15 * weight;
@@ -864,9 +1120,13 @@ export class TheJanitor extends CharacterModel {
     this.splashActive = false;
     this.splashBucketTilt = 0;
     this.bucketGroup.visible = true;
+    this.mopGroup.visible = true;
     this.mopGroup.rotation.x = TheJanitor.MOP_BASE_ROT_X;
     this.mopGroup.rotation.z = 0;
+    this.ragGroup.visible = false;
+    this.smokeActive = false;
     for (const d of this.splashDroplets) d.visible = false;
+    for (const p of this.smokePuffs) p.visible = false;
     // Reset crash out visual
     this.crashOutActive = false;
     this.crashOutWeight = 0;

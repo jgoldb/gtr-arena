@@ -210,6 +210,9 @@ export class Engine {
     // Direct damage pushback for casting/channeling (DoT damage bypasses CombatSystem, so no pushback)
     // Also cancels resting on the first hit taken
     this.combatSystem.onDirectDamageDealt = (target) => {
+      if (this.buffSystem.isSleeping(target)) {
+        this.buffSystem.removeSleepEffects(target);
+      }
       if (target === this.playerController && this.resting) {
         this.stopResting();
       }
@@ -225,6 +228,12 @@ export class Engine {
             maxTime
           );
         }
+      }
+    };
+
+    this.combatSystem.onSleepApplied = (_attacker, target) => {
+      if (target === this.autoAttackTarget && this.autoAttacking) {
+        this.stopAutoAttack();
       }
     };
 
@@ -458,7 +467,7 @@ export class Engine {
   ): import('./combat/CombatSystem').CombatResult {
     const attacker = this.playerController;
     if (attacker.dead) return { success: false, error: 'dead', errorMessage: 'You are dead' };
-    if (this.buffSystem.isStunned(attacker)) return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
+    if (this.buffSystem.isStunned(attacker) || this.buffSystem.isSleeping(attacker)) return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     if (!this.godMode && this.combatSystem.getCooldownRemaining(ability.id) > 0) {
       return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
     }
@@ -593,7 +602,7 @@ export class Engine {
     }
     if (this.playerController.isMoving) return false;
     if (this.casting) return false;
-    if (this.buffSystem.isStunned(this.playerController)) return false;
+    if (this.buffSystem.isStunned(this.playerController) || this.buffSystem.isSleeping(this.playerController)) return false;
 
     this.resting = true;
     this.stopAutoAttack();
@@ -1507,8 +1516,8 @@ export class Engine {
       this.stopResting();
     }
 
-    // Stun state — player
-    const playerStunned = this.buffSystem.isStunned(this.playerController);
+    // Stun/sleep state — player
+    const playerStunned = this.buffSystem.isStunned(this.playerController) || this.buffSystem.isSleeping(this.playerController);
     this.playerController.setStunned(playerStunned);
     if (playerStunned && this.autoAttacking) {
       this.stopAutoAttack();
@@ -1529,9 +1538,9 @@ export class Engine {
       this.buffSystem.isDiscombobulated(this.playerController)
     );
 
-    // Stun state — NPCs
+    // Stun/sleep state — NPCs
     for (const npc of this.npcs) {
-      npc.setStunned(this.buffSystem.isStunned(npc));
+      npc.setStunned(this.buffSystem.isStunned(npc) || this.buffSystem.isSleeping(npc));
     }
 
     // Update casting / channeling

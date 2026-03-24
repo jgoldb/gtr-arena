@@ -29,6 +29,7 @@ export class CombatSystem {
   onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: Targetable) => void;
   onFlinchDamage?: (target: Targetable) => void;
+  onSleepApplied?: (attacker: Targetable, target: Targetable) => void;
   onHostileAction?: (attacker: Targetable, target: Targetable) => void;
   onEnterCombat?: (entity: Targetable) => void;
   onLeaveCombat?: (entity: Targetable) => void;
@@ -289,6 +290,9 @@ export class CombatSystem {
         // Apply debuff only on hit
         if (ability.appliesDebuff) {
           this.buffSystem.apply(target, ability.appliesDebuff);
+          if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
+            this.onSleepApplied?.(attacker, target);
+          }
         }
 
         // Check for kill
@@ -404,6 +408,9 @@ export class CombatSystem {
     // Apply debuff on hit
     if (ability.appliesDebuff) {
       this.buffSystem.apply(target, ability.appliesDebuff);
+      if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
+        this.onSleepApplied?.(attacker, target);
+      }
     }
 
     this.enterCombat(attacker);

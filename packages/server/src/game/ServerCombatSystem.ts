@@ -31,6 +31,7 @@ export class ServerCombatSystem {
   onCombatText?: (source: ServerEntity, target: ServerEntity, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: ServerEntity) => void;
   onFlinchDamage?: (target: ServerEntity) => void;
+  onSleepApplied?: (attacker: ServerEntity, target: ServerEntity) => void;
 
   constructor(regenSystem: ServerRegenSystem, buffSystem: ServerBuffSystem, collision: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -269,6 +270,9 @@ export class ServerCombatSystem {
 
         if (ability.appliesDebuff) {
           this.buffSystem.apply(target, ability.appliesDebuff);
+          if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
+            this.onSleepApplied?.(attacker, target);
+          }
         }
 
         if (target.hp <= 0 && !target.dead) {
@@ -369,6 +373,9 @@ export class ServerCombatSystem {
     // Apply debuff on hit
     if (ability.appliesDebuff) {
       this.buffSystem.apply(target, ability.appliesDebuff);
+      if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
+        this.onSleepApplied?.(attacker, target);
+      }
     }
 
     this.enterCombat(attacker);

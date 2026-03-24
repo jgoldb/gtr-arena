@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'gtr_frame_positions';
+const STORAGE_KEY = 'gtr_frame_positions_pct';
 const GRID_SIZE = 160;
 const SNAP_THRESHOLD = 15;
 
@@ -6,14 +6,15 @@ interface FrameConfig {
   id: string;
   element: HTMLElement;
   wrapper: HTMLElement;
-  defaultPosition: { top: number; left: number };
+  defaultPct: { top: number; left: number };   // 0–1 viewport fractions
+  positionPct: { top: number; left: number };   // current position as 0–1
   locked: boolean;
   originalCursor: string;
 }
 
 interface SavedPosition {
-  top: number;
-  left: number;
+  top: number;   // 0–1
+  left: number;  // 0–1
   locked: boolean;
 }
 
@@ -24,13 +25,29 @@ export class UnitFramePositioner {
   private dragging: FrameConfig | null = null;
   private dragOffset = { x: 0, y: 0 };
 
+  constructor() {
+    window.addEventListener('resize', this.onResize);
+  }
+
+  private onResize = (): void => {
+    for (const config of this.frames.values()) {
+      this.applyPctPosition(config);
+    }
+  };
+
+  /** Convert default pixel position to 0–1 fraction of current viewport. */
   register(
     id: string,
     element: HTMLElement,
     defaultPosition: { top: number; left: number },
   ): HTMLElement {
+    const defaultPct = {
+      top: defaultPosition.top / window.innerHeight,
+      left: defaultPosition.left / window.innerWidth,
+    };
+
     const saved = this.loadPosition(id);
-    const pos = saved ?? defaultPosition;
+    const positionPct = saved ?? defaultPct;
     const locked = saved?.locked ?? true;
     const originalCursor = element.style.cursor;
 
@@ -41,16 +58,15 @@ export class UnitFramePositioner {
     wrapper.style.cssText = `
       position: fixed;
       z-index: 200;
-      top: ${pos.top}px;
-      left: ${pos.left}px;
       pointer-events: none;
     `;
     wrapper.appendChild(element);
 
     const config: FrameConfig = {
-      id, element, wrapper, defaultPosition, locked, originalCursor,
+      id, element, wrapper, defaultPct, positionPct: { ...positionPct }, locked, originalCursor,
     };
     this.frames.set(id, config);
+    this.applyPctPosition(config);
 
     if (!locked) this.applyUnlockedStyle(config);
 
@@ -78,6 +94,7 @@ export class UnitFramePositioner {
   }
 
   dispose(): void {
+    window.removeEventListener('resize', this.onResize);
     this.closeContextMenu();
     this.hideGrid();
     this.stopDrag();
@@ -85,6 +102,27 @@ export class UnitFramePositioner {
       config.wrapper.remove();
     }
     this.frames.clear();
+  }
+
+  // ─── Position Helpers ─────────────────────────────────────────
+
+  private applyPctPosition(config: FrameConfig): void {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const top = Math.max(0, Math.min(Math.round(config.positionPct.top * vh), vh - 20));
+    const left = Math.round(config.positionPct.left * vw);
+    // Clamp so the frame can't extend past the right edge
+    const width = config.wrapper.getBoundingClientRect().width || config.element.offsetWidth || 0;
+    const maxLeft = Math.max(0, vw - width);
+    config.wrapper.style.top = `${top}px`;
+    config.wrapper.style.left = `${Math.min(left, maxLeft)}px`;
+  }
+
+  private pxToPct(top: number, left: number): { top: number; left: number } {
+    return {
+      top: window.innerHeight > 0 ? top / window.innerHeight : 0,
+      left: window.innerWidth > 0 ? left / window.innerWidth : 0,
+    };
   }
 
   // ─── Drag ──────────────────────────────────────────────────────
@@ -125,7 +163,8 @@ export class UnitFramePositioner {
     if (!this.dragging) return;
     const config = this.dragging;
     const rect = config.wrapper.getBoundingClientRect();
-    this.savePosition(config.id, Math.round(rect.top), Math.round(rect.left), config.locked);
+    config.positionPct = this.pxToPct(rect.top, rect.left);
+    this.savePosition(config.id, config.positionPct, config.locked);
     config.wrapper.style.zIndex = '200';
     this.dragging = null;
     this.hideGrid();
@@ -193,18 +232,17 @@ export class UnitFramePositioner {
         config.locked = !config.locked;
         if (config.locked) this.removeUnlockedStyle(config);
         else this.applyUnlockedStyle(config);
-        const r = config.wrapper.getBoundingClientRect();
-        this.savePosition(config.id, Math.round(r.top), Math.round(r.left), config.locked);
+        this.savePosition(config.id, config.positionPct, config.locked);
         this.closeContextMenu();
       }),
     );
 
     menu.appendChild(
       this.menuItem('Reset Position', () => {
-        config.wrapper.style.top = `${config.defaultPosition.top}px`;
-        config.wrapper.style.left = `${config.defaultPosition.left}px`;
+        config.positionPct = { ...config.defaultPct };
         config.locked = true;
         this.removeUnlockedStyle(config);
+        this.applyPctPosition(config);
         this.deletePosition(config.id);
         this.closeContextMenu();
       }),
@@ -289,10 +327,10 @@ export class UnitFramePositioner {
     }
   }
 
-  private savePosition(id: string, top: number, left: number, locked: boolean): void {
+  private savePosition(id: string, pct: { top: number; left: number }, locked: boolean): void {
     try {
       const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-      data[id] = { top, left, locked };
+      data[id] = { top: pct.top, left: pct.left, locked };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch { /* ignore */ }
   }

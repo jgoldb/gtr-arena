@@ -10,7 +10,7 @@ export function yardsToUnits(yards: number): number {
 // ── Buff/debuff system types ────────────────────────────────────────────
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'discombobulate' | 'damageDealtPercent' | 'manaCostPercent';
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'damageDealtPercent' | 'manaCostPercent';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
 }
 
@@ -242,6 +242,17 @@ export const ArenaPreparationBuff: BuffDefinition = {
   unremovable: true,
 };
 
+export const JanitorsHelperDebuff: BuffDefinition = {
+  id: 'janitors-helper',
+  name: "Janitor's Helper",
+  icon: '😴',
+  duration: 10,
+  type: 'debuff',
+  description: 'Knocked out cold.',
+  effects: [{ type: 'sleep', value: 0 }],
+  drCategory: 'sleep',
+};
+
 // ── Ability definitions ─────────────────────────────────────────────────
 
 export const Sweep: Ability = {
@@ -458,6 +469,21 @@ export const JimmyLegs: Ability = {
   description:
     'Inflicts the target with the Jimmy Legs, reducing movement speed by 50% for 5 seconds. If used on a target with Jimmy Legs, the target will become immobilized for 2 seconds.',
   appliesDebuff: JimmyLegsDebuff,
+};
+
+export const JanitorsHelper: Ability = {
+  id: 'janitors-helper',
+  name: "Janitor's Helper",
+  icon: '😴',
+  range: yardsToUnits(5),
+  manaCost: 175,
+  cooldown: 30,
+  castTime: 0.5,
+  damage: 0,
+  requiresHostileTarget: true,
+  description:
+    'Spray a cocktail of ammonia and bleach at your target, putting them to sleep for 10 seconds.',
+  appliesDebuff: JanitorsHelperDebuff,
 };
 
 export const Kaboom: Ability = {

@@ -8,6 +8,7 @@ export interface ActiveBuff {
   readonly definition: BuffDefinition;
   remaining: number;
   shieldRemaining?: number; // mutable shield HP (only if definition.shieldAmount)
+  appliedAt: number;
 }
 
 interface DREntry {
@@ -16,6 +17,9 @@ interface DREntry {
   lastBuffId: string;
   lastIcon: string;
 }
+
+/** Brief window after sleep application where damage won't break it (ms) */
+const SLEEP_GRACE_PERIOD_MS = 50;
 
 export class BuffSystem {
   private activeBuffs = new Map<Targetable, ActiveBuff[]>();
@@ -62,6 +66,7 @@ export class BuffSystem {
     const existing = buffs.find(b => b.definition.id === definition.id);
     if (existing) {
       existing.remaining = effectiveDuration;
+      existing.appliedAt = Date.now();
       if (definition.shieldAmount !== undefined) {
         existing.shieldRemaining = definition.shieldAmount;
       }
@@ -70,6 +75,7 @@ export class BuffSystem {
         definition,
         remaining: effectiveDuration,
         shieldRemaining: definition.shieldAmount,
+        appliedAt: Date.now(),
       });
       this.onBuffApplied?.(target, definition);
     }
@@ -150,6 +156,26 @@ export class BuffSystem {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
     return buffs.some(b => b.definition.effects.some(e => e.type === 'stun'));
+  }
+
+  isSleeping(target: Targetable): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'sleep'));
+  }
+
+  removeSleepEffects(target: Targetable): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const now = Date.now();
+    for (let i = buffs.length - 1; i >= 0; i--) {
+      if (buffs[i].definition.effects.some(e => e.type === 'sleep')) {
+        if (now - buffs[i].appliedAt < SLEEP_GRACE_PERIOD_MS) continue;
+        const removed = buffs.splice(i, 1)[0];
+        this.onBuffExpired?.(target, removed.definition);
+      }
+    }
+    if (buffs.length === 0) this.activeBuffs.delete(target);
   }
 
   isDiscombobulated(target: Targetable): boolean {

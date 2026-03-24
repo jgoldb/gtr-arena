@@ -967,6 +967,8 @@ export class DrRetardo extends CharacterModel {
       this.animateRetardStrengthCast(t);
     } else if (abilityId === 'full-retard') {
       this.animateFullRetardCast(t);
+    } else if (abilityId === 'crotch-rot') {
+      this.animateCrotchRotCast(t);
     }
   }
 
@@ -1079,6 +1081,38 @@ export class DrRetardo extends CharacterModel {
     const armShake = Math.sin(t * shakeSpeed * 1.1 + 1) * 0.06 * shakeIntensity;
     this.leftArmGroup.rotation.x += armShake;
     this.rightArmGroup.rotation.x -= armShake;
+  }
+
+  // ── Crotch Rot cast animation (hunched stirring a foul concoction) ────
+  private animateCrotchRotCast(t: number): void {
+    // Quick blend-in over first 12% of cast
+    const blend = Math.min(1, t / 0.12);
+
+    // One arm forward holding flask, other hand stirs — asymmetric pose
+    this.leftArmGroup.rotation.x += 1.0 * blend;
+    this.leftArmGroup.rotation.z += 0.4 * blend;
+    this.rightArmGroup.rotation.x += 1.4 * blend;
+    this.rightArmGroup.rotation.z -= 0.3 * blend;
+
+    // Stirring motion — circular pattern on the right hand
+    const stirSpeed = 14;
+    const stirX = Math.sin(t * stirSpeed) * 0.18 * blend;
+    const stirZ = Math.cos(t * stirSpeed) * 0.1 * blend;
+    this.rightArmGroup.rotation.x += stirX;
+    this.rightArmGroup.rotation.z += stirZ;
+
+    // Left arm holds steady with a slight tremor
+    const tremor = Math.sin(t * stirSpeed * 1.7) * 0.04 * blend;
+    this.leftArmGroup.rotation.x += tremor;
+
+    // Body hunches forward, leaning into the concoction
+    this.bodyGroup.rotation.x -= 0.18 * blend;
+    // Head peers down at hands
+    this.headGroup.rotation.x -= 0.25 * blend;
+
+    // Slight side-to-side sway as he stirs
+    const sway = Math.sin(t * stirSpeed * 0.4) * 0.05 * blend;
+    this.bodyGroup.rotation.z += sway;
   }
 
   private animateDiscombobCelebration(t: number): void {

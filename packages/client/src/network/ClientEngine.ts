@@ -515,6 +515,9 @@ export class ClientEngine {
       const entity = this.remoteEntities.get(delta.id);
       if (!entity) continue;
 
+      // Detect cast start for auto-targeting
+      const wasCasting = entity.castingAbilityId;
+
       if (delta.hp !== undefined) entity.hp = delta.hp;
       if (delta.maxHp !== undefined) entity.maxHp = delta.maxHp;
       if (delta.mana !== undefined) entity.mana = delta.mana;
@@ -530,6 +533,12 @@ export class ClientEngine {
       if (delta.castingIsChannel !== undefined) entity.castingIsChannel = delta.castingIsChannel;
       if ('targetEntityId' in delta) entity.targetEntityId = delta.targetEntityId!;
       if (delta.disconnected !== undefined) entity.disconnected = delta.disconnected;
+
+      // Auto-target hostile entity that begins casting on us
+      if (!wasCasting && entity.castingAbilityId && entity.targetEntityId === this.localEntityId
+          && !this.selectedTargetId && entity.team !== this.playerController.team) {
+        this.selectTarget(entity.targetable);
+      }
     }
   }
 

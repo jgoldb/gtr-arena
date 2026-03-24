@@ -218,6 +218,9 @@ export class ServerEngine {
     };
 
     this.combatSystem.onDirectDamageDealt = (target) => {
+      if (this.buffSystem.isSleeping(target)) {
+        this.buffSystem.removeSleepEffects(target);
+      }
       this.cancelResting(target.id);
       const casting = this.castingStates.get(target.id);
       if (casting) {
@@ -227,6 +230,13 @@ export class ServerEngine {
           const maxTime = casting.originalCastTime * 2;
           casting.totalTime = Math.min(casting.totalTime + ServerEngine.CAST_PUSHBACK, maxTime);
         }
+      }
+    };
+
+    this.combatSystem.onSleepApplied = (attacker, target) => {
+      const aa = this.autoAttacks.get(attacker.id);
+      if (aa && aa.target === target) {
+        this.stopAutoAttack(attacker.id);
       }
     };
   }
@@ -290,6 +300,7 @@ export class ServerEngine {
     this.cancelCasting(entityId);
     this.stopAutoAttack(entityId);
     this.cancelResting(entityId);
+    this.targets.set(entityId, null);
     if (entity.charging) {
       entity.charging = false;
       this.sweepCharges.delete(entityId);
@@ -445,7 +456,7 @@ export class ServerEngine {
   /** Execute a ground-targeted AoE ability at a world position. Consumes resources immediately, delays damage until impact. */
   private useGroundTargetAbility(entity: ServerEntity, ability: Ability, groundX: number, groundZ: number): { success: boolean; errorMessage?: string } {
     if (entity.dead) return { success: false, errorMessage: 'You are dead' };
-    if (this.buffSystem.isStunned(entity)) return { success: false, errorMessage: 'You are stunned' };
+    if (this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity)) return { success: false, errorMessage: 'You are stunned' };
     if (!entity.godMode && this.combatSystem.getCooldownRemaining(entity.id, ability.id) > 0) {
       return { success: false, errorMessage: 'Ability is not ready yet' };
     }
@@ -507,7 +518,7 @@ export class ServerEngine {
     if (resting) {
       if (entity.inCombat) return;
       if (entity.isMoving) return;
-      if (this.buffSystem.isStunned(entity)) return;
+      if (this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity)) return;
       if (this.castingStates.has(entityId)) return;
       this.stopAutoAttack(entityId);
       this.buffSystem.apply(entity, RestingBuff);
@@ -611,7 +622,7 @@ export class ServerEngine {
     for (const entity of this.entities) {
       entity.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(entity)
         * (entity.godMode ? 4 : 1); // God mode: +300% movement speed
-      entity.stunned = this.buffSystem.isStunned(entity);
+      entity.stunned = this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity);
       entity.setDiscombobulated(this.buffSystem.isDiscombobulated(entity));
 
       if (entity.stunned) {

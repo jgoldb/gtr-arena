@@ -6,6 +6,7 @@ export interface ActiveBuff {
   readonly definition: BuffDefinition;
   remaining: number;
   shieldRemaining?: number;
+  appliedAt: number;
 }
 
 interface DREntry {
@@ -14,6 +15,9 @@ interface DREntry {
   lastBuffId: string;
   lastIcon: string;
 }
+
+/** Brief window after sleep application where damage won't break it (ms) */
+const SLEEP_GRACE_PERIOD_MS = 50;
 
 export class ServerBuffSystem {
   private activeBuffs = new Map<ServerEntity, ActiveBuff[]>();
@@ -58,6 +62,7 @@ export class ServerBuffSystem {
     const existing = buffs.find(b => b.definition.id === definition.id);
     if (existing) {
       existing.remaining = effectiveDuration;
+      existing.appliedAt = Date.now();
       if (definition.shieldAmount !== undefined) {
         existing.shieldRemaining = definition.shieldAmount;
       }
@@ -66,6 +71,7 @@ export class ServerBuffSystem {
         definition,
         remaining: effectiveDuration,
         shieldRemaining: definition.shieldAmount,
+        appliedAt: Date.now(),
       });
     }
     return true;
@@ -142,6 +148,25 @@ export class ServerBuffSystem {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
     return buffs.some(b => b.definition.effects.some(e => e.type === 'stun'));
+  }
+
+  isSleeping(target: ServerEntity): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'sleep'));
+  }
+
+  removeSleepEffects(target: ServerEntity): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const now = Date.now();
+    for (let i = buffs.length - 1; i >= 0; i--) {
+      if (buffs[i].definition.effects.some(e => e.type === 'sleep')) {
+        if (now - buffs[i].appliedAt < SLEEP_GRACE_PERIOD_MS) continue;
+        buffs.splice(i, 1);
+      }
+    }
+    if (buffs.length === 0) this.activeBuffs.delete(target);
   }
 
   isDiscombobulated(target: ServerEntity): boolean {

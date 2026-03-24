@@ -1,6 +1,6 @@
 import type { Ability } from './abilities.js';
 import {
-  Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs,
+  Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper,
   BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom,
 } from './abilities.js';
 
@@ -46,7 +46,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.17,
     hpRegen: 32,
     manaRegen: 12,
-    abilities: [Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs],
+    abilities: [Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper],
   },
   'dr-retardo': {
     id: 'dr-retardo',
