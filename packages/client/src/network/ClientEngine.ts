@@ -92,6 +92,7 @@ export class ClientEngine {
   private localCastingElapsed = 0;
   private localCastingTotalTime = 0;
   private localCastingIsChannel = false;
+  private localTargetEntityId: string | null = null;
 
   // Local entity buffs (from server snapshots)
   private localBuffs: EntityBuffSnapshot['buffs'] = [];
@@ -496,6 +497,7 @@ export class ClientEngine {
         if (delta.castingElapsed !== undefined) this.localCastingElapsed = delta.castingElapsed;
         if (delta.castingTotalTime !== undefined) this.localCastingTotalTime = delta.castingTotalTime;
         if (delta.castingIsChannel !== undefined) this.localCastingIsChannel = delta.castingIsChannel;
+        if ('targetEntityId' in delta) this.localTargetEntityId = delta.targetEntityId!;
         continue;
       }
 
@@ -539,6 +541,7 @@ export class ClientEngine {
     this.localCastingElapsed = snap.castingElapsed;
     this.localCastingTotalTime = snap.castingTotalTime;
     this.localCastingIsChannel = snap.castingIsChannel;
+    this.localTargetEntityId = snap.targetEntityId;
   }
 
   /** Apply full state from a keyframe snapshot to a remote entity. */
@@ -1255,10 +1258,10 @@ export class ClientEngine {
     let casterPos: THREE.Vector3 | null = null;
     let targetPos: THREE.Vector3 | null = null;
 
-    // Check local player
-    if (this.localCastingAbilityId && this.localCastingIsChannel && this.selectedTargetId) {
+    // Check local player — use server-authoritative target, not current UI selection
+    if (this.localCastingAbilityId && this.localCastingIsChannel && this.localTargetEntityId) {
       casterPos = this.playerController.mesh.position;
-      const targetMesh = this.getEntityMesh(this.selectedTargetId);
+      const targetMesh = this.getEntityMesh(this.localTargetEntityId);
       if (targetMesh) targetPos = targetMesh.position;
     }
 

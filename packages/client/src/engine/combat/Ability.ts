@@ -24,6 +24,9 @@ export {
   Chudmax,
   FullRetardBuff,
   FullRetard,
+  CrotchRotDot,
+  RottenCrotchStun,
+  CrotchRot,
   ArenaPreparationBuff,
   RestingBuff,
 } from '@gtr/shared';

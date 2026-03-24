@@ -174,6 +174,26 @@ export const RestingBuff: BuffDefinition = {
   effects: [],
 };
 
+export const CrotchRotDot: BuffDefinition = {
+  id: 'crotch-rot',
+  name: 'Crotch Rot',
+  icon: '🦠',
+  duration: 9,
+  type: 'debuff',
+  description: 'Taking 180 damage every 3 seconds. Stuns for 2 seconds when effect ends.',
+  effects: [],
+};
+
+export const RottenCrotchStun: BuffDefinition = {
+  id: 'rotten-crotch',
+  name: 'Rotten Crotch',
+  icon: '🤢',
+  duration: 2,
+  type: 'debuff',
+  description: 'Stunned by a thoroughly rotten crotch.',
+  effects: [{ type: 'stun', value: 0 }],
+};
+
 export const ArenaPreparationBuff: BuffDefinition = {
   id: 'arena-preparation',
   name: 'Arena Preparation',
@@ -372,4 +392,19 @@ export const FullRetard: Ability = {
   description:
     'Never go full retard. But if you do...',
   appliesSelfBuff: FullRetardBuff,
+};
+
+export const CrotchRot: Ability = {
+  id: 'crotch-rot',
+  name: 'Crotch Rot',
+  icon: '🦠',
+  range: yardsToUnits(15),
+  manaCost: 200,
+  cooldown: 16,
+  castTime: 0.5,
+  damage: 0,
+  requiresHostileTarget: true,
+  description:
+    'Deals 540 damage over 9 seconds. Stuns for 2 seconds when effect ends.',
+  appliesDebuff: CrotchRotDot,
 };

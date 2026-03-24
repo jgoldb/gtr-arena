@@ -52,7 +52,7 @@ export class AdminScreen {
 
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');
-    for (const col of ['ID', 'Username', 'Level', 'Created', 'Last Played', 'Games', 'Status', '']) {
+    for (const col of ['ID', 'Username', 'Level', 'Created', 'Last Played', 'Games', 'Banned', '']) {
       const th = document.createElement('th');
       th.textContent = col;
       th.style.cssText = `

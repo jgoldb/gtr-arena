@@ -7,7 +7,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, ArenaPreparationBuff, RestingBuff, Sweep } from '@gtr/shared';
+import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, ArenaPreparationBuff, RestingBuff, Sweep } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -198,6 +198,12 @@ export class ServerEngine {
 
     this.combatSystem.onFlinchDamage = (target) => {
       this.pendingEvents.push({ type: 'flinch', entityId: target.id } as S2C_Flinch);
+    };
+
+    this.buffSystem.onBuffExpired = (target, definition) => {
+      if (definition.id === 'crotch-rot') {
+        this.buffSystem.apply(target, RottenCrotchStun);
+      }
     };
 
     this.combatSystem.onDirectDamageDealt = (target) => {
@@ -972,6 +978,17 @@ export class ServerEngine {
     if (ability.id === 'chemical-spill') {
       this.spawnChemicalPool(entity, yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, 2);
     }
+    if (ability.id === 'crotch-rot') {
+      const target = this.getTarget(entity.id);
+      if (target && !target.dead) {
+        this.activeDots.push({
+          target, debuff: CrotchRotDot,
+          totalDuration: 12, elapsed: 0,
+          tickInterval: 3, nextTickAt: 3,
+          damagePerTick: 180, owner: entity,
+        });
+      }
+    }
 
     // Melee abilities automatically engage auto-attack on the target
     if (ServerEngine.MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {
@@ -1265,7 +1282,11 @@ export class ServerEngine {
         snapshot.castingTotalTime = casting.totalTime;
         snapshot.castingIsChannel = casting.isChannel;
       }
-      snapshot.targetEntityId = this.targets.get(e.id) ?? null;
+      // While channeling, lock targetEntityId to the channel target so the
+      // beam doesn't follow UI re-targets.
+      snapshot.targetEntityId = (casting?.isChannel && casting.target)
+        ? casting.target.id
+        : (this.targets.get(e.id) ?? null);
       return snapshot;
     });
 
@@ -1336,7 +1357,10 @@ export class ServerEngine {
       const castingElapsed = casting?.elapsed ?? 0;
       const castingTotalTime = casting?.totalTime ?? 0;
       const castingIsChannel = casting?.isChannel ?? false;
-      const targetEntityId = this.targets.get(e.id) ?? null;
+      // Lock to channel target while channeling (same as keyframe)
+      const targetEntityId = (casting?.isChannel && casting?.target)
+        ? casting.target.id
+        : (this.targets.get(e.id) ?? null);
 
       const prev = this.lastBroadcastState.get(e.id);
       if (!prev) {

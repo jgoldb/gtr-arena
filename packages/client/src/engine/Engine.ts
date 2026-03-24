@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, type Ability } from './combat/Ability';
+import { yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
@@ -772,6 +772,24 @@ export class Engine {
         this.activeDots.splice(i, 1);
       }
     }
+  }
+
+  handleBuffExpired(target: Targetable, definition: BuffDefinition): void {
+    if (definition.id === 'crotch-rot') {
+      this.buffSystem.apply(target, RottenCrotchStun);
+    }
+  }
+
+  spawnDot(target: Targetable, debuff: BuffDefinition, totalDuration: number, tickInterval: number, totalDamage: number, owner: Targetable): void {
+    const tickCount = Math.floor(totalDuration / tickInterval);
+    this.buffSystem.apply(target, debuff);
+    this.activeDots.push({
+      target, debuff,
+      totalDuration, elapsed: 0,
+      tickInterval, nextTickAt: tickInterval,
+      damagePerTick: Math.round(totalDamage / tickCount),
+      owner,
+    });
   }
 
   private clearChemicalPools(): void {

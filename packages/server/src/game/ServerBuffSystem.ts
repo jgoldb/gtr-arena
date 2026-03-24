@@ -9,6 +9,7 @@ export interface ActiveBuff {
 
 export class ServerBuffSystem {
   private activeBuffs = new Map<ServerEntity, ActiveBuff[]>();
+  onBuffExpired?: (target: ServerEntity, definition: BuffDefinition) => void;
 
   apply(target: ServerEntity, definition: BuffDefinition): void {
     if (target.dead) return;
@@ -173,7 +174,10 @@ export class ServerBuffSystem {
       for (let i = buffs.length - 1; i >= 0; i--) {
         buffs[i].remaining -= dt;
         if (buffs[i].remaining <= 0 || entity.dead) {
-          buffs.splice(i, 1);
+          const removed = buffs.splice(i, 1)[0];
+          if (!entity.dead) {
+            this.onBuffExpired?.(entity, removed.definition);
+          }
         }
       }
       if (buffs.length === 0) this.activeBuffs.delete(entity);

@@ -17,6 +17,7 @@ import { KeybindMenu } from './ui/KeybindMenu';
 import { DebugHUD } from './ui/DebugHUD';
 import { ReconnectOverlay } from './ui/ReconnectOverlay';
 import { ArenaFrames } from './ui/ArenaFrames';
+import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats } from '@gtr/shared';
@@ -72,6 +73,7 @@ let mpGameOver = false;
 let mpEscapeMenu: EscapeMenu | null = null;
 let mpDebugHUD: DebugHUD | null = null;
 let mpArenaFrames: ArenaFrames | null = null;
+let mpPositioner: UnitFramePositioner | null = null;
 let mpDeathFrame: DeathFrame | null = null;
 let mpFrameLoopId: number | null = null;
 let mpSelectedTargetId: string | null = null;
@@ -91,6 +93,7 @@ let pgDeathFrame: DeathFrame | null = null;
 let pgCastBarContainer: HTMLDivElement | null = null;
 let pgEscapeMenu: EscapeMenu | null = null;
 let pgDebugHUD: DebugHUD | null = null;
+let pgPositioner: UnitFramePositioner | null = null;
 
 // Lobby escape menu
 let lobbyEscapeMenu: EscapeMenu | null = null;
@@ -170,11 +173,10 @@ function cleanupMultiplayerUI(): void {
   clientEngine = null;
   mpActionBar?.dispose();
   mpActionBar = null;
-  mpPlayerFrame?.element.remove();
+  mpPositioner?.dispose();
+  mpPositioner = null;
   mpPlayerFrame = null;
-  mpTargetFrame?.element.remove();
   mpTargetFrame = null;
-  mpToTFrame?.element.remove();
   mpToTFrame = null;
   mpErrorText?.element.remove();
   mpErrorText = null;
@@ -221,11 +223,10 @@ function cleanupPlaygroundUI(): void {
   pgDebugPanel = null;
   pgActionBar?.dispose();
   pgActionBar = null;
-  pgPlayerFrame?.element.remove();
+  pgPositioner?.dispose();
+  pgPositioner = null;
   pgPlayerFrame = null;
-  pgTargetFrame?.element.remove();
   pgTargetFrame = null;
-  pgToTFrame?.element.remove();
   pgToTFrame = null;
   pgErrorText?.element.remove();
   pgErrorText = null;
@@ -601,12 +602,6 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   document.body.appendChild(mpUnitTooltip.element);
 
   // Unit frames
-  const unitFrameContainer = document.getElementById('unit-frames');
-  if (unitFrameContainer) unitFrameContainer.style.display = 'flex';
-  const playerFrameContainer = document.getElementById('player-frame-container')!;
-  const targetFrameContainer = document.getElementById('target-frame-container')!;
-  playerFrameContainer.innerHTML = '';
-  targetFrameContainer.innerHTML = '';
 
   // Get a Targetable reference for any entity
   const makeTargetable = (entityId: string): Targetable | null => {
@@ -636,17 +631,26 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       clientEngine?.sendCancelBuff(buffId);
     },
   });
-  playerFrameContainer.appendChild(mpPlayerFrame.element);
-
   mpTargetFrame = new UnitFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
-  targetFrameContainer.appendChild(mpTargetFrame.element);
-
   mpToTFrame = new TargetOfTargetFrame({ localPlayer: player, getPortrait, onClick: mpSetTarget });
-  targetFrameContainer.appendChild(mpToTFrame.element);
 
   // Arena frames (Gladdy-style opponent frames on right side)
   mpArenaFrames = new ArenaFrames({ localPlayer: player, getPortrait, onClick: mpSetTarget });
-  document.body.appendChild(mpArenaFrames.element);
+  // Strip ArenaFrames' own fixed positioning (wrapper handles it)
+  mpArenaFrames.element.style.position = '';
+  mpArenaFrames.element.style.top = '';
+  mpArenaFrames.element.style.right = '';
+  mpArenaFrames.element.style.transform = '';
+  mpArenaFrames.element.style.zIndex = '';
+
+  // Register frames with positioner for drag-to-reposition
+  mpPositioner = new UnitFramePositioner();
+  document.body.appendChild(mpPositioner.register('player', mpPlayerFrame.element, { top: 12, left: 12 }));
+  document.body.appendChild(mpPositioner.register('target', mpTargetFrame.element, { top: 12, left: 280 }));
+  document.body.appendChild(mpPositioner.register('tot', mpToTFrame.element, { top: 84, left: 390 }));
+  const arenaDefaultLeft = window.innerWidth - 250;
+  const arenaDefaultTop = Math.round(window.innerHeight / 2 - 100);
+  document.body.appendChild(mpPositioner.register('arena', mpArenaFrames.element, { top: arenaDefaultTop, left: arenaDefaultLeft }));
   const arenaEntities = msg.entities
     .filter(e => e.id !== msg.localEntityId)
     .map(e => {
@@ -1488,9 +1492,7 @@ async function startPlayground(): Promise<void> {
 
   // Show all game UI elements
   const uiOverlay = document.getElementById('ui-overlay');
-  const unitFrames = document.getElementById('unit-frames');
   if (uiOverlay) uiOverlay.style.display = '';
-  if (unitFrames) unitFrames.style.display = 'flex';
   canvas.style.display = 'block';
 
   // Dynamically import the playground to avoid loading Engine in MP mode
@@ -1499,7 +1501,7 @@ async function startPlayground(): Promise<void> {
   const { MapSelector } = await import('./ui/MapSelector');
   const { CharacterSelector } = await import('./ui/CharacterSelector');
   const { NpcSpawner } = await import('./ui/NpcSpawner');
-  const { DebugStun, DiscombobulateDebuff, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, yardsToUnits } = await import('./engine/combat/Ability');
+  const { DebugStun, DiscombobulateDebuff, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, yardsToUnits } = await import('./engine/combat/Ability');
 
   const engine = new Engine(canvas);
   engine.isAdmin = isAdmin;
@@ -1556,10 +1558,6 @@ async function startPlayground(): Promise<void> {
 
   // Unit frames
   const setTarget = (t: Targetable) => { engine.targetingSystem.currentTarget = t; };
-  const playerFrameContainer = document.getElementById('player-frame-container')!;
-  const targetFrameContainer = document.getElementById('target-frame-container')!;
-  playerFrameContainer.innerHTML = '';
-  targetFrameContainer.innerHTML = '';
   const playerFrame = new UnitFrame({
     getPortrait,
     onClick: setTarget,
@@ -1568,14 +1566,16 @@ async function startPlayground(): Promise<void> {
     },
   });
   pgPlayerFrame = playerFrame;
-  playerFrameContainer.appendChild(playerFrame.element);
   const targetFrame = new UnitFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
   pgTargetFrame = targetFrame;
-  targetFrameContainer.appendChild(targetFrame.element);
-
   const totFrame = new TargetOfTargetFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
   pgToTFrame = totFrame;
-  targetFrameContainer.appendChild(totFrame.element);
+
+  // Register frames with positioner for drag-to-reposition
+  pgPositioner = new UnitFramePositioner();
+  document.body.appendChild(pgPositioner.register('player', playerFrame.element, { top: 12, left: 12 }));
+  document.body.appendChild(pgPositioner.register('target', targetFrame.element, { top: 12, left: 280 }));
+  document.body.appendChild(pgPositioner.register('tot', totFrame.element, { top: 84, left: 390 }));
 
   const errorText = new ErrorText();
   pgErrorText = errorText;
@@ -1624,6 +1624,7 @@ async function startPlayground(): Promise<void> {
     if (target === engine.playerController) {
       combatText.spawnText(target.mesh, `-${definition.name}`, '#888888');
     }
+    engine.handleBuffExpired(target, definition);
   };
 
   // Apply Arena Preparation now that SCT callbacks are wired
@@ -1685,6 +1686,12 @@ async function startPlayground(): Promise<void> {
     if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
     if (ability.id === 'sweep') engine.startSweepCharge();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
+    if (ability.id === 'crotch-rot') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && !target.dead) {
+        engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
+      }
+    }
 
     // Melee abilities automatically engage auto-attack on the target
     if (MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {

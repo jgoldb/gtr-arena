@@ -1,7 +1,7 @@
 import type { Ability } from './abilities.js';
 import {
   Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut,
-  BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard,
+  BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot,
 } from './abilities.js';
 
 export type CharacterId = 'janitor' | 'dr-retardo';
@@ -61,7 +61,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.05,
     hpRegen: 24,
     manaRegen: 48,
-    abilities: [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard],
+    abilities: [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot],
   },
 };
 
