@@ -1774,6 +1774,14 @@ async function startPlayground(): Promise<void> {
     }
     engine.handleBuffExpired(target, definition);
   };
+  engine.buffSystem.onStacksChanged = (target, buffId, oldStacks, newStacks) => {
+    if (buffId === 'tweaking' && target === engine.playerController) {
+      const delta = newStacks - oldStacks;
+      const text = delta > 0 ? `+${delta} Tweaking` : `${delta} Tweaking`;
+      const color = delta > 0 ? '#3388ff' : '#888888';
+      combatText.spawnText(target.mesh, text, color, true);
+    }
+  };
 
   // Apply Arena Preparation now that SCT callbacks are wired
   engine.applyArenaPreparation();
@@ -1783,7 +1791,7 @@ async function startPlayground(): Promise<void> {
   const respawnBtn = document.createElement('button');
   respawnBtn.textContent = 'Respawn';
   respawnBtn.style.cssText = 'margin-top: 12px; padding: 10px 32px; font-size: 15px; font-weight: bold; background: rgba(180,60,60,0.85); color: #eee; border: 1px solid #cc4444; border-radius: 4px; cursor: pointer; outline: none; pointer-events: auto;';
-  respawnBtn.addEventListener('click', () => { engine.playerController.respawn(); pgDeathFrame?.hide(); });
+  respawnBtn.addEventListener('click', () => { engine.respawnPlayer(); pgDeathFrame?.hide(); });
   pgDeathFrame.element.querySelector('div')!.appendChild(respawnBtn);
   document.body.appendChild(pgDeathFrame.element);
 

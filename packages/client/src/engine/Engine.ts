@@ -308,6 +308,11 @@ export class Engine {
     }
   }
 
+  respawnPlayer(): void {
+    this.playerController.respawn();
+    this.applyStartingBuffs();
+  }
+
   setCharacter(id: CharacterId): void {
     this.stopResting();
     this.stopAutoAttack();

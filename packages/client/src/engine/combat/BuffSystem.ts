@@ -27,6 +27,7 @@ export class BuffSystem {
   private drState = new Map<Targetable, Map<string, DREntry>>();
   onBuffApplied?: (target: Targetable, definition: BuffDefinition) => void;
   onBuffExpired?: (target: Targetable, definition: BuffDefinition) => void;
+  onStacksChanged?: (target: Targetable, buffId: string, oldStacks: number, newStacks: number) => void;
 
   /** Apply a buff/debuff. Returns false if blocked by DR immunity. */
   apply(target: Targetable, definition: BuffDefinition): boolean {
@@ -100,7 +101,11 @@ export class BuffSystem {
     if (!buffs) return;
     const buff = buffs.find(b => b.definition.id === buffId);
     if (buff && buff.stacks !== undefined && buff.definition.maxStacks !== undefined) {
+      const oldStacks = buff.stacks;
       buff.stacks = Math.min(buff.stacks + amount, buff.definition.maxStacks);
+      if (buff.stacks !== oldStacks) {
+        this.onStacksChanged?.(target, buffId, oldStacks, buff.stacks);
+      }
     }
   }
 
@@ -109,7 +114,11 @@ export class BuffSystem {
     if (!buffs) return;
     const buff = buffs.find(b => b.definition.id === buffId);
     if (buff && buff.stacks !== undefined) {
+      const oldStacks = buff.stacks;
       buff.stacks = Math.max(0, buff.stacks - amount);
+      if (buff.stacks !== oldStacks) {
+        this.onStacksChanged?.(target, buffId, oldStacks, buff.stacks);
+      }
       if (buff.stacks <= 0 && !buff.definition.allowZeroStacks) {
         this.remove(target, buffId);
       }
