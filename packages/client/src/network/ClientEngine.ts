@@ -6,7 +6,7 @@ import type {
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits, getCharacterStats } from '@gtr/shared';
+import { yardsToUnits, getCharacterStats, Sweep } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -19,11 +19,12 @@ import { createCharacter, type CharacterModel } from '../engine/player/character
 import type { Targetable } from '../engine/types';
 import { createTargetingHitArea } from '../engine/targeting/targetingHitArea';
 import {
-  type GasCloudVisual, type ChemPoolVisual, type FullRetardAuraVisual,
+  type GasCloudVisual, type ChemPoolVisual, type FullRetardAuraVisual, type CrotchRotVisual,
   POOL_CONSUME_DURATION,
   createGasCloud, updateGasCloud,
   createChemPool, updateChemPool,
   createFullRetardAura, updateFullRetardAura as updateFullRetardAuraVisual,
+  createCrotchRotCloud, updateCrotchRotCloud,
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   disposeGroup,
 } from '../engine/effects/VisualEffects';
@@ -43,6 +44,7 @@ interface RemoteEntity {
   castingAbilityId: string | null;
   castingElapsed: number; castingTotalTime: number; castingIsChannel: boolean;
   buffs: EntityBuffSnapshot['buffs'];
+  drTimers: EntityBuffSnapshot['drTimers'];
   targetable: Targetable;
   targetEntityId: string | null;
   disconnected: boolean;
@@ -96,9 +98,10 @@ export class ClientEngine {
 
   // Local entity buffs (from server snapshots)
   private localBuffs: EntityBuffSnapshot['buffs'] = [];
+  private localDRTimers: EntityBuffSnapshot['drTimers'] = undefined;
 
   // Sweep charge (local player only — client-side movement during charge)
-  private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number } | null = null;
+  private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number; savedAutoAttackTargetId: string | null } | null = null;
 
   // Track tab visibility for fast-forwarding client-side timers on restore
   private wasHidden = false;
@@ -116,6 +119,9 @@ export class ClientEngine {
 
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
+
+  // Crotch Rot cloud visual (per entity)
+  private crotchRotVisuals = new Map<string, CrotchRotVisual & { elapsed: number }>();
 
   // Entities fading out before removal
   private static readonly ENTITY_FADE_DURATION = 1.5;
@@ -244,6 +250,7 @@ export class ClientEngine {
       castingElapsed: snap.castingElapsed, castingTotalTime: snap.castingTotalTime,
       castingIsChannel: snap.castingIsChannel,
       buffs: [],
+      drTimers: undefined,
       targetable: null!, // Set below
       targetEntityId: snap.targetEntityId,
       disconnected: snap.disconnected ?? false,
@@ -579,6 +586,7 @@ export class ClientEngine {
         }
 
         this.localBuffs = buffSnap.buffs;
+        this.localDRTimers = buffSnap.drTimers;
         // Sync resting state from server — but ignore stale updates that arrive
         // before the server has processed our resting request (grace period 500ms)
         const restingGraceExpired = performance.now() - this.restingSentAt > 500;
@@ -596,6 +604,7 @@ export class ClientEngine {
       const entity = this.remoteEntities.get(buffSnap.entityId);
       if (entity) {
         entity.buffs = buffSnap.buffs;
+        entity.drTimers = buffSnap.drTimers;
         const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
         entity.model.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
         entity.model.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
@@ -715,6 +724,10 @@ export class ClientEngine {
 
   getLocalBuffs(): EntityBuffSnapshot['buffs'] {
     return this.localBuffs;
+  }
+
+  getLocalDRTimers(): EntityBuffSnapshot['drTimers'] {
+    return this.localDRTimers;
   }
 
   getManaCostMultiplier(): number {
@@ -907,7 +920,7 @@ export class ClientEngine {
         }
       }
     }
-    this.playerController.movementSpeedModifier = moveMult * (this.godMode ? 4 : 1);
+    this.playerController.movementSpeedModifier = Math.max(0, moveMult) * (this.godMode ? 4 : 1);
 
     // Update local player using the real PlayerController (same as playground)
     this.playerController.update(dt);
@@ -1101,6 +1114,9 @@ export class ClientEngine {
     // Update Full Retard aura visuals
     this.updateFullRetardAuras(dt);
 
+    // Update Crotch Rot cloud visuals
+    this.updateCrotchRotVisuals(dt);
+
     // Update map script (e.g., gate animations)
     this.mapManager.update(dt);
 
@@ -1229,12 +1245,14 @@ export class ClientEngine {
   private startSweepCharge(): void {
     const rotY = this.playerController.mesh.rotation.y;
     this.playerController.charging = true;
+    const savedAutoAttackTargetId = this.selectedTargetId;
     this.sendStopAutoAttack();
     this.sweepCharge = {
       elapsed: 0,
-      duration: 1.0,
+      duration: Sweep.chargeDuration!,
       direction: new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY)),
-      speed: yardsToUnits(20),
+      speed: Sweep.chargeSpeed!,
+      savedAutoAttackTargetId,
     };
   }
 
@@ -1246,6 +1264,12 @@ export class ClientEngine {
       this.sweepCharge.direction, this.sweepCharge.speed * dt
     );
     if (this.sweepCharge.elapsed >= this.sweepCharge.duration) {
+      // Re-engage auto-attack if we were auto-attacking before sweep
+      const targetId = this.sweepCharge.savedAutoAttackTargetId;
+      if (targetId) {
+        this.sendAutoAttack(targetId);
+      }
+
       this.playerController.charging = false;
       this.sweepCharge = null;
     }
@@ -1336,6 +1360,54 @@ export class ClientEngine {
     }
   }
 
+  // ── Crotch Rot cloud visuals ─────────────────────────────────────────
+
+  private updateCrotchRotVisuals(dt: number): void {
+    const activeIds = new Set<string>();
+
+    // Local player
+    if (this.localBuffs.some(b => b.id === 'crotch-rot')) {
+      activeIds.add(this.localEntityId);
+      if (!this.crotchRotVisuals.has(this.localEntityId)) {
+        const visual = createCrotchRotCloud();
+        this.playerController.mesh.add(visual.group);
+        this.crotchRotVisuals.set(this.localEntityId, { ...visual, elapsed: 0 });
+      }
+    }
+
+    // Remote entities
+    for (const entity of this.remoteEntities.values()) {
+      if (entity.buffs.some(b => b.id === 'crotch-rot')) {
+        activeIds.add(entity.id);
+        if (!this.crotchRotVisuals.has(entity.id)) {
+          const visual = createCrotchRotCloud();
+          entity.mesh.add(visual.group);
+          this.crotchRotVisuals.set(entity.id, { ...visual, elapsed: 0 });
+        }
+      }
+    }
+
+    // Update existing visuals and remove expired ones
+    for (const [entityId, visual] of this.crotchRotVisuals) {
+      if (!activeIds.has(entityId)) {
+        const mesh = this.getEntityMesh(entityId);
+        if (mesh) mesh.remove(visual.group);
+        visual.group.traverse(child => {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+            (child.material as THREE.Material).dispose();
+          }
+        });
+        this.crotchRotVisuals.delete(entityId);
+        continue;
+      }
+
+      visual.elapsed += dt;
+      // Group is parented to entity mesh, so pass 0,0,0 for follow position
+      updateCrotchRotCloud(visual, visual.elapsed, 0, 0, 0);
+    }
+  }
+
   destroy(): void {
     this.stop();
     this.input.dispose();
@@ -1349,6 +1421,15 @@ export class ClientEngine {
     if (this.channelBeam) removeChannelBeam(this.scene, this.channelBeam);
     for (const aura of this.fullRetardAuras.values()) disposeGroup(this.scene, aura.group);
     this.fullRetardAuras.clear();
+    for (const visual of this.crotchRotVisuals.values()) {
+      visual.group.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+    }
+    this.crotchRotVisuals.clear();
     for (const entity of this.remoteEntities.values()) this.scene.remove(entity.mesh);
     this.remoteEntities.clear();
     this.scene.remove(this.playerController.mesh);

@@ -27,6 +27,9 @@ export {
   CrotchRotDot,
   RottenCrotchStun,
   CrotchRot,
+  JimmyLegsDebuff,
+  JimmyLegdDebuff,
+  JimmyLegs,
   ArenaPreparationBuff,
   RestingBuff,
 } from '@gtr/shared';

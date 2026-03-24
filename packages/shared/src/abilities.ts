@@ -25,7 +25,13 @@ export interface BuffDefinition {
   readonly shieldAmount?: number;         // absorption shield HP
   readonly shieldReflectPercent?: number;  // % of incoming damage reflected to attacker
   readonly unremovable?: boolean;          // true = cannot be right-click cancelled by player
+  readonly drCategory?: string;            // diminishing returns category (e.g. 'root', 'stun')
 }
+
+// ── Diminishing Returns ───────────────────────────────────────────────
+
+export const DR_RESET_TIMER = 20; // seconds until DR resets
+export const DR_MULTIPLIERS = [1, 0.5, 0.25, 0] as const; // 0 = immune
 
 // ── Ability type ────────────────────────────────────────────────────────
 
@@ -146,11 +152,11 @@ export const RetardStrengthBuff: BuffDefinition = {
   id: 'retard-strength',
   name: 'Retard Strength',
   icon: '💪',
-  duration: 3,
+  duration: 5,
   type: 'buff',
-  description: 'Damage and healing dealt increased by 50%. Absorbs up to 100 damage. Reflects 50% of damage taken.',
+  description: 'Damage and healing dealt increased by 50%. Absorbs up to 500 damage. Reflects 50% of damage taken.',
   effects: [{ type: 'damageDealtPercent', value: 50 }],
-  shieldAmount: 100,
+  shieldAmount: 500,
   shieldReflectPercent: 50,
 };
 
@@ -192,6 +198,27 @@ export const RottenCrotchStun: BuffDefinition = {
   type: 'debuff',
   description: 'Stunned by a thoroughly rotten crotch.',
   effects: [{ type: 'stun', value: 0 }],
+};
+
+export const JimmyLegsDebuff: BuffDefinition = {
+  id: 'jimmy-legs',
+  name: 'Jimmy Legs',
+  icon: '🦵',
+  duration: 5,
+  type: 'debuff',
+  description: 'Movement speed slowed by 50%.',
+  effects: [{ type: 'movementSpeedPercent', value: -50 }],
+};
+
+export const JimmyLegdDebuff: BuffDefinition = {
+  id: 'jimmy-legd',
+  name: "Jimmy Leg'd",
+  icon: '🦵',
+  duration: 2,
+  type: 'debuff',
+  description: 'Immobilized.',
+  effects: [{ type: 'movementSpeedPercent', value: -100 }],
+  drCategory: 'root',
 };
 
 export const ArenaPreparationBuff: BuffDefinition = {
@@ -407,4 +434,18 @@ export const CrotchRot: Ability = {
   description:
     'Deals 540 damage over 9 seconds. Stuns for 2 seconds when effect ends.',
   appliesDebuff: CrotchRotDot,
+};
+
+export const JimmyLegs: Ability = {
+  id: 'jimmy-legs',
+  name: 'Jimmy Legs',
+  icon: '🦵',
+  range: yardsToUnits(5),
+  manaCost: 100,
+  cooldown: 1.5,
+  damage: 49,
+  requiresHostileTarget: true,
+  description:
+    'Inflicts the target with the Jimmy Legs, reducing movement speed by 50% for 5 seconds. If used on a target with Jimmy Legs, the target will become immobilized for 2 seconds.',
+  appliesDebuff: JimmyLegsDebuff,
 };

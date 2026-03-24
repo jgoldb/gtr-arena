@@ -17,6 +17,11 @@ export interface FullRetardAuraVisual {
   puffs: THREE.Mesh[];
 }
 
+export interface CrotchRotVisual {
+  group: THREE.Group;
+  puffs: THREE.Mesh[];
+}
+
 export const POOL_CONSUME_DURATION = 0.6;
 
 // ── Disposal ─────────────────────────────────────────────────────────────
@@ -336,6 +341,84 @@ export function removeChannelBeam(scene: THREE.Scene, beam: THREE.Mesh): void {
   beam.geometry.dispose();
   (beam.material as THREE.Material).dispose();
   scene.remove(beam);
+}
+
+// ── Crotch Rot Cloud ─────────────────────────────────────────────────────
+
+/** Create dense black cloud puffs that cling to a character's midsection. */
+export function createCrotchRotCloud(): CrotchRotVisual {
+  const group = new THREE.Group();
+
+  const puffs: THREE.Mesh[] = [];
+  for (let i = 0; i < 16; i++) {
+    const angle = (i / 16) * Math.PI * 2;
+    const r = 0.1 + Math.random() * 0.22;
+    const size = 0.1 + Math.random() * 0.12;
+    // Mix of dark black-green tones
+    const colorVariant = Math.random();
+    const color = colorVariant < 0.4 ? 0x0a0a0a : colorVariant < 0.7 ? 0x0d1a0a : 0x151505;
+    const puffMat = new THREE.MeshStandardMaterial({
+      color,
+      transparent: true,
+      opacity: 0.55 + Math.random() * 0.2,
+      roughness: 1.0,
+      depthWrite: false,
+      emissive: 0x0a1a05,
+      emissiveIntensity: 0.4,
+    });
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(size, 7, 5), puffMat);
+    puff.position.set(
+      Math.cos(angle) * r,
+      (Math.random() - 0.5) * 0.15,
+      Math.sin(angle) * r,
+    );
+    puff.renderOrder = 5;
+    puff.userData.orbitAngle = angle;
+    puff.userData.orbitRadius = r;
+    puff.userData.orbitSpeed = 0.5 + Math.random() * 0.7;
+    puff.userData.baseY = puff.position.y;
+    puff.userData.baseOpacity = puffMat.opacity;
+    puff.userData.baseScale = 0.9 + Math.random() * 0.5;
+    puff.userData.riseSpeed = 0.04 + Math.random() * 0.05;
+    puff.scale.setScalar(puff.userData.baseScale);
+    group.add(puff);
+    puffs.push(puff);
+  }
+
+  return { group, puffs };
+}
+
+/** Animate crotch rot cloud puffs — swirl and ooze upward from the midsection. */
+export function updateCrotchRotCloud(
+  visual: CrotchRotVisual,
+  elapsed: number,
+  followX: number,
+  followY: number,
+  followZ: number,
+): void {
+  // Attach to character midsection (hip height ~0.78)
+  visual.group.position.set(followX, followY + 0.78, followZ);
+  visual.group.rotation.y += 0.008;
+
+  const fadeIn = Math.min(1, elapsed / 0.4);
+
+  for (const puff of visual.puffs) {
+    const a = puff.userData.orbitAngle + elapsed * puff.userData.orbitSpeed;
+    const r = puff.userData.orbitRadius;
+    puff.position.x = Math.cos(a) * r;
+    puff.position.z = Math.sin(a) * r;
+
+    // Rise and resettle in a cycle — oozing upward effect
+    const risePhase = (elapsed * puff.userData.riseSpeed * 8 + puff.userData.orbitAngle) % (Math.PI * 2);
+    puff.position.y = puff.userData.baseY + Math.max(0, Math.sin(risePhase)) * 0.25;
+
+    // Pulse scale for organic churning feel
+    const pulse = 1 + Math.sin(elapsed * 2.5 + a * 2) * 0.25;
+    puff.scale.setScalar(puff.userData.baseScale * pulse);
+
+    (puff.material as THREE.MeshStandardMaterial).opacity =
+      puff.userData.baseOpacity * fadeIn;
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────

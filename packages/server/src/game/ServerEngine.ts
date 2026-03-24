@@ -40,6 +40,7 @@ interface SweepCharge {
   speed: number;
   hitTargets: Set<ServerEntity>;
   maxDamage: number;
+  savedAutoAttackTarget: ServerEntity | null;
 }
 
 interface ActiveGasCloud {
@@ -329,6 +330,8 @@ export class ServerEngine {
   updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean): void {
     const entity = this.getEntity(entityId);
     if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
+    // During a sweep charge, the server is authoritative about position — ignore client updates
+    if (this.sweepCharges.has(entityId)) return;
     entity.x = x;
     entity.y = y;
     entity.z = z;
@@ -913,8 +916,22 @@ export class ServerEngine {
     if (!charge) return;
 
     charge.elapsed += dt;
-    entity.x += charge.dirX * charge.speed * dt;
-    entity.z += charge.dirZ * charge.speed * dt;
+
+    // Sub-step movement to prevent tunneling through thin walls at high speed
+    const totalDx = charge.dirX * charge.speed * dt;
+    const totalDz = charge.dirZ * charge.speed * dt;
+    const totalDist = Math.sqrt(totalDx * totalDx + totalDz * totalDz);
+    const maxStep = 0.25; // Must be less than thinnest wall halfWidth + collision radius
+    const numSteps = Math.max(1, Math.ceil(totalDist / maxStep));
+    const stepDx = totalDx / numSteps;
+    const stepDz = totalDz / numSteps;
+    for (let i = 0; i < numSteps; i++) {
+      entity.x += stepDx;
+      entity.z += stepDz;
+      const resolved = this.collision.resolve(entity.x, entity.z, entity.y, 0.4);
+      entity.x = resolved.x;
+      entity.z = resolved.z;
+    }
 
     // Hit detection
     const hitRadius = 1.0;
@@ -942,6 +959,13 @@ export class ServerEngine {
           this.combatSystem.applySweepDamage(entity, other, charge.maxDamage);
         }
       }
+
+      // Re-engage auto-attack if we were auto-attacking before sweep
+      const savedTarget = charge.savedAutoAttackTarget;
+      if (savedTarget && !savedTarget.dead && savedTarget.isHostileTo(entity)) {
+        this.requestAutoAttack(entity.id, savedTarget.id);
+      }
+
       entity.charging = false;
       this.sweepCharges.delete(entity.id);
     }
@@ -949,7 +973,7 @@ export class ServerEngine {
 
   // ── Ability success effects ─────────────────────────────────────────
 
-  private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot'];
+  private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs'];
 
   private onAbilitySuccess(entity: ServerEntity, ability: Ability, groundTarget?: { x: number; z: number }): void {
     this.pendingEvents.push({
@@ -1000,6 +1024,7 @@ export class ServerEngine {
   }
 
   private startSweepCharge(entity: ServerEntity): void {
+    const savedAutoAttackTarget = this.autoAttacks.get(entity.id)?.target ?? null;
     this.stopAutoAttack(entity.id);
     entity.charging = true;
     this.sweepCharges.set(entity.id, {
@@ -1010,6 +1035,7 @@ export class ServerEngine {
       speed: Sweep.chargeSpeed!,
       hitTargets: new Set(),
       maxDamage: Sweep.chargeMaxDamage!,
+      savedAutoAttackTarget,
     });
   }
 
@@ -1423,7 +1449,8 @@ export class ServerEngine {
     const allBuffs = this.buildBuffSnapshots();
     const changedBuffs: EntityBuffSnapshot[] = [];
     for (const b of allBuffs) {
-      const sig = b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}:${Math.ceil(buf.remaining)}`).join(',');
+      const drSig = b.drTimers ? b.drTimers.map(dr => `dr:${dr.category}:${dr.count}:${Math.ceil(dr.remaining)}`).join(',') : '';
+      const sig = b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}:${Math.ceil(buf.remaining)}`).join(',') + '|' + drSig;
       const prevSig = this.lastBroadcastBuffs.get(b.entityId);
       if (sig !== prevSig) {
         changedBuffs.push(b);
@@ -1468,21 +1495,25 @@ export class ServerEngine {
   }
 
   private buildBuffSnapshots(): EntityBuffSnapshot[] {
-    return this.entities.map(e => ({
-      entityId: e.id,
-      buffs: this.buffSystem.getAllBuffs(e).map(b => ({
-        id: b.definition.id,
-        name: b.definition.name,
-        icon: b.definition.icon,
-        type: b.definition.type,
-        remaining: b.remaining,
-        duration: b.definition.duration,
-        description: b.definition.description,
-        shieldRemaining: b.shieldRemaining,
-        effects: b.definition.effects.length > 0 ? b.definition.effects : undefined,
-        unremovable: b.definition.unremovable || undefined,
-      })),
-    }));
+    return this.entities.map(e => {
+      const drTimers = this.buffSystem.getDRTimers(e);
+      return {
+        entityId: e.id,
+        buffs: this.buffSystem.getAllBuffs(e).map(b => ({
+          id: b.definition.id,
+          name: b.definition.name,
+          icon: b.definition.icon,
+          type: b.definition.type,
+          remaining: b.remaining,
+          duration: b.definition.duration,
+          description: b.definition.description,
+          shieldRemaining: b.shieldRemaining,
+          effects: b.definition.effects.length > 0 ? b.definition.effects : undefined,
+          unremovable: b.definition.unremovable || undefined,
+        })),
+        drTimers: drTimers.length > 0 ? drTimers : undefined,
+      };
+    });
   }
 
   private buildGasCloudSnapshots(): GasCloudSnapshot[] {

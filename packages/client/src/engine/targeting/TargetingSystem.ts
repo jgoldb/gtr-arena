@@ -21,6 +21,7 @@ export class TargetingSystem {
   private groundTargetCircle: THREE.Group;
   private groundTargetMats: THREE.MeshBasicMaterial[] = [];
   private groundTargetRange = 0;
+  private groundTargetSkipLOS = false;
   private groundTargetPos = new THREE.Vector3();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private groundTargetTime = 0;
@@ -330,9 +331,10 @@ export class TargetingSystem {
   // ── Ground targeting (click-to-place AoE) ─────────────────────────
 
   /** Enter ground targeting mode — shows the AoE reticle following the cursor. */
-  startGroundTarget(aoeRadius: number, range: number): void {
+  startGroundTarget(aoeRadius: number, range: number, skipLOS = false): void {
     this.groundTargetActive = true;
     this.groundTargetRange = range;
+    this.groundTargetSkipLOS = skipLOS;
     this.groundTargetTime = 0;
     // Scale the unit-radius ring geometry to match the AoE radius
     this.groundTargetCircle.scale.setScalar(aoeRadius);
@@ -376,20 +378,22 @@ export class TargetingSystem {
 
     // LOS check: raycast horizontally from player to ground target point
     this.groundTargetBlocked = false;
-    const losOrigin = new THREE.Vector3(playerPos.x, 0.5, playerPos.z);
-    const losTarget = new THREE.Vector3(hitPoint.x, 0.5, hitPoint.z);
-    const losDir = new THREE.Vector3().subVectors(losTarget, losOrigin);
-    const losDist = losDir.length();
-    if (losDist > 0.01) {
-      losDir.normalize();
-      this.losRaycaster.set(losOrigin, losDir);
-      this.losRaycaster.far = losDist;
-      this.losRaycaster.near = 0;
-      const hits = this.losRaycaster.intersectObjects(this.scene.children, true);
-      for (const hit of hits) {
-        if (this.isEnvironmentBlocker(hit)) {
-          this.groundTargetBlocked = true;
-          break;
+    if (!this.groundTargetSkipLOS) {
+      const losOrigin = new THREE.Vector3(playerPos.x, 0.5, playerPos.z);
+      const losTarget = new THREE.Vector3(hitPoint.x, 0.5, hitPoint.z);
+      const losDir = new THREE.Vector3().subVectors(losTarget, losOrigin);
+      const losDist = losDir.length();
+      if (losDist > 0.01) {
+        losDir.normalize();
+        this.losRaycaster.set(losOrigin, losDir);
+        this.losRaycaster.far = losDist;
+        this.losRaycaster.near = 0;
+        const hits = this.losRaycaster.intersectObjects(this.scene.children, true);
+        for (const hit of hits) {
+          if (this.isEnvironmentBlocker(hit)) {
+            this.groundTargetBlocked = true;
+            break;
+          }
         }
       }
     }

@@ -14,11 +14,12 @@ import { RegenSystem } from './combat/RegenSystem';
 import { BuffSystem } from './combat/BuffSystem';
 import type { Targetable } from './types';
 import {
-  type GasCloudVisual, type ChemPoolVisual, type FullRetardAuraVisual,
+  type GasCloudVisual, type ChemPoolVisual, type FullRetardAuraVisual, type CrotchRotVisual,
   POOL_CONSUME_DURATION,
   createGasCloud, updateGasCloud,
   createChemPool, updateChemPool,
   createFullRetardAura, updateFullRetardAura as updateFullRetardAuraVisual,
+  createCrotchRotCloud, updateCrotchRotCloud,
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   disposeGroup,
 } from './effects/VisualEffects';
@@ -105,6 +106,7 @@ export class Engine {
   private readonly discombobEffects: DiscombobBubbles[] = [];
   private readonly pendingAoeImpacts: PendingAoeImpact[] = [];
   private fullRetardAura: ActiveFullRetardAura | null = null;
+  private crotchRotVisuals = new Map<Targetable, CrotchRotVisual & { elapsed: number }>();
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamTarget: Targetable | null = null;
   private autoAttacking = false;
@@ -117,6 +119,7 @@ export class Engine {
     speed: number;
     hitTargets: Set<Targetable>;
     maxDamage: number;
+    savedAutoAttackTarget: Targetable | null;
   } | null = null;
 
   // Casting system (also used for channels)
@@ -135,6 +138,7 @@ export class Engine {
   onCastComplete?: (ability: Ability, target: Targetable | null) => void;
   onCastFailed?: (message: string) => void;
   onGroundTargetConfirmed?: () => void;
+  pendingNpcSpawn: { characterId: CharacterId; team?: number } | null = null;
 
   private arenaPreparationActive = false;
   private resting = false;
@@ -321,6 +325,7 @@ export class Engine {
         }
       }
       this.buffSystem.clearEntity(npc);
+      this.cleanupCrotchRotVisual(npc);
       this.npcs.splice(idx, 1);
       this.scene.remove(npc.mesh);
       npc.dispose();
@@ -334,6 +339,7 @@ export class Engine {
         this.targetingSystem.currentTarget = null;
       }
       this.buffSystem.clearEntity(npc);
+      this.cleanupCrotchRotVisual(npc);
       this.scene.remove(npc.mesh);
       npc.dispose();
     }
@@ -958,6 +964,49 @@ export class Engine {
     updateFullRetardAuraVisual(aura, aura.elapsed, dt, pos.x, pos.z);
   }
 
+  // ── Crotch Rot visuals ────────────────────────────────
+
+  private cleanupCrotchRotVisual(target: Targetable): void {
+    const visual = this.crotchRotVisuals.get(target);
+    if (!visual) return;
+    target.mesh.remove(visual.group);
+    visual.group.traverse(child => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    });
+    this.crotchRotVisuals.delete(target);
+  }
+
+  private updateCrotchRotVisuals(dt: number): void {
+    const allTargets: Targetable[] = [this.playerController, ...this.npcs];
+
+    // Spawn visuals for targets that have the debuff but no visual yet
+    for (const target of allTargets) {
+      if (target.dead) continue;
+      const hasDebuff = this.buffSystem.hasDebuff(target, 'crotch-rot');
+      if (hasDebuff && !this.crotchRotVisuals.has(target)) {
+        const visual = createCrotchRotCloud();
+        target.mesh.add(visual.group);
+        this.crotchRotVisuals.set(target, { ...visual, elapsed: 0 });
+      }
+    }
+
+    // Update existing visuals and remove expired ones
+    for (const [target, visual] of this.crotchRotVisuals) {
+      const hasDebuff = this.buffSystem.hasDebuff(target, 'crotch-rot');
+      if (!hasDebuff || target.dead) {
+        this.cleanupCrotchRotVisual(target);
+        continue;
+      }
+
+      visual.elapsed += dt;
+      // Group is parented to mesh, so pass 0,0,0 for follow position
+      updateCrotchRotCloud(visual, visual.elapsed, 0, 0, 0);
+    }
+  }
+
   // ── Discombobulate shadow bubbles ────────────────────
   private updateDiscombobEffects(dt: number): void {
     // Spawn effects for newly discombobulated targets
@@ -1075,6 +1124,7 @@ export class Engine {
     const rotY = player.mesh.rotation.y;
     const direction = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
 
+    const savedAutoAttackTarget = this.autoAttackTarget;
     this.stopAutoAttack();
     player.charging = true;
     this.sweepCharge = {
@@ -1084,6 +1134,7 @@ export class Engine {
       speed: Sweep.chargeSpeed!,
       hitTargets: new Set(),
       maxDamage: Sweep.chargeMaxDamage!,
+      savedAutoAttackTarget,
     };
   }
 
@@ -1126,6 +1177,12 @@ export class Engine {
         if (dist <= meleeRange) {
           this.combatSystem.applySweepDamage(this.playerController, npc, charge.maxDamage);
         }
+      }
+
+      // Re-engage auto-attack if we were auto-attacking before sweep
+      const savedTarget = charge.savedAutoAttackTarget;
+      if (savedTarget && !savedTarget.dead && savedTarget.isHostileTo(this.playerController)) {
+        this.startAutoAttack(savedTarget);
       }
 
       this.playerController.charging = false;
@@ -1302,6 +1359,7 @@ export class Engine {
     }
     // Cancel ground targeting on stun or death
     if ((playerStunned || this.playerController.dead) && this.targetingSystem.groundTargetActive) {
+      this.pendingNpcSpawn = null;
       this.targetingSystem.cancelGroundTarget();
     }
 
@@ -1418,6 +1476,7 @@ export class Engine {
     this.updateActiveDots(deltaTime);
     this.updatePendingAoeImpacts(deltaTime);
     this.updateFullRetardAura(deltaTime);
+    this.updateCrotchRotVisuals(deltaTime);
     this.updateDiscombobEffects(deltaTime);
     this.updateChannelBeam();
     this.combatSystem.update(deltaTime);

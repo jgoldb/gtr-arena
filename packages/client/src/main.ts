@@ -889,17 +889,20 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       mpToTFrame.update(totTargetable);
     }
 
-    // Arena frames (opponent frames on right side) — hidden during arena preparation
+    // Arena frames (opponent frames on right side)
     if (mpArenaFrames) {
       const inPrep = clientEngine.getLocalBuffs().some(b => b.id === 'arena-preparation');
-      mpArenaFrames.setVisible(!inPrep);
+      mpArenaFrames.setVisible(true);
+      mpArenaFrames.setDisabled(inPrep);
       mpArenaFrames.setSelectedTarget(mpSelectedTargetId);
       mpArenaFrames.update(dt, (entityId) => {
         const e = clientEngine!.getRemoteEntity(entityId);
-        if (!e) return [];
-        return e.buffs.filter(b => b.type === 'debuff').map(b => ({
-          definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: 'debuff' as const, description: b.description, effects: [] },
-          remaining: b.remaining,
+        if (!e?.drTimers) return [];
+        return e.drTimers.map(dr => ({
+          icon: dr.icon,
+          count: dr.count,
+          remaining: dr.remaining,
+          total: dr.total,
         }));
       });
     }
@@ -1654,18 +1657,29 @@ async function startPlayground(): Promise<void> {
   document.body.appendChild(castBarContainer);
 
   // Helper: apply post-cast effects
-  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot'];
+  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs'];
 
   // Ground targeting state
   let pendingGroundAbility: Ability | null = null;
 
   function cancelGroundTargeting(): void {
-    if (!pendingGroundAbility) return;
+    if (!pendingGroundAbility && !engine.pendingNpcSpawn) return;
     pendingGroundAbility = null;
+    engine.pendingNpcSpawn = null;
     engine.targetingSystem.cancelGroundTarget();
   }
 
   engine.onGroundTargetConfirmed = () => {
+    // NPC spawn ground targeting
+    if (engine.pendingNpcSpawn) {
+      const { characterId, team } = engine.pendingNpcSpawn;
+      const pos = engine.targetingSystem.getGroundTargetPosition();
+      engine.targetingSystem.cancelGroundTarget();
+      engine.pendingNpcSpawn = null;
+      engine.spawnNpc(characterId, pos, team);
+      return;
+    }
+
     if (!pendingGroundAbility) return;
     const ability = pendingGroundAbility;
     const groundPos = engine.targetingSystem.getGroundTargetPosition();
@@ -1779,7 +1793,7 @@ async function startPlayground(): Promise<void> {
       network?.send({ type: 'return_to_lobby' });
     },
     onEscapeWhilePlaying: () => {
-      if (pendingGroundAbility) {
+      if (pendingGroundAbility || engine.pendingNpcSpawn) {
         cancelGroundTargeting();
         return true;
       }

@@ -346,7 +346,7 @@ export class PlayerController implements Targetable {
       strafeDirection = dDown ? 1 : -1;
     }
 
-    const isMoving = moveDir.lengthSq() > 0;
+    const isMoving = moveDir.lengthSq() > 0 && this.movementSpeedModifier > 0;
     this.isMoving = isMoving;
     const isBackpedaling = sDown && !wDown;
     const speedMultiplier = isBackpedaling ? this.backpedalMultiplier : 1;

@@ -1,5 +1,5 @@
 import type { Ability } from '@gtr/shared';
-import { yardsToUnits } from '@gtr/shared';
+import { yardsToUnits, JimmyLegdDebuff } from '@gtr/shared';
 import type { ServerEntity } from './ServerEntity.js';
 import type { ServerBuffSystem } from './ServerBuffSystem.js';
 import type { ServerRegenSystem } from './ServerRegenSystem.js';
@@ -260,6 +260,11 @@ export class ServerCombatSystem {
         } else if (damage === 0) {
           // 0-damage hostile ability (e.g. debuff-only) — still notify for auto-targeting
           this.onCombatText?.(attacker, target, 0, 'damage');
+        }
+
+        // Jimmy Legs: if target already has it, also immobilize
+        if (ability.id === 'jimmy-legs' && this.buffSystem.hasDebuff(target, 'jimmy-legs')) {
+          this.buffSystem.apply(target, JimmyLegdDebuff);
         }
 
         if (ability.appliesDebuff) {

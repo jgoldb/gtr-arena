@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { Engine } from '../engine/Engine';
 import { CHARACTER_LIST, CharacterId } from '../engine/player/characters';
 
@@ -48,8 +47,7 @@ export class NpcSpawner {
 
     this.spawnBtn.addEventListener('click', () => {
       const characterId = this.select.value as CharacterId;
-      const pos = this.pickSpawnPosition(engine);
-      engine.spawnNpc(characterId, pos);
+      this.startSpawnGroundTarget(engine, characterId);
     });
 
     // Spawn friendly button
@@ -70,8 +68,7 @@ export class NpcSpawner {
 
     this.spawnFriendlyBtn.addEventListener('click', () => {
       const characterId = this.select.value as CharacterId;
-      const pos = this.pickSpawnPosition(engine);
-      engine.spawnNpc(characterId, pos, 0);
+      this.startSpawnGroundTarget(engine, characterId, 0);
     });
 
     // Clear all button
@@ -110,24 +107,18 @@ export class NpcSpawner {
     container.appendChild(this.clearBtn);
   }
 
-  private pickSpawnPosition(engine: Engine): THREE.Vector3 {
-    const bounds = engine.mapManager.getNpcSpawnBounds();
-    const playerPos = engine.playerController.getPosition();
-
-    // Pick a random position within the inner portion of the arena,
-    // at least 5 units from the player so it doesn't spawn on top of them
-    const margin = 3;
-    for (let attempts = 0; attempts < 20; attempts++) {
-      const x = margin + Math.random() * (bounds.maxX - bounds.minX - margin * 2) + bounds.minX;
-      const z = margin + Math.random() * (bounds.maxZ - bounds.minZ - margin * 2) + bounds.minZ;
-      const dx = x - playerPos.x;
-      const dz = z - playerPos.z;
-      if (dx * dx + dz * dz > 25) {
-        return new THREE.Vector3(x, 0, z);
-      }
+  private startSpawnGroundTarget(engine: Engine, characterId: CharacterId, team?: number): void {
+    // Toggle off if already in NPC spawn ground targeting
+    if (engine.pendingNpcSpawn) {
+      engine.pendingNpcSpawn = null;
+      engine.targetingSystem.cancelGroundTarget();
+      return;
     }
 
-    // Fallback: spawn at map center-ish
-    return new THREE.Vector3(0, 0, 0);
+    // Cancel any existing ground targeting, then enter NPC spawn mode
+    engine.targetingSystem.cancelGroundTarget();
+    engine.pendingNpcSpawn = { characterId, team };
+    // Use a small reticle (0.5 radius), large range, and skip LOS checks
+    engine.targetingSystem.startGroundTarget(0.5, 999, true);
   }
 }

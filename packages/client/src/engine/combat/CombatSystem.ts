@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Ability } from './Ability';
+import { JimmyLegdDebuff } from './Ability';
 import type { Targetable } from '../types';
 import type { RegenSystem } from './RegenSystem';
 import type { BuffSystem } from './BuffSystem';
@@ -278,6 +279,11 @@ export class CombatSystem {
         }
         if (actualDamage > 0) {
           this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+        }
+
+        // Jimmy Legs: if target already has it, also immobilize
+        if (ability.id === 'jimmy-legs' && this.buffSystem.hasDebuff(target, 'jimmy-legs')) {
+          this.buffSystem.apply(target, JimmyLegdDebuff);
         }
 
         // Apply debuff only on hit

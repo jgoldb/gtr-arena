@@ -1,5 +1,11 @@
 import type { Targetable } from '../engine/types';
-import type { ActiveBuff } from '../engine/combat/BuffSystem';
+
+export interface DRTimerDisplay {
+  icon: string;
+  count: number;
+  remaining: number;
+  total: number;
+}
 
 export interface ArenaFramesOptions {
   localPlayer: Targetable;
@@ -9,7 +15,8 @@ export interface ArenaFramesOptions {
 
 interface ArenaFrameEntry {
   entityId: string;
-  element: HTMLElement;
+  wrapper: HTMLElement;   // Outer wrapper (DR tray + frame body)
+  element: HTMLElement;    // Clickable frame body
   portraitImg: HTMLImageElement;
   skullOverlay: HTMLElement;
   disconnectOverlay: HTMLElement;
@@ -24,8 +31,8 @@ interface ArenaFrameEntry {
   castBarContainer: HTMLElement;
   castBarFill: HTMLElement;
   castBarLabel: HTMLElement;
-  debuffTray: HTMLElement;
-  debuffIcons: HTMLElement[];
+  drTray: HTMLElement;
+  drIcons: HTMLElement[];
   lastModelName: string;
   targetable: Targetable | null;
   combatTextEl: HTMLElement;
@@ -39,8 +46,7 @@ export class ArenaFrames {
   private getPortrait: (modelName: string) => string | undefined;
   private onClick: (target: Targetable) => void;
   private selectedEntityId: string | null = null;
-  private tooltipEl: HTMLElement;
-  private tooltipHoveredEl: HTMLElement | null = null;
+  private _disabled = false;
 
   private static readonly CT_DURATION = 1.5;
   private static readonly CT_POP_IN = 0.15;
@@ -63,24 +69,6 @@ export class ArenaFrames {
       gap: 4px;
       pointer-events: none;
     `;
-
-    // Shared tooltip
-    this.tooltipEl = document.createElement('div');
-    this.tooltipEl.style.cssText = `
-      position: fixed;
-      z-index: 400;
-      pointer-events: none;
-      display: none;
-      min-width: 160px;
-      max-width: 240px;
-      background: linear-gradient(to bottom, rgba(20, 12, 28, 0.97), rgba(10, 6, 16, 0.97));
-      border: 1px solid #5535aa;
-      border-radius: 4px;
-      padding: 8px 10px;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
-    `;
-    document.body.appendChild(this.tooltipEl);
   }
 
   /** Set the list of opponent entity IDs + targetables. Call once on game start, or when entities change. */
@@ -88,7 +76,7 @@ export class ArenaFrames {
     entities: { entityId: string; targetable: Targetable }[]
   ): void {
     // Clear old frames
-    for (const f of this.frames) f.element.remove();
+    for (const f of this.frames) f.wrapper.remove();
     this.frames = [];
 
     // Filter to only opponents (hostile to local player)
@@ -98,7 +86,7 @@ export class ArenaFrames {
       const frame = this.createFrame(ent.entityId);
       frame.targetable = ent.targetable;
       this.frames.push(frame);
-      this.element.appendChild(frame.element);
+      this.element.appendChild(frame.wrapper);
     }
   }
 
@@ -110,7 +98,33 @@ export class ArenaFrames {
     this.selectedEntityId = entityId;
   }
 
+  setDisabled(disabled: boolean): void {
+    this._disabled = disabled;
+  }
+
   private createFrame(entityId: string): ArenaFrameEntry {
+    // Outer wrapper: DR tray (left) + frame body (right)
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = `
+      position: relative;
+      pointer-events: none;
+    `;
+
+    // DR tray — positioned absolutely to the left of the frame
+    const drTray = document.createElement('div');
+    drTray.style.cssText = `
+      position: absolute;
+      right: 100%;
+      top: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      align-items: center;
+      margin-right: 3px;
+      pointer-events: none;
+    `;
+    wrapper.appendChild(drTray);
+
     const el = document.createElement('div');
     el.style.cssText = `
       background: rgba(0, 0, 0, 0.75);
@@ -124,9 +138,10 @@ export class ArenaFrames {
       pointer-events: auto;
       transition: border-color 0.15s;
     `;
+    wrapper.appendChild(el);
 
     el.addEventListener('mousedown', (e) => {
-      if (e.button === 0) {
+      if (e.button === 0 && !this._disabled) {
         const frame = this.frames.find(f => f.element === el);
         if (frame?.targetable) this.onClick(frame.targetable);
       }
@@ -248,13 +263,9 @@ export class ArenaFrames {
     castBarContainer.appendChild(castBarLabel);
     el.appendChild(castBarContainer);
 
-    // Debuff tray
-    const debuffTray = document.createElement('div');
-    debuffTray.style.cssText = 'display: flex; flex-wrap: wrap; gap: 2px; margin-top: 3px;';
-    el.appendChild(debuffTray);
-
     return {
       entityId,
+      wrapper,
       element: el,
       portraitImg,
       skullOverlay,
@@ -270,8 +281,8 @@ export class ArenaFrames {
       castBarContainer,
       castBarFill,
       castBarLabel,
-      debuffTray,
-      debuffIcons: [],
+      drTray,
+      drIcons: [],
       lastModelName: '',
       targetable: null,
       combatTextEl,
@@ -306,122 +317,6 @@ export class ArenaFrames {
     bar.appendChild(fill);
     bar.appendChild(text);
     return { bar, fill, text };
-  }
-
-  private createDebuffIcon(): HTMLElement {
-    const icon = document.createElement('div');
-    icon.style.cssText = `
-      width: 22px; height: 22px;
-      display: flex; align-items: center; justify-content: center;
-      position: relative;
-      background: rgba(80, 80, 100, 0.8);
-      border: 1.5px solid #cc2222;
-      border-radius: 2px;
-      overflow: hidden;
-      cursor: pointer;
-    `;
-    const emoji = document.createElement('span');
-    emoji.style.cssText = 'font-size: 11px; line-height: 1; z-index: 1; position: relative;';
-    icon.appendChild(emoji);
-
-    const sweep = document.createElement('div');
-    sweep.style.cssText = `
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      border-radius: 2px; pointer-events: none;
-    `;
-    icon.appendChild(sweep);
-
-    const timer = document.createElement('span');
-    timer.style.cssText = `
-      position: absolute; bottom: -1px; right: 1px;
-      font-size: 8px; color: #fff;
-      text-shadow: 1px 1px 1px rgba(0,0,0,0.9);
-      z-index: 2;
-    `;
-    icon.appendChild(timer);
-
-    // Tooltip on hover
-    icon.addEventListener('mouseenter', () => {
-      this.tooltipHoveredEl = icon;
-      this.refreshTooltip(icon);
-    });
-    icon.addEventListener('mouseleave', () => {
-      if (this.tooltipHoveredEl === icon) {
-        this.tooltipHoveredEl = null;
-        this.tooltipEl.style.display = 'none';
-      }
-    });
-
-    return icon;
-  }
-
-  private refreshTooltip(icon: HTMLElement): void {
-    const aura = (icon as any)._aura as ActiveBuff | undefined;
-    if (!aura) {
-      this.tooltipEl.style.display = 'none';
-      return;
-    }
-    const remaining = Math.ceil(aura.remaining);
-    const durationLabel = !(remaining > 0 && isFinite(remaining)) ? '' : `<div style="
-      color: #aaa; font-size: 11px; margin-top: 4px;
-    ">${remaining} second${remaining !== 1 ? 's' : ''} remaining</div>`;
-
-    this.tooltipEl.innerHTML = `
-      <div style="color: #ffd100; font-size: 14px; font-weight: bold; margin-bottom: 4px;">${aura.definition.name}</div>
-      <div style="color: #eee; font-size: 12px; line-height: 1.4;">${aura.definition.description}</div>
-      ${durationLabel}
-    `;
-
-    const rect = icon.getBoundingClientRect();
-    this.tooltipEl.style.display = 'block';
-    const tipW = this.tooltipEl.offsetWidth;
-    // Position to the left of the icon (since frames are on the right side)
-    let left = rect.left - tipW - 6;
-    if (left < 8) left = rect.right + 6;
-    this.tooltipEl.style.left = `${left}px`;
-    this.tooltipEl.style.top = `${rect.top}px`;
-  }
-
-  private updateDebuffTray(
-    frame: ArenaFrameEntry,
-    debuffs: readonly ActiveBuff[]
-  ): void {
-    while (frame.debuffIcons.length < debuffs.length) {
-      const icon = this.createDebuffIcon();
-      frame.debuffIcons.push(icon);
-      frame.debuffTray.appendChild(icon);
-    }
-    for (let i = 0; i < frame.debuffIcons.length; i++) {
-      if (i < debuffs.length) {
-        const el = frame.debuffIcons[i];
-        const aura = debuffs[i];
-        (el as any)._aura = aura;
-        el.style.display = 'flex';
-        (el.children[0] as HTMLElement).textContent = aura.definition.icon;
-        const hasFiniteDuration = (aura.definition.duration > 0 && isFinite(aura.definition.duration))
-          || (aura.remaining > 0 && isFinite(aura.remaining));
-        el.style.background = hasFiniteDuration ? 'rgba(80, 80, 100, 0.8)' : 'transparent';
-        const elapsed = aura.definition.duration - aura.remaining;
-        const degrees = hasFiniteDuration && isFinite(aura.definition.duration) && aura.definition.duration > 0
-          ? (elapsed / aura.definition.duration) * 360 : 0;
-        const sweepEl = el.children[1] as HTMLElement;
-        sweepEl.style.display = hasFiniteDuration ? '' : 'none';
-        sweepEl.style.background = degrees > 0
-          ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
-          : 'transparent';
-        (el.children[2] as HTMLElement).textContent = hasFiniteDuration ? Math.ceil(aura.remaining).toString() : '';
-        if (this.tooltipHoveredEl === el) this.refreshTooltip(el);
-      } else {
-        frame.debuffIcons[i].style.display = 'none';
-        (frame.debuffIcons[i] as any)._aura = undefined;
-        if (this.tooltipHoveredEl === frame.debuffIcons[i]) {
-          this.tooltipHoveredEl = null;
-          this.tooltipEl.style.display = 'none';
-        }
-      }
-    }
-    // Show/hide tray
-    frame.debuffTray.style.display = debuffs.length > 0 ? 'flex' : 'none';
   }
 
   showCombatText(entityId: string, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge'): void {
@@ -459,10 +354,99 @@ export class ArenaFrames {
     frame.combatTextEl.style.display = 'flex';
   }
 
-  /** Call every frame with dt and per-entity buffs. */
+  private createDRIcon(): HTMLElement {
+    // children[0] = emoji, [1] = sweep, [2] = timer, [3] = DR level label
+    const icon = document.createElement('div');
+    icon.style.cssText = `
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+      background: rgba(60, 60, 80, 0.8);
+      border: 1.5px solid #888;
+      border-radius: 3px;
+      overflow: hidden;
+    `;
+    const emoji = document.createElement('span');
+    emoji.style.cssText = 'font-size: 20px; line-height: 1; z-index: 1; position: relative; opacity: 0.85;';
+    icon.appendChild(emoji);
+
+    const sweep = document.createElement('div');
+    sweep.style.cssText = `
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      border-radius: 3px; pointer-events: none;
+    `;
+    icon.appendChild(sweep);
+
+    const timer = document.createElement('span');
+    timer.style.cssText = `
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 13px; font-weight: bold; color: #fff;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 4px rgba(0,0,0,0.8);
+      z-index: 2;
+      pointer-events: none;
+    `;
+    icon.appendChild(timer);
+
+    const drLevel = document.createElement('span');
+    drLevel.style.cssText = `
+      position: absolute;
+      bottom: 1px; left: 1px;
+      font-size: 9px; font-weight: bold;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+      z-index: 3;
+      pointer-events: none;
+    `;
+    icon.appendChild(drLevel);
+
+    return icon;
+  }
+
+  private static readonly DR_LEVEL_LABELS: Record<number, { text: string; color: string }> = {
+    1: { text: '\u00BD', color: '#4f4' },   // ½ — next is half duration
+    2: { text: '\u00BC', color: '#ff4' },   // ¼ — next is quarter duration
+    3: { text: 'X', color: '#f44' },         // immune
+  };
+
+  private updateDRTray(frame: ArenaFrameEntry, drTimers: readonly DRTimerDisplay[]): void {
+    while (frame.drIcons.length < drTimers.length) {
+      const icon = this.createDRIcon();
+      frame.drIcons.push(icon);
+      frame.drTray.appendChild(icon);
+    }
+    for (let i = 0; i < frame.drIcons.length; i++) {
+      if (i < drTimers.length) {
+        const el = frame.drIcons[i];
+        const dr = drTimers[i];
+        el.style.display = 'flex';
+        (el.children[0] as HTMLElement).textContent = dr.icon;
+        const elapsed = dr.total - dr.remaining;
+        const degrees = dr.total > 0 ? (elapsed / dr.total) * 360 : 0;
+        const sweepEl = el.children[1] as HTMLElement;
+        sweepEl.style.background = degrees > 0
+          ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
+          : 'transparent';
+        (el.children[2] as HTMLElement).textContent = Math.ceil(dr.remaining).toString();
+        // DR level indicator
+        const level = ArenaFrames.DR_LEVEL_LABELS[dr.count];
+        const drLevelEl = el.children[3] as HTMLElement;
+        if (level) {
+          drLevelEl.textContent = level.text;
+          drLevelEl.style.color = level.color;
+        } else {
+          drLevelEl.textContent = '';
+        }
+      } else {
+        frame.drIcons[i].style.display = 'none';
+      }
+    }
+  }
+
+  /** Call every frame with dt and per-entity DR timers. */
   update(
     dt: number,
-    getDebuffs: (entityId: string) => readonly ActiveBuff[],
+    getDRTimers?: (entityId: string) => readonly DRTimerDisplay[],
   ): void {
     for (const frame of this.frames) {
       const t = frame.targetable;
@@ -505,6 +489,11 @@ export class ArenaFrames {
       frame.manaBar.style.background = isDisconnected ? '#333' : '#0a1a3a';
       frame.manaText.textContent = `${Math.round(t.mana)} / ${t.maxMana}`;
 
+      // Disabled state (during arena prep)
+      frame.element.style.opacity = this._disabled ? '0.75' : '1';
+      frame.element.style.cursor = this._disabled ? 'default' : 'pointer';
+      frame.element.style.pointerEvents = this._disabled ? 'none' : 'auto';
+
       // Selection highlight
       const isSelected = frame.entityId === this.selectedEntityId;
       frame.element.style.borderColor = isSelected ? '#ff4444' : 'rgba(255, 255, 255, 0.15)';
@@ -528,8 +517,8 @@ export class ArenaFrames {
         frame.castBarContainer.style.display = 'none';
       }
 
-      // Debuffs
-      this.updateDebuffTray(frame, getDebuffs(frame.entityId));
+      // DR timers
+      this.updateDRTray(frame, getDRTimers?.(frame.entityId) ?? []);
 
       // Combat text animation
       this.updateCombatText(frame, dt);
@@ -568,7 +557,7 @@ export class ArenaFrames {
   removeEntity(entityId: string): void {
     const idx = this.frames.findIndex(f => f.entityId === entityId);
     if (idx === -1) return;
-    this.frames[idx].element.remove();
+    this.frames[idx].wrapper.remove();
     this.frames.splice(idx, 1);
   }
 
@@ -577,9 +566,8 @@ export class ArenaFrames {
   }
 
   dispose(): void {
-    for (const f of this.frames) f.element.remove();
+    for (const f of this.frames) f.wrapper.remove();
     this.frames = [];
     this.element.remove();
-    this.tooltipEl.remove();
   }
 }
