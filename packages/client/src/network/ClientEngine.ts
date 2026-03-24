@@ -3,7 +3,7 @@ import type { EntitySnapshot, EntityBuffSnapshot } from '@gtr/shared';
 import type {
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
   S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
-  S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing,
+  S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing, S2C_Knockback,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
 import { yardsToUnits, getCharacterStats, Sweep } from '@gtr/shared';
@@ -102,6 +102,9 @@ export class ClientEngine {
 
   // Sweep charge (local player only — client-side movement during charge)
   private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number; savedAutoAttackTargetId: string | null } | null = null;
+
+  // Active knockbacks (visual displacement on client)
+  private activeKnockbacks: { entityId: string; dirX: number; dirZ: number; distance: number; duration: number; elapsed: number }[] = [];
 
   // Track tab visibility for fast-forwarding client-side timers on restore
   private wasHidden = false;
@@ -374,6 +377,7 @@ export class ClientEngine {
       case 'auto_attack_swing': this.handleAutoAttackSwing(event); break;
       case 'gas_cloud_spawn': this.handleGasCloudSpawn(event); break;
       case 'chem_pool_spawn': this.handleChemPoolSpawn(event); break;
+      case 'knockback': this.handleKnockback(event); break;
       case 'entity_died': break; // handled via game state (dead flag)
     }
   }
@@ -639,11 +643,17 @@ export class ClientEngine {
       if (msg.abilityId === 'sweep') {
         this.startSweepCharge();
       }
+      if (msg.abilityId === 'kaboom') {
+        this.spawnKaboomGust(this.playerController.mesh.position, this.playerController.mesh.rotation.y);
+      }
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
       if (entity) {
         const targetPos = groundPos ?? (entity.targetEntityId ? this.getEntityMesh(entity.targetEntityId)?.position.clone() : undefined);
         entity.model.triggerAbilityAnimation(msg.abilityId, targetPos);
+        if (msg.abilityId === 'kaboom') {
+          this.spawnKaboomGust(entity.mesh.position, entity.mesh.rotation.y);
+        }
       }
     }
   }
@@ -682,6 +692,115 @@ export class ClientEngine {
       ...visual, elapsed: 0, duration: msg.duration,
       activationDelay: msg.activationDelay, consumed: false, consumeElapsed: 0,
     });
+  }
+
+  handleKnockback(msg: S2C_Knockback): void {
+    this.activeKnockbacks.push({
+      entityId: msg.entityId,
+      dirX: msg.dirX,
+      dirZ: msg.dirZ,
+      distance: msg.distance,
+      duration: msg.duration,
+      elapsed: 0,
+    });
+  }
+
+  private updateKnockbacks(dt: number): void {
+    for (let i = this.activeKnockbacks.length - 1; i >= 0; i--) {
+      const kb = this.activeKnockbacks[i];
+      kb.elapsed += dt;
+      const t = Math.min(1, kb.elapsed / kb.duration);
+
+      const speed = kb.distance / kb.duration;
+      const height = 3.0 * 4 * t * (1 - t); // parabolic arc
+
+      if (kb.entityId === this.localEntityId) {
+        this.playerController.mesh.position.x += kb.dirX * speed * dt;
+        this.playerController.mesh.position.z += kb.dirZ * speed * dt;
+        this.playerController.mesh.position.y = height;
+      } else {
+        const entity = this.remoteEntities.get(kb.entityId);
+        if (entity) {
+          entity.mesh.position.x += kb.dirX * speed * dt;
+          entity.mesh.position.z += kb.dirZ * speed * dt;
+          entity.mesh.position.y = height;
+        }
+      }
+
+      if (t >= 1) {
+        // Reset Y on landing
+        if (kb.entityId === this.localEntityId) {
+          this.playerController.mesh.position.y = 0;
+        } else {
+          const entity = this.remoteEntities.get(kb.entityId);
+          if (entity) entity.mesh.position.y = 0;
+        }
+        this.activeKnockbacks.splice(i, 1);
+      }
+    }
+  }
+
+  private spawnKaboomGust(origin: THREE.Vector3, rotY: number): void {
+    const halfAngle = Math.PI / 6;
+    const range = yardsToUnits(8);
+    const particleCount = 30;
+    const group = new THREE.Group();
+    group.position.set(origin.x, 0, origin.z);
+
+    const particles: { mesh: THREE.Mesh; vx: number; vz: number; speed: number; life: number }[] = [];
+
+    for (let i = 0; i < particleCount; i++) {
+      const angle = rotY - halfAngle + Math.random() * 2 * halfAngle;
+      const speed = range * (0.8 + Math.random() * 0.4);
+      const size = 0.08 + Math.random() * 0.12;
+
+      const geo = new THREE.SphereGeometry(size, 4, 4);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xccddee,
+        transparent: true,
+        opacity: 0.5 + Math.random() * 0.3,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0, 0.3 + Math.random() * 1.0, 0);
+
+      group.add(mesh);
+      particles.push({ mesh, vx: Math.sin(angle), vz: Math.cos(angle), speed, life: 0 });
+    }
+
+    this.scene.add(group);
+
+    const duration = 0.4;
+    const startTime = performance.now();
+
+    const animate = () => {
+      const elapsed = (performance.now() - startTime) / 1000;
+      const t = elapsed / duration;
+
+      if (t >= 1) {
+        this.scene.remove(group);
+        for (const p of particles) {
+          (p.mesh.geometry as THREE.BufferGeometry).dispose();
+          (p.mesh.material as THREE.Material).dispose();
+        }
+        return;
+      }
+
+      for (const p of particles) {
+        p.life += 1 / 60;
+        const dist = p.speed * p.life;
+        p.mesh.position.x = p.vx * dist;
+        p.mesh.position.z = p.vz * dist;
+        (p.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - t) * (0.5 + Math.random() * 0.1);
+        p.mesh.position.y += 0.01;
+        const scale = 1 + t * 1.5;
+        p.mesh.scale.setScalar(scale);
+      }
+
+      requestAnimationFrame(animate);
+    };
+
+    requestAnimationFrame(animate);
   }
 
   // ── Accessors for UI ─────────────────────────────────────────────────
@@ -1107,6 +1226,9 @@ export class ClientEngine {
 
     // Update sweep charge (local player movement during charge)
     this.updateSweepCharge(dt);
+
+    // Update knockbacks (visual displacement)
+    this.updateKnockbacks(dt);
 
     // Update channel beam visual
     this.updateChannelBeam(dt);

@@ -221,6 +221,16 @@ export const JimmyLegdDebuff: BuffDefinition = {
   drCategory: 'root',
 };
 
+export const KaboomStun: BuffDefinition = {
+  id: 'kaboom-stun',
+  name: 'Kaboom!',
+  icon: '💥',
+  duration: 1,
+  type: 'debuff',
+  description: 'Knocked down by an explosion. Stunned.',
+  effects: [{ type: 'stun', value: 0 }],
+};
+
 export const ArenaPreparationBuff: BuffDefinition = {
   id: 'arena-preparation',
   name: 'Arena Preparation',
@@ -448,4 +458,16 @@ export const JimmyLegs: Ability = {
   description:
     'Inflicts the target with the Jimmy Legs, reducing movement speed by 50% for 5 seconds. If used on a target with Jimmy Legs, the target will become immobilized for 2 seconds.',
   appliesDebuff: JimmyLegsDebuff,
+};
+
+export const Kaboom: Ability = {
+  id: 'kaboom',
+  name: 'Kaboom',
+  icon: '💥',
+  manaCost: 235,
+  cooldown: 3,
+  damage: 0,
+  requiresHostileTarget: false,
+  description:
+    'Mix up a potent batch of chemicals, causing an explosion, knocking back enemies in front of you.',
 };

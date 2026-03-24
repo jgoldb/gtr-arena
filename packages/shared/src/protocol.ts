@@ -246,6 +246,15 @@ export interface S2C_AutoAttackSwing {
   targetEntityId: string;
 }
 
+export interface S2C_Knockback {
+  type: 'knockback';
+  entityId: string;
+  dirX: number;
+  dirZ: number;
+  distance: number;
+  duration: number;
+}
+
 export interface S2C_EntityDied {
   type: 'entity_died';
   entityId: string;
@@ -511,6 +520,7 @@ export type GameTickEvent =
   | S2C_AutoAttackSwing
   | S2C_GasCloudSpawn
   | S2C_ChemPoolSpawn
+  | S2C_Knockback
   | S2C_EntityDied;
 
 export interface S2C_GameStateUpdate {
@@ -610,6 +620,7 @@ export type ServerMessage =
   | S2C_AutoAttackSwing
   | S2C_GasCloudSpawn
   | S2C_ChemPoolSpawn
+  | S2C_Knockback
   | S2C_EntityDied
   | S2C_GameOver
   | S2C_ErrorMessage

@@ -896,6 +896,7 @@ export class DrRetardo extends CharacterModel {
     if (abilityId === 'bottle-chuck') return 0.7;
     if (abilityId === 'discombobulate') return 0.6;
     if (abilityId === 'chemical-spill') return 0.9;
+    if (abilityId === 'kaboom') return 0.7;
     return 0.6;
   }
 
@@ -906,6 +907,55 @@ export class DrRetardo extends CharacterModel {
       this.animateDiscombobCelebration(t);
     } else if (abilityId === 'chemical-spill') {
       this.animateChemicalSpill(t);
+    } else if (abilityId === 'kaboom') {
+      this.animateKaboom(t);
+    }
+  }
+
+  private animateKaboom(t: number): void {
+    if (t < 0.3) {
+      // Wind-up: crouch and pull arms back, mixing chemicals
+      const p = t / 0.3;
+      const ease = p * p;
+      // Crouch down
+      this.bodyGroup.position.y -= 0.2 * ease;
+      this.leftLegGroup.rotation.x += 0.3 * ease;
+      this.rightLegGroup.rotation.x += 0.3 * ease;
+      // Arms pull back at sides
+      this.leftArmGroup.rotation.x -= 0.4 * ease;
+      this.rightArmGroup.rotation.x -= 0.4 * ease;
+      this.leftArmGroup.rotation.z += 0.4 * ease;
+      this.rightArmGroup.rotation.z -= 0.4 * ease;
+      // Head tucks down
+      this.headGroup.rotation.x -= 0.2 * ease;
+    } else if (t < 0.5) {
+      // Explosion thrust: arms slam forward, body springs up
+      const p = (t - 0.3) / 0.2;
+      const ease = 1 - (1 - p) * (1 - p); // ease out
+      // Hold crouch base
+      this.bodyGroup.position.y -= 0.2 * (1 - ease);
+      this.leftLegGroup.rotation.x += 0.3 * (1 - ease);
+      this.rightLegGroup.rotation.x += 0.3 * (1 - ease);
+      // Arms thrust forward explosively
+      this.leftArmGroup.rotation.x += 1.6 * ease;
+      this.rightArmGroup.rotation.x += 1.6 * ease;
+      this.leftArmGroup.rotation.z -= 0.2 * ease;
+      this.rightArmGroup.rotation.z += 0.2 * ease;
+      // Body leans forward
+      this.bodyGroup.rotation.x -= 0.25 * ease;
+      // Head looks up from the blast
+      this.headGroup.rotation.x += 0.15 * ease;
+    } else {
+      // Recovery: return to idle
+      const p = (t - 0.5) / 0.5;
+      const ease = p * p * (3 - 2 * p);
+      const fade = 1 - ease;
+      this.leftArmGroup.rotation.x += 1.6 * fade;
+      this.rightArmGroup.rotation.x += 1.6 * fade;
+      this.leftArmGroup.rotation.z -= 0.2 * fade;
+      this.rightArmGroup.rotation.z += 0.2 * fade;
+      this.bodyGroup.rotation.x -= 0.25 * fade;
+      this.headGroup.rotation.x += 0.15 * fade;
     }
   }
 

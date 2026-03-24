@@ -52,7 +52,7 @@ export class FloatingCombatText {
   }
 
   /** Spawn arbitrary text (buff/debuff names, combat state, etc.) */
-  spawnText(target: THREE.Object3D, text: string, color: string): void {
+  spawnText(target: THREE.Object3D, text: string, color: string, isIncoming = false): void {
     const el = document.createElement('div');
     el.textContent = text;
 
@@ -90,7 +90,7 @@ export class FloatingCombatText {
       jitterX,
       isCrit: false,
       lane,
-      isIncoming: false,
+      isIncoming,
     });
   }
 

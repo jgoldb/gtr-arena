@@ -2,12 +2,12 @@ import type { Ability, BuffDefinition } from '@gtr/shared';
 import type { EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot } from '@gtr/shared';
 import type {
   S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
-  S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_EntityDied,
+  S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_Knockback, S2C_EntityDied,
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, ArenaPreparationBuff, RestingBuff, Sweep } from '@gtr/shared';
+import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, Sweep } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -103,6 +103,15 @@ interface PendingAoeImpact {
   owner: ServerEntity;
 }
 
+interface ActiveKnockback {
+  target: ServerEntity;
+  dirX: number;
+  dirZ: number;
+  distance: number;
+  duration: number;
+  elapsed: number;
+}
+
 export class ServerEngine {
   private entities: ServerEntity[] = [];
   private collision: CollisionSystem;
@@ -123,6 +132,7 @@ export class ServerEngine {
   private chemicalPools: ActiveChemicalPool[] = [];
   private activeDots: ActiveDot[] = [];
   private pendingAoeImpacts: PendingAoeImpact[] = [];
+  private activeKnockbacks: ActiveKnockback[] = [];
   private nextEffectId = 1;
 
   // Tick
@@ -639,6 +649,7 @@ export class ServerEngine {
     this.updateChemicalPools(dt);
     this.updateActiveDots(dt);
     this.updatePendingAoeImpacts(dt);
+    this.updateKnockbacks(dt);
     this.updateFullRetardAuras(dt);
 
     // Update systems
@@ -1002,6 +1013,9 @@ export class ServerEngine {
     if (ability.id === 'chemical-spill') {
       this.spawnChemicalPool(entity, yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, 2);
     }
+    if (ability.id === 'kaboom') {
+      this.executeKaboom(entity);
+    }
     if (ability.id === 'crotch-rot') {
       const target = this.getTarget(entity.id);
       if (target && !target.dead) {
@@ -1037,6 +1051,81 @@ export class ServerEngine {
       maxDamage: Sweep.chargeMaxDamage!,
       savedAutoAttackTarget,
     });
+  }
+
+  // ── Kaboom cone AoE with knockback ──────────────────────────────────
+
+  private static readonly KABOOM_CONE_RANGE = yardsToUnits(8);
+  private static readonly KABOOM_CONE_HALF_ANGLE = Math.PI / 6; // 60° total cone
+  private static readonly KABOOM_KNOCKBACK_DISTANCE = yardsToUnits(8);
+  private static readonly KABOOM_KNOCKBACK_DURATION = 0.5; // seconds
+
+  private executeKaboom(entity: ServerEntity): void {
+    const forwardX = Math.sin(entity.rotationY);
+    const forwardZ = Math.cos(entity.rotationY);
+    const range = ServerEngine.KABOOM_CONE_RANGE;
+    const cosHalf = Math.cos(ServerEngine.KABOOM_CONE_HALF_ANGLE);
+
+    for (const other of this.entities) {
+      if (other === entity || other.dead || !other.isHostileTo(entity)) continue;
+      const dx = other.x - entity.x;
+      const dz = other.z - entity.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist > range || dist < 0.01) continue;
+
+      // Cone angle check
+      const toTargetX = dx / dist;
+      const toTargetZ = dz / dist;
+      const dot = forwardX * toTargetX + forwardZ * toTargetZ;
+      if (dot < cosHalf) continue;
+
+      // Target is in cone — interrupt casting and knock them back
+      this.combatSystem.enterCombat(entity);
+      this.combatSystem.enterCombat(other);
+      this.cancelCasting(other.id);
+
+      this.activeKnockbacks.push({
+        target: other,
+        dirX: toTargetX,
+        dirZ: toTargetZ,
+        distance: ServerEngine.KABOOM_KNOCKBACK_DISTANCE,
+        duration: ServerEngine.KABOOM_KNOCKBACK_DURATION,
+        elapsed: 0,
+      });
+
+      this.pendingEvents.push({
+        type: 'knockback',
+        entityId: other.id,
+        dirX: toTargetX,
+        dirZ: toTargetZ,
+        distance: ServerEngine.KABOOM_KNOCKBACK_DISTANCE,
+        duration: ServerEngine.KABOOM_KNOCKBACK_DURATION,
+      } as S2C_Knockback);
+    }
+  }
+
+  private updateKnockbacks(dt: number): void {
+    for (let i = this.activeKnockbacks.length - 1; i >= 0; i--) {
+      const kb = this.activeKnockbacks[i];
+      kb.elapsed += dt;
+      const t = Math.min(1, kb.elapsed / kb.duration);
+
+      // Move target along knockback direction
+      const speed = kb.distance / kb.duration;
+      kb.target.x += kb.dirX * speed * dt;
+      kb.target.z += kb.dirZ * speed * dt;
+
+      // Resolve collision
+      const resolved = this.collision.resolve(kb.target.x, kb.target.z, kb.target.y, 0.4);
+      kb.target.x = resolved.x;
+      kb.target.z = resolved.z;
+
+      if (t >= 1) {
+        // Land — apply stun
+        this.buffSystem.apply(kb.target, KaboomStun);
+        this.activeKnockbacks.splice(i, 1);
+      }
+    }
   }
 
   // ── Gas clouds ──────────────────────────────────────────────────────

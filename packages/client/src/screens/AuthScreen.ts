@@ -253,6 +253,184 @@ export class AuthScreen {
       { t: 1.55, size: 22, r: 200, g: 180, b: 255, a: 0.07 },
     ];
 
+    // ── Exotic planet (bottom-right) — looming with rings & storms ──
+    const PLANET_R = 260;
+    const STRIP_W = PLANET_R * 5; // full surface "circumference"
+    const STRIP_H = PLANET_R * 2 + 20;
+    const stripCY = STRIP_H / 2;
+
+    // Volcano and storm positions in strip coordinates (for animated effects)
+    const volcanoStripPos = [
+      { x: 170, y: stripCY + 55, r: 20 },
+      { x: 450, y: stripCY - 35, r: 16 },
+      { x: 650, y: stripCY - 85, r: 14 },
+      { x: 850, y: stripCY + 70, r: 22 },
+      { x: 1100, y: stripCY + 25, r: 18 },
+      { x: 280, y: stripCY - 55, r: 15 },
+    ];
+    const stormStripPos = { x: 500, y: stripCY - 25, rx: 100, ry: 65 };
+
+    // Pre-rendered surface strip (no lighting — lighting applied per-frame)
+    const planetStrip = (() => {
+      const off = document.createElement('canvas');
+      off.width = STRIP_W; off.height = STRIP_H;
+      const p = off.getContext('2d')!;
+
+      // Dark rocky base
+      p.fillStyle = '#1a1a2e';
+      p.fillRect(0, 0, STRIP_W, STRIP_H);
+
+      // Water bodies — spread across the strip
+      for (const w of [
+        { x: 80, y: stripCY - 65, rx: 100, ry: 70, rot: 0.3 },
+        { x: 350, y: stripCY + 50, rx: 80, ry: 50, rot: -0.2 },
+        { x: 550, y: stripCY + 100, rx: 60, ry: 45, rot: 0.5 },
+        { x: 750, y: stripCY - 100, rx: 55, ry: 35, rot: -0.4 },
+        { x: 950, y: stripCY + 20, rx: 75, ry: 55, rot: 0.15 },
+        { x: 1180, y: stripCY - 50, rx: 65, ry: 45, rot: -0.3 },
+      ]) {
+        p.save();
+        p.translate(w.x, w.y);
+        p.rotate(w.rot);
+        p.beginPath();
+        p.ellipse(0, 0, w.rx, w.ry, 0, 0, Math.PI * 2);
+        const g = p.createRadialGradient(0, 0, 0, 0, 0, w.rx);
+        g.addColorStop(0, '#1a7aaa');
+        g.addColorStop(0.5, '#0e5570');
+        g.addColorStop(1, '#0a3850');
+        p.fillStyle = g;
+        p.fill();
+        p.restore();
+      }
+
+      // Forest continents
+      for (const f of [
+        { x: 30, y: stripCY + 25, rx: 60, ry: 90, rot: 0.1 },
+        { x: 200, y: stripCY - 15, rx: 85, ry: 45, rot: -0.25 },
+        { x: 420, y: stripCY - 40, rx: 50, ry: 75, rot: 0.4 },
+        { x: 580, y: stripCY + 80, rx: 70, ry: 35, rot: 0.2 },
+        { x: 700, y: stripCY - 20, rx: 55, ry: 60, rot: -0.15 },
+        { x: 880, y: stripCY + 60, rx: 40, ry: 30, rot: -0.1 },
+        { x: 1050, y: stripCY - 70, rx: 65, ry: 50, rot: 0.3 },
+        { x: 1230, y: stripCY + 40, rx: 45, ry: 55, rot: -0.2 },
+      ]) {
+        p.save();
+        p.translate(f.x, f.y);
+        p.rotate(f.rot);
+        p.beginPath();
+        p.ellipse(0, 0, f.rx, f.ry, 0, 0, Math.PI * 2);
+        const g = p.createRadialGradient(0, 0, 0, 0, 0, f.rx);
+        g.addColorStop(0, '#2d7a1e');
+        g.addColorStop(0.4, '#1a5515');
+        g.addColorStop(1, '#0a2808');
+        p.fillStyle = g;
+        p.fill();
+        p.restore();
+      }
+
+      // Lava rivers
+      for (const lv of [
+        { x: 170, y: stripCY + 60, rx: 75, ry: 4, rot: 0.7 },
+        { x: 450, y: stripCY - 30, rx: 55, ry: 3.5, rot: -0.5 },
+        { x: 650, y: stripCY - 80, rx: 45, ry: 3, rot: 1.2 },
+        { x: 850, y: stripCY + 75, rx: 40, ry: 3.5, rot: -0.8 },
+        { x: 1100, y: stripCY + 30, rx: 55, ry: 3, rot: 0.9 },
+        { x: 280, y: stripCY - 50, rx: 35, ry: 3, rot: -0.6 },
+      ]) {
+        p.save();
+        p.translate(lv.x, lv.y);
+        p.rotate(lv.rot);
+        p.beginPath();
+        p.ellipse(0, 0, lv.rx, lv.ry + 6, 0, 0, Math.PI * 2);
+        p.fillStyle = 'rgba(255,60,0,0.12)';
+        p.fill();
+        p.beginPath();
+        p.ellipse(0, 0, lv.rx, lv.ry, 0, 0, Math.PI * 2);
+        const g = p.createLinearGradient(-lv.rx, 0, lv.rx, 0);
+        g.addColorStop(0, 'rgba(255,80,10,0.1)');
+        g.addColorStop(0.2, '#ff5500');
+        g.addColorStop(0.5, '#ff7700');
+        g.addColorStop(0.8, '#ff5500');
+        g.addColorStop(1, 'rgba(255,80,10,0.1)');
+        p.fillStyle = g;
+        p.fill();
+        p.restore();
+      }
+
+      // Volcano craters
+      for (const v of volcanoStripPos) {
+        p.beginPath();
+        p.arc(v.x, v.y, v.r * 1.4, 0, Math.PI * 2);
+        const cg = p.createRadialGradient(v.x, v.y, 0, v.x, v.y, v.r * 1.4);
+        cg.addColorStop(0, '#cc5500');
+        cg.addColorStop(0.5, '#5a2a0a');
+        cg.addColorStop(1, '#2a1505');
+        p.fillStyle = cg;
+        p.fill();
+        p.beginPath();
+        p.arc(v.x, v.y, v.r * 0.5, 0, Math.PI * 2);
+        const lg = p.createRadialGradient(v.x, v.y, 0, v.x, v.y, v.r * 0.5);
+        lg.addColorStop(0, '#ffdd00');
+        lg.addColorStop(0.5, '#ff8800');
+        lg.addColorStop(1, '#cc4400');
+        p.fillStyle = lg;
+        p.fill();
+        p.beginPath();
+        p.arc(v.x, v.y, v.r * 2.5, 0, Math.PI * 2);
+        const hg = p.createRadialGradient(v.x, v.y, 0, v.x, v.y, v.r * 2.5);
+        hg.addColorStop(0, 'rgba(255,120,0,0.12)');
+        hg.addColorStop(1, 'rgba(255,60,0,0)');
+        p.fillStyle = hg;
+        p.fill();
+      }
+
+      // Storm cloud mass
+      p.save();
+      p.translate(stormStripPos.x, stormStripPos.y);
+      p.rotate(0.2);
+      for (const cp of [
+        { x: 0, y: 0, rx: 100, ry: 65 },
+        { x: -30, y: 15, rx: 60, ry: 45 },
+        { x: 35, y: -10, rx: 55, ry: 40 },
+      ]) {
+        p.beginPath();
+        p.ellipse(cp.x, cp.y, cp.rx, cp.ry, 0, 0, Math.PI * 2);
+        const sg = p.createRadialGradient(cp.x, cp.y, 0, cp.x, cp.y, cp.rx);
+        sg.addColorStop(0, 'rgba(10,5,20,0.75)');
+        sg.addColorStop(0.5, 'rgba(20,12,35,0.45)');
+        sg.addColorStop(1, 'rgba(0,0,0,0)');
+        p.fillStyle = sg;
+        p.fill();
+      }
+      p.restore();
+
+      return off;
+    })();
+
+    // Ring bands and planet animation state
+    const ringBands = [
+      { r: PLANET_R * 1.12, w: 10, c: 'rgba(185,165,135,0.3)' },
+      { r: PLANET_R * 1.22, w: 18, c: 'rgba(205,180,145,0.35)' },
+      { r: PLANET_R * 1.38, w: 20, c: 'rgba(195,170,135,0.3)' },
+      { r: PLANET_R * 1.52, w: 14, c: 'rgba(180,160,140,0.22)' },
+      { r: PLANET_R * 1.67, w: 10, c: 'rgba(160,145,125,0.15)' },
+    ];
+    const RING_TILT = 0.28;
+    const RING_ROT = -0.15;
+    const PLANET_SCROLL_SPEED = 0.008; // ~4 min per full rotation
+    let stormBolts: { pts: { x: number; y: number }[]; branches: { x: number; y: number }[][]; alpha: number; decay: number }[] = [];
+    let nextBoltTime = 0;
+    let stormFlash = 0;
+    const makeBolt = (sx: number, sy: number, ex: number, ey: number, n: number): { x: number; y: number }[] => {
+      const pts = [{ x: sx, y: sy }];
+      for (let i = 1; i < n; i++) {
+        const t = i / n;
+        pts.push({ x: sx + (ex - sx) * t + (Math.random() - 0.5) * 35, y: sy + (ey - sy) * t + (Math.random() - 0.5) * 25 });
+      }
+      pts.push({ x: ex, y: ey });
+      return pts;
+    };
+
     // ── Astronaut — tumbling spaceman on a windy path ────────────
     const astroEl = document.createElement('img');
     astroEl.src = '/grib_astro.png';
@@ -346,7 +524,7 @@ export class AuthScreen {
     };
     let astronaut: Astronaut | null = null;
     let astroSpawnTime = 0; // timestamp of next spawn
-    const ASTRO_INTERVAL = 30000; // 30 seconds
+    const ASTRO_INTERVAL = 10000; // 10 seconds
 
     const spawnAstronaut = (): Astronaut => {
       const w = canvas.width, h = canvas.height;
@@ -659,6 +837,174 @@ export class AuthScreen {
         ctx.lineTo(s.x + s.len, s.y);
         ctx.stroke();
       }
+
+      // ── Exotic planet (bottom-right, rotating) ─────────────────
+      const px = canvas.width - 180, py = canvas.height - 100;
+      const scrollX = (now * PLANET_SCROLL_SPEED) % STRIP_W;
+
+      // Atmospheric outer glow
+      ctx.globalAlpha = 0.6;
+      const planetAtmos = ctx.createRadialGradient(px, py, PLANET_R * 0.9, px, py, PLANET_R * 1.2);
+      planetAtmos.addColorStop(0, 'rgba(40,80,180,0.08)');
+      planetAtmos.addColorStop(0.5, 'rgba(30,60,150,0.04)');
+      planetAtmos.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = planetAtmos;
+      ctx.beginPath();
+      ctx.arc(px, py, PLANET_R * 1.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Back rings (top visual half — behind planet)
+      ctx.globalAlpha = 1;
+      for (const rb of ringBands) {
+        ctx.beginPath();
+        ctx.ellipse(px, py, rb.r, rb.r * RING_TILT, RING_ROT, Math.PI, 2 * Math.PI);
+        ctx.strokeStyle = rb.c;
+        ctx.lineWidth = rb.w;
+        ctx.stroke();
+      }
+
+      // Planet surface — scrolling strip clipped to planet disk
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(px, py, PLANET_R, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = '#1a1a2e';
+      ctx.fillRect(px - PLANET_R, py - PLANET_R, PLANET_R * 2, PLANET_R * 2);
+      const stripDrawX = px - PLANET_R - scrollX;
+      const stripDrawY = py - stripCY;
+      ctx.drawImage(planetStrip, stripDrawX, stripDrawY);
+      ctx.drawImage(planetStrip, stripDrawX + STRIP_W, stripDrawY);
+
+      // 3D lighting overlay (fixed, doesn't rotate with surface)
+      ctx.globalAlpha = 1;
+      const pLight = ctx.createRadialGradient(px - PLANET_R * 0.45, py - PLANET_R * 0.45, 0, px, py, PLANET_R);
+      pLight.addColorStop(0, 'rgba(255,240,200,0.12)');
+      pLight.addColorStop(0.35, 'rgba(0,0,0,0)');
+      pLight.addColorStop(0.75, 'rgba(0,0,0,0.35)');
+      pLight.addColorStop(1, 'rgba(0,0,0,0.65)');
+      ctx.fillStyle = pLight;
+      ctx.fillRect(px - PLANET_R, py - PLANET_R, PLANET_R * 2, PLANET_R * 2);
+
+      // Atmosphere rim highlight
+      ctx.strokeStyle = 'rgba(80,140,255,0.12)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(px, py, PLANET_R - 1.5, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Volcano glow pulses (at scrolled strip positions)
+      for (const v of volcanoStripPos) {
+        for (let wrap = 0; wrap < 2; wrap++) {
+          const vx = stripDrawX + v.x + wrap * STRIP_W;
+          const vy = stripDrawY + v.y;
+          const dx = vx - px, dy = vy - py;
+          if (dx * dx + dy * dy > (PLANET_R + v.r * 3) * (PLANET_R + v.r * 3)) continue;
+          const pulse = 0.5 + 0.5 * Math.sin(now * 0.003 + v.x * 0.1);
+          ctx.globalAlpha = 0.12 + pulse * 0.15;
+          const vg = ctx.createRadialGradient(vx, vy, 0, vx, vy, v.r * 3);
+          vg.addColorStop(0, 'rgba(255,140,20,0.4)');
+          vg.addColorStop(0.5, 'rgba(255,60,0,0.15)');
+          vg.addColorStop(1, 'rgba(255,30,0,0)');
+          ctx.fillStyle = vg;
+          ctx.beginPath();
+          ctx.arc(vx, vy, v.r * 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Lightning storm — pick the wrap position closest to planet center
+      const stormSX1 = stripDrawX + stormStripPos.x;
+      const stormSX2 = stormSX1 + STRIP_W;
+      const stormSY = stripDrawY + stormStripPos.y;
+      const useStormX = Math.abs(stormSX1 - px) < Math.abs(stormSX2 - px) ? stormSX1 : stormSX2;
+      const sDx = useStormX - px, sDy = stormSY - py;
+      const stormOnDisk = sDx * sDx + sDy * sDy < PLANET_R * PLANET_R;
+
+      if (stormOnDisk && now > nextBoltTime) {
+        const count = 1 + Math.floor(Math.random() * 3);
+        for (let bi = 0; bi < count; bi++) {
+          const sx = useStormX + (Math.random() - 0.5) * stormStripPos.rx;
+          const sy = stormSY + (Math.random() - 0.5) * stormStripPos.ry * 0.5;
+          const ex = sx + (Math.random() - 0.5) * 60;
+          const ey = sy + 15 + Math.random() * 35;
+          const main = makeBolt(sx, sy, ex, ey, 5 + Math.floor(Math.random() * 4));
+          const branches: { x: number; y: number }[][] = [];
+          for (let j = 0, nb = Math.floor(Math.random() * 3); j < nb; j++) {
+            const mi = 1 + Math.floor(Math.random() * (main.length - 2));
+            const mp = main[mi];
+            branches.push(makeBolt(mp.x, mp.y, mp.x + (Math.random() - 0.5) * 40, mp.y + 10 + Math.random() * 20, 3));
+          }
+          stormBolts.push({ pts: main, branches, alpha: 1.0, decay: 0.06 + Math.random() * 0.04 });
+        }
+        stormFlash = 0.5;
+        nextBoltTime = now + 800 + Math.random() * 2500;
+      }
+
+      // Storm flash decay (always runs)
+      if (stormFlash > 0) {
+        stormFlash *= 0.85;
+        if (stormFlash < 0.01) stormFlash = 0;
+      }
+
+      // Storm flash draw (only when on disk)
+      if (stormFlash > 0.01 && stormOnDisk) {
+        ctx.globalAlpha = stormFlash * 0.35;
+        const fg = ctx.createRadialGradient(useStormX, stormSY, 0, useStormX, stormSY, stormStripPos.rx);
+        fg.addColorStop(0, 'rgba(180,180,255,0.5)');
+        fg.addColorStop(0.5, 'rgba(120,120,200,0.2)');
+        fg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.arc(useStormX, stormSY, stormStripPos.rx, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw lightning bolts
+      for (let i = stormBolts.length - 1; i >= 0; i--) {
+        const bolt = stormBolts[i];
+        bolt.alpha -= bolt.decay;
+        if (bolt.alpha <= 0) { stormBolts.splice(i, 1); continue; }
+        // Glow
+        ctx.globalAlpha = bolt.alpha * 0.5;
+        ctx.strokeStyle = 'rgba(150,150,255,0.6)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(bolt.pts[0].x, bolt.pts[0].y);
+        for (let j = 1; j < bolt.pts.length; j++) ctx.lineTo(bolt.pts[j].x, bolt.pts[j].y);
+        ctx.stroke();
+        // Core
+        ctx.globalAlpha = bolt.alpha;
+        ctx.strokeStyle = `rgba(220,220,255,${bolt.alpha})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(bolt.pts[0].x, bolt.pts[0].y);
+        for (let j = 1; j < bolt.pts.length; j++) ctx.lineTo(bolt.pts[j].x, bolt.pts[j].y);
+        ctx.stroke();
+        // Branches
+        ctx.globalAlpha = bolt.alpha * 0.5;
+        ctx.strokeStyle = 'rgba(180,180,255,0.5)';
+        ctx.lineWidth = 1;
+        for (const br of bolt.branches) {
+          ctx.beginPath();
+          ctx.moveTo(br[0].x, br[0].y);
+          for (let j = 1; j < br.length; j++) ctx.lineTo(br[j].x, br[j].y);
+          ctx.stroke();
+        }
+      }
+
+      ctx.restore(); // end planet clip
+
+      // Front rings (bottom visual half — in front of planet)
+      ctx.globalAlpha = 1;
+      for (const rb of ringBands) {
+        ctx.beginPath();
+        ctx.ellipse(px, py, rb.r, rb.r * RING_TILT, RING_ROT, 0, Math.PI);
+        ctx.strokeStyle = rb.c;
+        ctx.lineWidth = rb.w;
+        ctx.stroke();
+      }
+
+      ctx.globalAlpha = 1;
 
       // Asteroids — pre-rendered, just drawImage with rotation
       if (asteroidList.length < 3 && Math.random() < 0.004) asteroidList.push(makeAsteroid());

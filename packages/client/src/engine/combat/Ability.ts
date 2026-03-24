@@ -30,6 +30,8 @@ export {
   JimmyLegsDebuff,
   JimmyLegdDebuff,
   JimmyLegs,
+  KaboomStun,
+  Kaboom,
   ArenaPreparationBuff,
   RestingBuff,
 } from '@gtr/shared';

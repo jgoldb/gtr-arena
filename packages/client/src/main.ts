@@ -434,13 +434,13 @@ function startMultiplayer(msg: S2C_GameStart): void {
   clientEngine.onEnterCombat = (entityId) => {
     if (entityId === clientEngine!.localId) {
       const mesh = clientEngine!.getEntityMesh(entityId);
-      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '+Combat', '#cc3333');
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '+Combat', '#cc3333', true);
     }
   };
   clientEngine.onLeaveCombat = (entityId) => {
     if (entityId === clientEngine!.localId) {
       const mesh = clientEngine!.getEntityMesh(entityId);
-      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '-Combat', '#33cc33');
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '-Combat', '#33cc33', true);
     }
   };
 
@@ -449,7 +449,7 @@ function startMultiplayer(msg: S2C_GameStart): void {
       const mesh = clientEngine!.getEntityMesh(entityId);
       if (mesh && mpCombatText) {
         const color = buff.type === 'buff' ? '#3388ff' : '#ff6644';
-        mpCombatText.spawnText(mesh, `+${buff.name}`, color);
+        mpCombatText.spawnText(mesh, `+${buff.name}`, color, true);
       }
     }
   };
@@ -457,7 +457,7 @@ function startMultiplayer(msg: S2C_GameStart): void {
     if (entityId === clientEngine!.localId) {
       const mesh = clientEngine!.getEntityMesh(entityId);
       if (mesh && mpCombatText) {
-        mpCombatText.spawnText(mesh, `-${buff.name}`, '#888888');
+        mpCombatText.spawnText(mesh, `-${buff.name}`, '#888888', true);
       }
     }
   };
@@ -512,13 +512,13 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
   clientEngine.onEnterCombat = (entityId) => {
     if (entityId === clientEngine!.localId) {
       const mesh = clientEngine!.getEntityMesh(entityId);
-      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '+Combat', '#cc3333');
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '+Combat', '#cc3333', true);
     }
   };
   clientEngine.onLeaveCombat = (entityId) => {
     if (entityId === clientEngine!.localId) {
       const mesh = clientEngine!.getEntityMesh(entityId);
-      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '-Combat', '#33cc33');
+      if (mesh && mpCombatText) mpCombatText.spawnText(mesh, '-Combat', '#33cc33', true);
     }
   };
 
@@ -527,7 +527,7 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
       const mesh = clientEngine!.getEntityMesh(entityId);
       if (mesh && mpCombatText) {
         const color = buff.type === 'buff' ? '#3388ff' : '#ff6644';
-        mpCombatText.spawnText(mesh, `+${buff.name}`, color);
+        mpCombatText.spawnText(mesh, `+${buff.name}`, color, true);
       }
     }
   };
@@ -535,7 +535,7 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
     if (entityId === clientEngine!.localId) {
       const mesh = clientEngine!.getEntityMesh(entityId);
       if (mesh && mpCombatText) {
-        mpCombatText.spawnText(mesh, `-${buff.name}`, '#888888');
+        mpCombatText.spawnText(mesh, `-${buff.name}`, '#888888', true);
       }
     }
   };
@@ -1127,6 +1127,10 @@ function handleServerMessage(msg: ServerMessage): void {
       clientEngine?.handleChemPoolSpawn(msg);
       break;
 
+    case 'knockback':
+      clientEngine?.handleKnockback(msg);
+      break;
+
     case 'countdown_start':
       // Server confirmed all clients are ready — reset the arena timer so
       // everyone's countdown is synchronized regardless of load time.
@@ -1625,24 +1629,24 @@ async function startPlayground(): Promise<void> {
 
   engine.combatSystem.onEnterCombat = (entity) => {
     if (entity === engine.playerController) {
-      combatText.spawnText(entity.mesh, '+Combat', '#cc3333');
+      combatText.spawnText(entity.mesh, '+Combat', '#cc3333', true);
     }
   };
   engine.combatSystem.onLeaveCombat = (entity) => {
     if (entity === engine.playerController) {
-      combatText.spawnText(entity.mesh, '-Combat', '#33cc33');
+      combatText.spawnText(entity.mesh, '-Combat', '#33cc33', true);
     }
   };
 
   engine.buffSystem.onBuffApplied = (target, definition) => {
     if (target === engine.playerController) {
       const color = definition.type === 'buff' ? '#3388ff' : '#ff6644';
-      combatText.spawnText(target.mesh, `+${definition.name}`, color);
+      combatText.spawnText(target.mesh, `+${definition.name}`, color, true);
     }
   };
   engine.buffSystem.onBuffExpired = (target, definition) => {
     if (target === engine.playerController) {
-      combatText.spawnText(target.mesh, `-${definition.name}`, '#888888');
+      combatText.spawnText(target.mesh, `-${definition.name}`, '#888888', true);
     }
     engine.handleBuffExpired(target, definition);
   };
@@ -1716,6 +1720,7 @@ async function startPlayground(): Promise<void> {
     engine.playerController.triggerAbilityAnimation(ability.id, targetPos);
     if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
     if (ability.id === 'sweep') engine.startSweepCharge();
+    if (ability.id === 'kaboom') engine.executeKaboom();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
     if (ability.id === 'crotch-rot') {
       const target = engine.targetingSystem.currentTarget;

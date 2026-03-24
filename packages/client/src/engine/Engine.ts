@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, type Ability } from './combat/Ability';
+import { yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
@@ -86,6 +86,15 @@ interface PendingAoeImpact {
   owner: Targetable;
 }
 
+interface ActiveKnockback {
+  target: Targetable;
+  dirX: number;
+  dirZ: number;
+  distance: number;
+  duration: number;
+  elapsed: number;
+}
+
 export class Engine {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
@@ -105,6 +114,7 @@ export class Engine {
   private readonly activeDots: ActiveDot[] = [];
   private readonly discombobEffects: DiscombobBubbles[] = [];
   private readonly pendingAoeImpacts: PendingAoeImpact[] = [];
+  private readonly activeKnockbacks: ActiveKnockback[] = [];
   private fullRetardAura: ActiveFullRetardAura | null = null;
   private crotchRotVisuals = new Map<Targetable, CrotchRotVisual & { elapsed: number }>();
   private channelBeam: THREE.Mesh | null = null;
@@ -1190,6 +1200,152 @@ export class Engine {
     }
   }
 
+  // ── Kaboom cone AoE with knockback ──────────────────────────────────
+
+  private static readonly KABOOM_CONE_RANGE = yardsToUnits(8);
+  private static readonly KABOOM_CONE_HALF_ANGLE = Math.PI / 6; // 60° total cone (30° each side)
+  private static readonly KABOOM_KNOCKBACK_DISTANCE = yardsToUnits(8);
+  private static readonly KABOOM_KNOCKBACK_DURATION = 0.5; // seconds
+  private static readonly KABOOM_KNOCKBACK_HEIGHT = 3.0; // world units peak height
+
+  executeKaboom(): void {
+    const player = this.playerController;
+    const rotY = player.mesh.rotation.y;
+    const forwardX = Math.sin(rotY);
+    const forwardZ = Math.cos(rotY);
+    const range = Engine.KABOOM_CONE_RANGE;
+    const cosHalf = Math.cos(Engine.KABOOM_CONE_HALF_ANGLE);
+
+    // Gust of air visual
+    this.spawnKaboomGust(player.mesh.position, rotY, range);
+
+    for (const npc of this.npcs) {
+      if (npc.dead || !npc.isHostileTo(player)) continue;
+      const dx = npc.mesh.position.x - player.mesh.position.x;
+      const dz = npc.mesh.position.z - player.mesh.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist > range || dist < 0.01) continue;
+
+      // Cone angle check
+      const toTargetX = dx / dist;
+      const toTargetZ = dz / dist;
+      const dot = forwardX * toTargetX + forwardZ * toTargetZ;
+      if (dot < cosHalf) continue;
+
+      // Target is in cone — knock them back
+      this.combatSystem.enterCombat(player);
+      this.combatSystem.enterCombat(npc);
+      this.activeKnockbacks.push({
+        target: npc,
+        dirX: toTargetX,
+        dirZ: toTargetZ,
+        distance: Engine.KABOOM_KNOCKBACK_DISTANCE,
+        duration: Engine.KABOOM_KNOCKBACK_DURATION,
+        elapsed: 0,
+      });
+    }
+  }
+
+  private spawnKaboomGust(origin: THREE.Vector3, rotY: number, range: number): void {
+    const halfAngle = Engine.KABOOM_CONE_HALF_ANGLE;
+    const particleCount = 30;
+    const group = new THREE.Group();
+    group.position.set(origin.x, 0, origin.z);
+
+    const particles: { mesh: THREE.Mesh; vx: number; vz: number; speed: number; life: number }[] = [];
+
+    for (let i = 0; i < particleCount; i++) {
+      // Random angle within cone
+      const angle = rotY - halfAngle + Math.random() * 2 * halfAngle;
+      // Random distance along cone (bias toward mid-range)
+      const dist = 0.3 + Math.random() * 0.7;
+      const speed = range * (0.8 + Math.random() * 0.4);
+      const size = 0.08 + Math.random() * 0.12;
+
+      const geo = new THREE.SphereGeometry(size, 4, 4);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xccddee,
+        transparent: true,
+        opacity: 0.5 + Math.random() * 0.3,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(0, 0.3 + Math.random() * 1.0, 0);
+
+      group.add(mesh);
+      particles.push({
+        mesh,
+        vx: Math.sin(angle),
+        vz: Math.cos(angle),
+        speed,
+        life: 0,
+      });
+    }
+
+    this.scene.add(group);
+
+    const duration = 0.4;
+    const startTime = performance.now();
+
+    const animate = () => {
+      const elapsed = (performance.now() - startTime) / 1000;
+      const t = elapsed / duration;
+
+      if (t >= 1) {
+        this.scene.remove(group);
+        for (const p of particles) {
+          (p.mesh.geometry as THREE.BufferGeometry).dispose();
+          (p.mesh.material as THREE.Material).dispose();
+        }
+        return;
+      }
+
+      for (const p of particles) {
+        p.life += 1 / 60; // approximate dt
+        const dist = p.speed * p.life;
+        p.mesh.position.x = p.vx * dist;
+        p.mesh.position.z = p.vz * dist;
+        // Fade out as they travel
+        (p.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - t) * (0.5 + Math.random() * 0.1);
+        // Slight upward drift
+        p.mesh.position.y += 0.01;
+        // Scale up slightly as they spread
+        const scale = 1 + t * 1.5;
+        p.mesh.scale.setScalar(scale);
+      }
+
+      requestAnimationFrame(animate);
+    };
+
+    requestAnimationFrame(animate);
+  }
+
+  private updateKnockbacks(dt: number): void {
+    for (let i = this.activeKnockbacks.length - 1; i >= 0; i--) {
+      const kb = this.activeKnockbacks[i];
+      kb.elapsed += dt;
+      const t = Math.min(1, kb.elapsed / kb.duration);
+
+      // Move target along knockback direction
+      const speed = kb.distance / kb.duration;
+      if (kb.target.mesh) {
+        kb.target.mesh.position.x += kb.dirX * speed * dt;
+        kb.target.mesh.position.z += kb.dirZ * speed * dt;
+        // Parabolic arc for Y (knocked up into air)
+        kb.target.mesh.position.y = Engine.KABOOM_KNOCKBACK_HEIGHT * 4 * t * (1 - t);
+      }
+
+      if (t >= 1) {
+        // Land — reset Y and apply stun
+        if (kb.target.mesh) {
+          kb.target.mesh.position.y = 0;
+        }
+        this.buffSystem.apply(kb.target, KaboomStun);
+        this.activeKnockbacks.splice(i, 1);
+      }
+    }
+  }
+
   private updateAutoAttack(dt: number): void {
     if (!this.autoAttacking) return;
 
@@ -1475,6 +1631,7 @@ export class Engine {
     this.updateChemicalPools(deltaTime);
     this.updateActiveDots(deltaTime);
     this.updatePendingAoeImpacts(deltaTime);
+    this.updateKnockbacks(deltaTime);
     this.updateFullRetardAura(deltaTime);
     this.updateCrotchRotVisuals(deltaTime);
     this.updateDiscombobEffects(deltaTime);
