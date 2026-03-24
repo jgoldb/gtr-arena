@@ -386,7 +386,9 @@ export class UnitFrame {
         sweepEl.style.background = degrees > 0
           ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
           : 'transparent';
-        (el.children[2] as HTMLElement).textContent = hasFiniteDuration ? Math.ceil(aura.remaining).toString() : '';
+        (el.children[2] as HTMLElement).textContent = hasFiniteDuration
+          ? (aura.remaining < 10 ? aura.remaining.toFixed(1) : Math.ceil(aura.remaining).toString())
+          : '';
         // Refresh tooltip if this icon is hovered
         if (this.tooltipHoveredEl === el) {
           this.refreshTooltip(el);

@@ -13,6 +13,12 @@ export class InputManager {
   private leftClickStartY = 0;
   private leftDragDist = 0;
   private leftClickEvent: { x: number; y: number } | null = null;
+
+  // Right-click vs drag detection
+  private rightClickPending = false;
+  private rightClickStartX = 0;
+  private rightClickStartY = 0;
+  private rightDragDist = 0;
   private rightClickEvent: { x: number; y: number } | null = null;
   private static readonly CLICK_THRESHOLD = 4;
 
@@ -72,7 +78,10 @@ export class InputManager {
     if (e.button === 1) this.mouseButtons.middle = true;
     if (e.button === 2) {
       this.mouseButtons.right = true;
-      this.rightClickEvent = { x: e.clientX, y: e.clientY };
+      this.rightClickPending = true;
+      this.rightClickStartX = e.clientX;
+      this.rightClickStartY = e.clientY;
+      this.rightDragDist = 0;
       // Right-click always gets immediate pointer lock; cancel any pending left click
       this.leftClickPending = false;
       this.canvas.requestPointerLock();
@@ -89,7 +98,14 @@ export class InputManager {
       }
     }
     if (e.button === 1) this.mouseButtons.middle = false;
-    if (e.button === 2) this.mouseButtons.right = false;
+    if (e.button === 2) {
+      this.mouseButtons.right = false;
+      if (this.rightClickPending) {
+        // Mouse didn't move enough to be a drag → fire as a click
+        this.rightClickEvent = { x: this.rightClickStartX, y: this.rightClickStartY };
+        this.rightClickPending = false;
+      }
+    }
 
     // Only exit pointer lock when both left and right are released
     if (!this.mouseButtons.left && !this.mouseButtons.right) {
@@ -125,6 +141,14 @@ export class InputManager {
         this.canvas.requestPointerLock();
       }
     }
+
+    if (this.rightClickPending) {
+      this.rightDragDist += Math.abs(e.movementX) + Math.abs(e.movementY);
+      if (this.rightDragDist > InputManager.CLICK_THRESHOLD) {
+        // Exceeded threshold → this is a camera drag, not a click
+        this.rightClickPending = false;
+      }
+    }
   };
 
   private onBlur = (): void => {
@@ -133,6 +157,7 @@ export class InputManager {
     this.mouseButtons.right = false;
     this.mouseButtons.middle = false;
     this.leftClickPending = false;
+    this.rightClickPending = false;
   };
 
   private onPointerLockChange = (): void => {

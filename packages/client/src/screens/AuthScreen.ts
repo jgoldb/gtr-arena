@@ -294,7 +294,20 @@ export class AuthScreen {
       "I just shidded all over myself",
       "I'm Sketch MC Flex, I'm the best...",
     ];
-    bubble.textContent = astroThoughts[Math.floor(Math.random() * astroThoughts.length)];
+    let shuffledThoughts: string[] = [];
+    let thoughtIndex = 0;
+    function nextThought(): string {
+      if (thoughtIndex >= shuffledThoughts.length) {
+        shuffledThoughts = [...astroThoughts];
+        for (let i = shuffledThoughts.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffledThoughts[i], shuffledThoughts[j]] = [shuffledThoughts[j], shuffledThoughts[i]];
+        }
+        thoughtIndex = 0;
+      }
+      return shuffledThoughts[thoughtIndex++];
+    }
+    bubble.textContent = nextThought();
     bubble.style.cssText = `
       background: #fff; color: #111; font-family: 'Comic Sans MS', 'Segoe UI', sans-serif;
       font-size: 15px; font-weight: 700; padding: 8px 14px; border-radius: 18px;
@@ -417,7 +430,7 @@ export class AuthScreen {
         if (!astronaut && now >= astroSpawnTime) {
           astronaut = spawnAstronaut();
           astroEl.style.display = 'block';
-          bubble.textContent = astroThoughts[Math.floor(Math.random() * astroThoughts.length)];
+          bubble.textContent = nextThought();
           bubbleVisible = false;
           bubbleDone = false;
           bubbleShowTime = 0;

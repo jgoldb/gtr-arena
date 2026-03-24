@@ -422,18 +422,23 @@ export class Nameplates {
         el.style.display = 'flex';
         (el.children[0] as HTMLElement).textContent = aura.icon;
 
-        const hasFiniteDuration = aura.duration > 0 && isFinite(aura.duration);
+        const hasFiniteDuration = (aura.duration > 0 && isFinite(aura.duration))
+          || (aura.remaining > 0 && isFinite(aura.remaining));
         el.style.background = hasFiniteDuration ? 'rgba(80, 80, 100, 0.8)' : 'transparent';
 
         const elapsed = aura.duration - aura.remaining;
-        const degrees = hasFiniteDuration ? (elapsed / aura.duration) * 360 : 0;
+        const degrees = hasFiniteDuration && isFinite(aura.duration) && aura.duration > 0
+          ? (elapsed / aura.duration) * 360
+          : 0;
         const sweepEl = el.children[1] as HTMLElement;
         sweepEl.style.display = hasFiniteDuration ? '' : 'none';
         sweepEl.style.background = degrees > 0
           ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
           : 'transparent';
 
-        (el.children[2] as HTMLElement).textContent = hasFiniteDuration ? Math.ceil(aura.remaining).toString() : '';
+        (el.children[2] as HTMLElement).textContent = hasFiniteDuration
+          ? (aura.remaining < 10 ? aura.remaining.toFixed(1) : Math.ceil(aura.remaining).toString())
+          : '';
       } else {
         debuffIcons[i].style.display = 'none';
       }
