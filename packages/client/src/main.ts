@@ -854,10 +854,12 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
         definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'buff', description: b.description, effects: [], unremovable: b.unremovable },
         remaining: b.remaining,
         shieldRemaining: b.shieldRemaining,
+        appliedAt: Date.now(),
       }));
       const pDebuffList = pBuffs.filter(b => b.type === 'debuff').map(b => ({
         definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'debuff', description: b.description, effects: [] },
         remaining: b.remaining,
+        appliedAt: Date.now(),
       }));
       mpPlayerFrame.update(player, pBuffList, pDebuffList);
     }
@@ -873,10 +875,12 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
           definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'buff', description: b.description, effects: [] },
           remaining: b.remaining,
           shieldRemaining: b.shieldRemaining,
+          appliedAt: Date.now(),
         }));
         const tDebuffs = rawBuffs.filter(b => b.type === 'debuff').map(b => ({
           definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'debuff', description: b.description, effects: [] },
           remaining: b.remaining,
+          appliedAt: Date.now(),
         }));
         mpTargetFrame.update(targetTarget, tBuffs, tDebuffs);
       } else {
