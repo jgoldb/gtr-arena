@@ -36,11 +36,11 @@ export function xpProgress(xp: number): { current: number; needed: number } {
  * @param opponentLevel - The highest-level opponent in the match
  * @param won          - Whether the player won
  *
- * Baseline: lvl 1 vs lvl 1 → winner 160 XP, loser 80 XP.
+ * Baseline: lvl 1 vs lvl 1 → winner 240 XP, loser 80 XP.
  * Base XP grows with player level (60 + 20 * level).
  * Penalty when opponent is lower — accelerating with each level of gap.
  * Modest fixed bonus when opponent is higher (10 * playerLevel).
- * Winners earn 2x losers.
+ * Winners earn 3x losers.
  */
 export function calculateXpGain(playerLevel: number, opponentLevel: number, won: boolean): number {
   const base = 60 + 20 * playerLevel;
@@ -60,7 +60,7 @@ export function calculateXpGain(playerLevel: number, opponentLevel: number, won:
     adjusted = base + 10 * playerLevel;
   }
 
-  return Math.round(adjusted * 2);
+  return Math.round(adjusted * 3);
 }
 
 // ── Shared entity interface (no Three.js dependency) ──────────────────────

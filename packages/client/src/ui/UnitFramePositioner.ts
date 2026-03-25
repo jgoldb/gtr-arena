@@ -16,7 +16,6 @@ interface FrameConfig {
 interface SavedPosition {
   top: number;   // 0–1
   left: number;  // 0–1
-  locked: boolean;
 }
 
 export class UnitFramePositioner {
@@ -50,7 +49,7 @@ export class UnitFramePositioner {
 
     const saved = this.loadPosition(id);
     const positionPct = saved ?? defaultPct;
-    const locked = saved?.locked ?? true;
+    const locked = true;
     const originalCursor = element.style.cursor;
 
     // Ensure element is interactable (wrapper has pointer-events: none to not block canvas)
@@ -178,7 +177,7 @@ export class UnitFramePositioner {
     const config = this.dragging;
     const rect = config.wrapper.getBoundingClientRect();
     config.positionPct = this.pxToPct(rect.top, rect.left);
-    this.savePosition(config.id, config.positionPct, config.locked);
+    this.savePosition(config.id, config.positionPct);
     config.wrapper.style.zIndex = '200';
     this.dragging = null;
     this.hideGrid();
@@ -246,7 +245,6 @@ export class UnitFramePositioner {
         config.locked = !config.locked;
         if (config.locked) this.removeUnlockedStyle(config);
         else this.applyUnlockedStyle(config);
-        this.savePosition(config.id, config.positionPct, config.locked);
         this.closeContextMenu();
       }),
     );
@@ -341,10 +339,10 @@ export class UnitFramePositioner {
     }
   }
 
-  private savePosition(id: string, pct: { top: number; left: number }, locked: boolean): void {
+  private savePosition(id: string, pct: { top: number; left: number }): void {
     try {
       const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-      data[id] = { top: pct.top, left: pct.left, locked };
+      data[id] = { top: pct.top, left: pct.left };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch { /* ignore */ }
   }

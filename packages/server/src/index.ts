@@ -128,6 +128,7 @@ wss.on('connection', (ws: WebSocket) => {
           success: false,
           userId: '',
           bannedUntil: result.bannedUntil,
+          banReason: result.banReason,
           error: result.error,
         }));
       }

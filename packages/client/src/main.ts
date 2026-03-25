@@ -1,4 +1,5 @@
 import type { ServerMessage, S2C_GameStart, S2C_RejoinGame, PlayerMatchResult } from '@gtr/shared';
+import { Vector3 as THREEVector3 } from 'three';
 import { AuthScreen } from './screens/AuthScreen';
 import { LobbyScreen } from './screens/LobbyScreen';
 import { GameLobbyScreen } from './screens/GameLobbyScreen';
@@ -21,7 +22,7 @@ import { PartyFrames } from './ui/PartyFrames';
 import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
-import { getCharacterStats, xpToLevel, CHARACTER_LIST } from '@gtr/shared';
+import { getCharacterStats, xpToLevel, CHARACTER_LIST, type CharacterId } from '@gtr/shared';
 import { GLOBAL_COOLDOWN, type Ability } from './engine/combat/Ability';
 import type { Targetable } from './engine/types';
 
@@ -30,7 +31,7 @@ if (!canvas) throw new Error('Canvas element not found');
 
 // Prevent browser context menu during gameplay
 document.addEventListener('contextmenu', (e) => {
-  if (currentState === 'playground' || currentState === 'multiplayer') {
+  if (currentState === 'playground' || currentState === 'multiplayer' || currentState === 'ui-setup') {
     e.preventDefault();
   }
 });
@@ -41,7 +42,7 @@ const getPortrait = (modelName: string) => portraits.get(modelName);
 
 // ── State ──────────────────────────────────────────────────────────────
 
-type AppState = 'auth' | 'lobby' | 'game-lobby' | 'multiplayer' | 'playground';
+type AppState = 'auth' | 'lobby' | 'game-lobby' | 'multiplayer' | 'playground' | 'ui-setup';
 let currentState: AppState = 'auth';
 let network: NetworkManager | null = null;
 let localUserId = '';
@@ -97,6 +98,8 @@ let pgCastBarContainer: HTMLDivElement | null = null;
 let pgEscapeMenu: EscapeMenu | null = null;
 let pgDebugHUD: DebugHUD | null = null;
 let pgPositioner: UnitFramePositioner | null = null;
+let pgArenaFrames: ArenaFrames | null = null;
+let pgPartyFrames: PartyFrames | null = null;
 
 // Lobby escape menu
 let lobbyEscapeMenu: EscapeMenu | null = null;
@@ -249,6 +252,10 @@ function cleanupPlaygroundUI(): void {
   pgEscapeMenu = null;
   pgDebugHUD?.dispose();
   pgDebugHUD = null;
+  pgArenaFrames?.dispose();
+  pgArenaFrames = null;
+  pgPartyFrames?.dispose();
+  pgPartyFrames = null;
   // Clear sidebar panel containers (CharacterSelector, MapSelector, NpcSpawner, debug buttons)
   const containers = ['map-selector-container', 'debug-panel-container', 'character-selector-container', 'npc-spawner-container'];
   for (const id of containers) {
@@ -291,6 +298,7 @@ function showLobby(): void {
 
   lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin, localXp);
   lobbyScreen.onPlayground = () => startPlayground();
+  lobbyScreen.onUISetup = () => startUISetup();
   lobbyScreen.onLogout = () => {
     network?.disconnect();
     network = null;
@@ -328,6 +336,12 @@ function showLobby(): void {
       hoverColor: 'rgba(168, 112, 48, 0.9)',
     });
   }
+  lobbyMenuButtons.push({
+    label: 'Practice',
+    onClick: () => lobbyScreen?.onUISetup?.(),
+    color: 'rgba(74, 58, 106, 0.8)',
+    hoverColor: 'rgba(94, 74, 130, 0.9)',
+  });
   lobbyMenuButtons.push({
     label: 'Change Password',
     onClick: () => lobbyScreen?.showChangePasswordDialog(),
@@ -684,7 +698,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   document.body.appendChild(mpPositioner.register('player', mpPlayerFrame.element, { top: 12, left: 12 }));
   document.body.appendChild(mpPositioner.register('target', mpTargetFrame.element, { top: 12, left: 280 }));
   document.body.appendChild(mpPositioner.register('tot', mpToTFrame.element, { top: 84, left: 390 }));
-  document.body.appendChild(mpPositioner.register('party', mpPartyFrames.element, { top: 100, left: 12 }, { stayBelow: { frameId: 'player', gap: 80 } }));
+  document.body.appendChild(mpPositioner.register('party', mpPartyFrames.element, { top: 150, left: 12 }, { stayBelow: { frameId: 'player', gap: 8 } }));
   const arenaDefaultLeft = window.innerWidth - 250;
   const arenaDefaultTop = Math.round(window.innerHeight / 2 - 100);
   document.body.appendChild(mpPositioner.register('arena', mpArenaFrames.element, { top: arenaDefaultTop, left: arenaDefaultLeft }));
@@ -1080,6 +1094,9 @@ function handleServerMessage(msg: ServerMessage): void {
         if (msg.bannedUntil && msg.bannedUntil !== 'permanent') {
           const banEnd = new Date(msg.bannedUntil + 'Z');
           errorMsg = `You are banned until ${banEnd.toLocaleString()}`;
+        }
+        if (msg.banReason) {
+          errorMsg += `\nReason: ${msg.banReason}`;
         }
         network?.disconnect();
         network = null;
@@ -2094,6 +2111,398 @@ async function startPlayground(): Promise<void> {
       const npc = engine.getNpcs().find(n => n === entity);
       return npc?.autoAttackTarget?.name ?? 'None';
     }, dt);
+
+    pgDebugHUD?.update(dt);
+
+    if (engine.playerController.dead && !deathFrame.visible) deathFrame.show();
+    else if (!engine.playerController.dead && deathFrame.visible) deathFrame.hide();
+  }
+  updateFrames();
+
+  pgResizeHandler = () => engine.resize(window.innerWidth, window.innerHeight);
+  window.addEventListener('resize', pgResizeHandler);
+  engine.start();
+}
+
+// ── UI Setup (solo training room for UI customization) ────────────────
+
+async function startUISetup(): Promise<void> {
+  cleanupCurrentState();
+  currentState = 'ui-setup';
+
+  const uiOverlay = document.getElementById('ui-overlay');
+  if (uiOverlay) uiOverlay.style.display = '';
+  canvas.style.display = 'block';
+
+  const { Engine } = await import('./engine/Engine');
+  const { CharacterSelector } = await import('./ui/CharacterSelector');
+
+  const engine = new Engine(canvas);
+  engine.loadMap('ui-setup');
+  // Remove arena preparation — this is a free-roam UI setup room
+  engine.buffSystem.remove(engine.playerController, 'arena-preparation');
+  engine.arenaPreparationActive = false;
+  pgEngine = engine;
+
+  // Spawn 3 ally and 3 enemy NPCs (massive HP so they don't die)
+  const practiceNpcs = [
+    engine.spawnNpc('janitor',    new THREEVector3(-6, 0, -6), 0, 'Party 1'),
+    engine.spawnNpc('dr-retardo', new THREEVector3(-8, 0, -3), 0, 'Party 2'),
+    engine.spawnNpc('crackhead',  new THREEVector3(-5, 0, 0),  0, 'Party 3'),
+    engine.spawnNpc('janitor',    new THREEVector3(6, 0, -6),  1, 'Arena 1'),
+    engine.spawnNpc('dr-retardo', new THREEVector3(8, 0, -3),  1, 'Arena 2'),
+    engine.spawnNpc('crackhead',  new THREEVector3(5, 0, 0),   1, 'Arena 3'),
+  ];
+  for (const npc of practiceNpcs) {
+    npc.maxHp = 9999999;
+    npc.hp = 9999999;
+  }
+
+  // Character selector (floating top-left panel, no debug sidebar)
+  const charContainer = document.getElementById('character-selector-container')!;
+  new CharacterSelector(engine, charContainer);
+
+  // Unit frames
+  const setTarget = (t: Targetable) => { engine.targetingSystem.currentTarget = t; };
+  const playerFrame = new UnitFrame({
+    getPortrait,
+    onClick: setTarget,
+    onBuffRightClick: (buffId) => {
+      engine.buffSystem.remove(engine.playerController, buffId);
+    },
+  });
+  pgPlayerFrame = playerFrame;
+  const targetFrame = new UnitFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
+  pgTargetFrame = targetFrame;
+  const totFrame = new TargetOfTargetFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
+  pgToTFrame = totFrame;
+
+  pgPositioner = new UnitFramePositioner();
+  document.body.appendChild(pgPositioner.register('player', playerFrame.element, { top: 12, left: 12 }));
+  document.body.appendChild(pgPositioner.register('target', targetFrame.element, { top: 12, left: 280 }));
+  document.body.appendChild(pgPositioner.register('tot', totFrame.element, { top: 84, left: 390 }));
+
+  // ── Party & arena frames backed by real NPCs ────────────────────────
+  const npcEntities = practiceNpcs.map((npc, i) => ({
+    entityId: `practice_npc_${i}`,
+    targetable: npc as unknown as Targetable,
+  }));
+
+  const partyFrames = new PartyFrames({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
+  pgPartyFrames = partyFrames;
+  partyFrames.setEntities(npcEntities);
+
+  const arenaFrames = new ArenaFrames({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
+  pgArenaFrames = arenaFrames;
+  arenaFrames.element.style.position = '';
+  arenaFrames.element.style.top = '';
+  arenaFrames.element.style.right = '';
+  arenaFrames.element.style.transform = '';
+  arenaFrames.element.style.zIndex = '';
+  arenaFrames.setEntities(npcEntities);
+
+  document.body.appendChild(pgPositioner.register('party', partyFrames.element, { top: 150, left: 12 }, { stayBelow: { frameId: 'player', gap: 8 } }));
+  const arenaDefaultLeft = window.innerWidth - 250;
+  const arenaDefaultTop = Math.round(window.innerHeight / 2 - 100);
+  document.body.appendChild(pgPositioner.register('arena', arenaFrames.element, { top: arenaDefaultTop, left: arenaDefaultLeft }));
+
+  const errorText = new ErrorText();
+  pgErrorText = errorText;
+  document.body.appendChild(errorText.element);
+  const combatText = new FloatingCombatText(engine.camera);
+  pgCombatText = combatText;
+  document.body.appendChild(combatText.element);
+  const nameplates = new Nameplates(
+    engine.camera, engine.scene,
+    (target) => { engine.targetingSystem.currentTarget = target; },
+    (target) => { engine.targetingSystem.setNameplateHover(target); },
+  );
+  pgNameplates = nameplates;
+  document.body.appendChild(nameplates.element);
+
+  const unitTooltip = new UnitTooltip(engine.playerController);
+  pgUnitTooltip = unitTooltip;
+  document.body.appendChild(unitTooltip.element);
+
+  engine.combatSystem.onCombatText = (target, amount, type) => {
+    const isIncoming = target === engine.playerController;
+    combatText.spawn(target.mesh, amount, type, isIncoming);
+    if (isIncoming) playerFrame.showCombatText(amount, type);
+    else if (target === engine.targetingSystem.currentTarget) targetFrame.showCombatText(amount, type);
+  };
+
+  engine.combatSystem.onEnterCombat = (entity) => {
+    if (entity === engine.playerController) {
+      combatText.spawnText(entity.mesh, '+Combat', '#cc3333', true);
+    }
+  };
+  engine.combatSystem.onLeaveCombat = (entity) => {
+    if (entity === engine.playerController) {
+      combatText.spawnText(entity.mesh, '-Combat', '#33cc33', true);
+    }
+  };
+
+  engine.buffSystem.onBuffApplied = (target, definition) => {
+    if (target === engine.playerController) {
+      const color = definition.type === 'buff' ? '#3388ff' : '#ff6644';
+      combatText.spawnText(target.mesh, `+${definition.name}`, color, true);
+    }
+  };
+  engine.buffSystem.onBuffExpired = (target, definition) => {
+    if (target === engine.playerController) {
+      combatText.spawnText(target.mesh, `-${definition.name}`, '#888888', true);
+    }
+    engine.handleBuffExpired(target, definition);
+  };
+  engine.buffSystem.onStacksChanged = (target, buffId, oldStacks, newStacks) => {
+    if (buffId === 'tweaking' && target === engine.playerController) {
+      const delta = newStacks - oldStacks;
+      const text = delta > 0 ? `+${delta} Tweaking` : `${delta} Tweaking`;
+      const color = delta > 0 ? '#3388ff' : '#888888';
+      combatText.spawnText(target.mesh, text, color, true);
+    }
+  };
+
+  // No arena preparation in UI setup mode
+
+  // Death frame
+  pgDeathFrame = new DeathFrame();
+  const respawnBtn = document.createElement('button');
+  respawnBtn.textContent = 'Respawn';
+  respawnBtn.style.cssText = 'margin-top: 12px; padding: 10px 32px; font-size: 15px; font-weight: bold; background: rgba(180,60,60,0.85); color: #eee; border: 1px solid #cc4444; border-radius: 4px; cursor: pointer; outline: none; pointer-events: auto;';
+  respawnBtn.addEventListener('click', () => { engine.respawnPlayer(); pgDeathFrame?.hide(); });
+  pgDeathFrame.element.querySelector('div')!.appendChild(respawnBtn);
+  document.body.appendChild(pgDeathFrame.element);
+
+  // Cast bar
+  const castBarContainer = document.createElement('div');
+  pgCastBarContainer = castBarContainer;
+  castBarContainer.style.cssText = 'position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); width: 240px; z-index: 100; display: none;';
+  const castBarHeader = document.createElement('div');
+  castBarHeader.style.cssText = 'display: flex; justify-content: space-between; color: #ddd; font-size: 11px; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; margin-bottom: 2px; text-shadow: 1px 1px 2px rgba(0,0,0,0.9);';
+  const castBarBg = document.createElement('div');
+  castBarBg.style.cssText = 'height: 14px; background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.2); border-radius: 3px; overflow: hidden;';
+  const castBarFill = document.createElement('div');
+  castBarFill.style.cssText = 'height: 100%; background: linear-gradient(to right, #4488ff, #66aaff); width: 0%;';
+  castBarBg.appendChild(castBarFill);
+  castBarContainer.append(castBarHeader, castBarBg);
+  document.body.appendChild(castBarContainer);
+
+  // Ground targeting state
+  let pendingGroundAbility: Ability | null = null;
+
+  function cancelGroundTargeting(): void {
+    if (!pendingGroundAbility) return;
+    pendingGroundAbility = null;
+    engine.targetingSystem.cancelGroundTarget();
+  }
+
+  engine.onGroundTargetConfirmed = () => {
+    if (!pendingGroundAbility) return;
+    const ability = pendingGroundAbility;
+    const groundPos = engine.targetingSystem.getGroundTargetPosition();
+    engine.targetingSystem.cancelGroundTarget();
+    pendingGroundAbility = null;
+
+    const result = engine.useGroundTargetAbility(ability, groundPos);
+    if (result.success) {
+      onAbilitySuccess(ability, groundPos);
+    } else if (result.errorMessage) {
+      errorText.show(result.errorMessage);
+    }
+  };
+
+  const { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot } = await import('./engine/combat/Ability');
+  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank'];
+
+  function onAbilitySuccess(ability: Ability, groundPos?: import('three').Vector3): void {
+    const targetPos = groundPos ?? engine.targetingSystem.currentTarget?.mesh.position.clone();
+    engine.playerController.triggerAbilityAnimation(ability.id, targetPos);
+    if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
+    if (ability.id === 'sweep') engine.startSweepCharge();
+    if (ability.id === 'kaboom') engine.executeKaboom();
+    if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
+    if (ability.id === 'crotch-rot') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && !target.dead) {
+        engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
+      }
+    }
+    if (ability.id === 'shank' || ability.id === 'pocket-sand') {
+      engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
+    }
+    if (MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && target.isHostileTo(engine.playerController) && !target.dead) {
+        engine.startAutoAttack(target);
+      }
+    }
+  }
+
+  engine.onCastComplete = (ability) => onAbilitySuccess(ability);
+  engine.onCastFailed = (message) => errorText.show(message);
+
+  // Action bar
+  const actionBar = new ActionBar({
+    onActivate: (ability) => {
+      if (engine.isResting()) engine.stopResting();
+      if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
+      if (engine.combatSystem.getGcdRemaining() > 0) return;
+      if (ability.groundTargeted) {
+        if (pendingGroundAbility?.id === ability.id) {
+          cancelGroundTargeting();
+        } else {
+          if (engine.combatSystem.getCooldownRemaining(ability.id) > 0) {
+            errorText.show('Ability is not ready yet');
+            return;
+          }
+          cancelGroundTargeting();
+          pendingGroundAbility = ability;
+          engine.targetingSystem.startGroundTarget(ability.aoeRadius ?? 1, ability.range ?? 10);
+        }
+        return;
+      }
+      cancelGroundTargeting();
+      let target: Targetable | null = engine.targetingSystem.currentTarget;
+      if (!target && ability.requiresTarget && !ability.requiresHostileTarget) target = engine.playerController;
+      if (ability.castTime) {
+        const result = engine.startCasting(ability, engine.playerController.mesh.rotation.y, target);
+        if (!result.success && result.errorMessage) errorText.show(result.errorMessage);
+      } else {
+        const result = engine.combatSystem.useAbility(ability, engine.playerController, engine.playerController.mesh.rotation.y, target);
+        if (result.success) {
+          onAbilitySuccess(ability);
+          engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+        }
+        else if (result.errorMessage) errorText.show(result.errorMessage);
+      }
+    },
+    getAbilityStatus: (ability) => {
+      const player = engine.playerController;
+      const effectiveManaCost = Math.round(ability.manaCost * engine.buffSystem.getManaCostMultiplier(player));
+      if (player.mana < effectiveManaCost) return 'not-enough-resource';
+      if (ability.requiresHostileTarget) {
+        const target = engine.targetingSystem.currentTarget;
+        if (!target || !target.isHostileTo(player) || target.dead) return 'no-target';
+        const dx = player.mesh.position.x - target.mesh.position.x;
+        const dz = player.mesh.position.z - target.mesh.position.z;
+        if (Math.sqrt(dx * dx + dz * dz) > ability.range!) return 'out-of-range';
+      }
+      if (ability.requiresTarget && !ability.requiresHostileTarget) {
+        const target = engine.targetingSystem.currentTarget ?? player;
+        if (target.dead) return 'no-target';
+        if (ability.range && target !== player) {
+          const dx = player.mesh.position.x - target.mesh.position.x;
+          const dz = player.mesh.position.z - target.mesh.position.z;
+          if (Math.sqrt(dx * dx + dz * dz) > ability.range) return 'out-of-range';
+        }
+      }
+      return 'usable';
+    },
+    getCombatSystem: () => engine.combatSystem,
+    getGcdRemaining: () => engine.combatSystem.getGcdRemaining(),
+    getGcdTotal: () => engine.combatSystem.getGcdTotal(),
+    isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || (engine.isCasting() && !engine.isChanneling()),
+  });
+  pgActionBar = actionBar;
+  document.body.appendChild(actionBar.element);
+  actionBar.loadAbilities(engine.playerController.characterId, engine.playerController.abilities);
+  engine.onCharacterChange = (abilities) => { cancelGroundTargeting(); actionBar.loadAbilities(engine.playerController.characterId, engine.playerController.abilities); };
+  engine.onAutoAttackError = (message) => errorText.show(message);
+  engine.onRestError = (message) => errorText.show(message);
+
+  // Escape menu — return to lobby
+  const escapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {
+      showLobby();
+      network?.send({ type: 'return_to_lobby' });
+    },
+    onEscapeWhilePlaying: () => {
+      if (pendingGroundAbility) {
+        cancelGroundTargeting();
+        return true;
+      }
+      if (engine.isCasting()) {
+        engine.cancelCasting();
+        return true;
+      }
+      if (engine.targetingSystem.currentTarget) {
+        engine.targetingSystem.currentTarget = null;
+        engine.stopAutoAttack();
+        return true;
+      }
+      return false;
+    },
+    onKeybinds: () => {
+      escapeMenu.close();
+      keybindMenu.open(() => escapeMenu.open());
+    },
+  });
+  pgEscapeMenu = escapeMenu;
+  document.body.appendChild(escapeMenu.element);
+
+  // Debug HUD
+  pgDebugHUD = new DebugHUD(false);
+  document.body.appendChild(pgDebugHUD.element);
+
+  const deathFrame = pgDeathFrame!;
+  let lastFrameTime = performance.now();
+  function updateFrames(): void {
+    pgFrameLoopId = requestAnimationFrame(updateFrames);
+    const now = performance.now();
+    const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
+    lastFrameTime = now;
+
+    const bs = engine.buffSystem;
+    playerFrame.update(engine.playerController, bs.getBuffs(engine.playerController), bs.getDebuffs(engine.playerController));
+    const ct = engine.targetingSystem.currentTarget;
+    targetFrame.update(ct, ct ? bs.getBuffs(ct) : [], ct ? bs.getDebuffs(ct) : []);
+
+    const tot = ct && ct !== engine.playerController && 'autoAttackTarget' in ct
+      ? (ct as any).autoAttackTarget as Targetable | null
+      : null;
+    totFrame.update(tot);
+
+    playerFrame.updateCombatText(dt);
+    targetFrame.updateCombatText(dt);
+    actionBar.update();
+
+    const castState = engine.getCastingState();
+    if (castState) {
+      castBarContainer.style.display = 'block';
+      let progress: number;
+      if (castState.isChannel) {
+        progress = Math.max(0, (castState.totalTime - castState.elapsed) / castState.originalCastTime);
+        castBarFill.style.background = 'linear-gradient(to right, #cc8833, #eebb55)';
+      } else {
+        progress = Math.min(1, castState.elapsed / castState.totalTime);
+        castBarFill.style.background = 'linear-gradient(to right, #4488ff, #66aaff)';
+      }
+      castBarFill.style.width = `${progress * 100}%`;
+      const remaining = Math.max(0, castState.totalTime - castState.elapsed);
+      castBarHeader.innerHTML = `<span>${castState.abilityName}</span><span>${remaining.toFixed(1)}s</span>`;
+    } else {
+      castBarContainer.style.display = 'none';
+    }
+
+    combatText.update(dt);
+    nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
+      return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
+    }, bs.isBlinded(engine.playerController));
+
+    const hovered = engine.targetingSystem.getHoveredTarget();
+    unitTooltip.update(hovered, (entity) => {
+      if (entity === (engine.playerController as unknown as Targetable)) {
+        return engine.targetingSystem.currentTarget?.name ?? 'None';
+      }
+      const npc = engine.getNpcs().find(n => n === entity);
+      return npc?.autoAttackTarget?.name ?? 'None';
+    }, dt);
+
+    partyFrames.setVisible(true);
+    partyFrames.update(dt);
+    arenaFrames.setVisible(true);
+    arenaFrames.update(dt);
 
     pgDebugHUD?.update(dt);
 

@@ -13,4 +13,6 @@ export interface MapScript {
   forceOpenDoors?(): void;
   /** Called when arena doors open. */
   onDoorsOpen?: () => void;
+  /** Called when a killing blow occurs. */
+  onKillingBlow?(killerTeam: number, victimTeam: number): void;
 }

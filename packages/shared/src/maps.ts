@@ -61,9 +61,24 @@ export const MAPS: Record<string, MapInfo> = {
       { type: 'wall', position: { x: 80, y: 5, z: 0 }, scale: { x: 0.5, y: 10, z: 130 }, color: '#000000', visible: false },
     ],
   },
+  'ui-setup': {
+    id: 'ui-setup',
+    name: 'Training Room',
+    spawnPoints: [
+      { x: 0, y: 0, z: 0 },
+    ],
+    npcSpawnBounds: { minX: -10, maxX: 10, minZ: -10, maxZ: 10 },
+    obstacles: [
+      // Simple box — 4 walls
+      { type: 'wall', position: { x: 0, y: 3, z: -15 }, scale: { x: 30, y: 6, z: 0.5 }, color: '#1a1a2e' },
+      { type: 'wall', position: { x: 0, y: 3, z: 15 }, scale: { x: 30, y: 6, z: 0.5 }, color: '#1a1a2e' },
+      { type: 'wall', position: { x: -15, y: 3, z: 0 }, scale: { x: 0.5, y: 6, z: 30.5 }, color: '#1a1a2e' },
+      { type: 'wall', position: { x: 15, y: 3, z: 0 }, scale: { x: 0.5, y: 6, z: 30.5 }, color: '#1a1a2e' },
+    ],
+  },
 };
 
-export const MAP_LIST = Object.values(MAPS);
+export const MAP_LIST = Object.values(MAPS).filter(m => m.id !== 'ui-setup');
 
 export function getMapInfo(id: string): MapInfo | undefined {
   return MAPS[id];

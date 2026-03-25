@@ -137,7 +137,7 @@ export class TargetingSystem {
       }
     }
 
-    if (!this.currentTarget) {
+    if (!this.currentTarget || !this.currentTarget.mesh.parent) {
       this.ring.visible = false;
       return;
     }

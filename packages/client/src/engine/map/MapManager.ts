@@ -4,6 +4,7 @@ import { MapBuilder, BuiltMap } from './MapBuilder';
 import { CollisionSystem } from '../physics/CollisionSystem';
 import { THE_CAGE } from './TheCageMap';
 import { CELESTIAL_BALLROOM } from './CelestialBallroomMap';
+import { UI_SETUP } from './UISetupMap';
 import type { MapScript } from './MapScript';
 
 export class MapManager {
@@ -17,7 +18,7 @@ export class MapManager {
   constructor(scene: THREE.Scene) {
     this.scene = scene;
 
-    for (const map of [THE_CAGE, CELESTIAL_BALLROOM]) {
+    for (const map of [THE_CAGE, CELESTIAL_BALLROOM, UI_SETUP]) {
       this.maps.set(map.id, map);
     }
   }
@@ -82,6 +83,11 @@ export class MapManager {
   /** Force open the arena doors immediately. */
   forceOpenDoors(): void {
     this.currentScript?.forceOpenDoors?.();
+  }
+
+  /** Notify the map script of a killing blow. */
+  onKillingBlow(killerTeam: number, victimTeam: number): void {
+    this.currentScript?.onKillingBlow?.(killerTeam, victimTeam);
   }
 
   getScript(): MapScript | null {

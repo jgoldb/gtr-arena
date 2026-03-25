@@ -19,6 +19,7 @@ export class LobbyScreen {
   private profileUsername: string | null = null;
 
   onPlayground?: () => void;
+  onUISetup?: () => void;
   onLogout?: () => void;
   onAdmin?: () => void;
   onChangePassword?: () => void;

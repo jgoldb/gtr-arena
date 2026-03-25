@@ -25,7 +25,7 @@ export class AuthManager {
     password: string,
     mode: 'login' | 'register',
     socket: WebSocket
-  ): { success: boolean; userId: string; username?: string; isAdmin?: boolean; bannedUntil?: string; error?: string } {
+  ): { success: boolean; userId: string; username?: string; isAdmin?: boolean; bannedUntil?: string; banReason?: string; error?: string } {
     if (!username || username.length < 1 || username.length > 20) {
       return { success: false, userId: '', error: 'Username must be 1-20 characters' };
     }
@@ -49,7 +49,7 @@ export class AuthManager {
     } else {
       const result = this.db.login(username, password);
       if (!result.success) {
-        return { success: false, userId: '', bannedUntil: result.bannedUntil, error: result.error };
+        return { success: false, userId: '', bannedUntil: result.bannedUntil, banReason: result.banReason, error: result.error };
       }
       dbId = result.userId!;
       displayUsername = result.storedUsername!;

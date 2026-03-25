@@ -1206,7 +1206,7 @@ export class AuthScreen {
     addFocusBorder(this.confirmPasswordInput);
 
     this.errorEl = document.createElement('div');
-    this.errorEl.style.cssText = 'color: #cc4444; font-size: 12px; min-height: 18px; margin-bottom: 8px;';
+    this.errorEl.style.cssText = 'color: #cc4444; font-size: 12px; min-height: 18px; margin-bottom: 8px; white-space: pre-line;';
 
     this.submitBtn = document.createElement('button');
     const submitBtn = this.submitBtn;

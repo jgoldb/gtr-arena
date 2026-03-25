@@ -249,7 +249,7 @@ export class ServerEngine {
     };
 
     this.combatSystem.onEntityKilled = (killer, victim) => {
-      this.onStatKill?.(killer.id, victim.id);
+      this.recordKill(killer.id, victim.id);
     };
 
     this.combatSystem.onSleepApplied = (attacker, target) => {
@@ -280,6 +280,16 @@ export class ServerEngine {
 
   addEntity(entity: ServerEntity): void {
     this.entities.push(entity);
+  }
+
+  /** Record a kill: fire stats callback + broadcast entity_died event. */
+  private recordKill(killerEntityId: string, victimEntityId: string): void {
+    this.onStatKill?.(killerEntityId, victimEntityId);
+    this.pendingEvents.push({
+      type: 'entity_died',
+      entityId: victimEntityId,
+      killerEntityId,
+    } as import('@gtr/shared').S2C_EntityDied);
   }
 
   getEntity(entityId: string): ServerEntity | undefined {
@@ -1263,7 +1273,7 @@ export class ServerEngine {
           this.combatSystem.enterCombat(entity);
           if (entity.hp <= 0 && !entity.dead) {
             entity.die();
-            this.onStatKill?.(cloud.owner.id, entity.id);
+            this.recordKill(cloud.owner.id, entity.id);
           }
         }
         cloud.nextTickAt += cloud.tickInterval;
@@ -1336,7 +1346,7 @@ export class ServerEngine {
           this.combatSystem.enterCombat(entity);
           if (entity.hp <= 0 && !entity.dead) {
             entity.die();
-            this.onStatKill?.(pool.owner.id, entity.id);
+            this.recordKill(pool.owner.id, entity.id);
           } else {
             this.buffSystem.apply(entity, pool.dot);
             this.activeDots.push({
@@ -1376,7 +1386,7 @@ export class ServerEngine {
           this.combatSystem.enterCombat(dot.target);
           if (dot.target.hp <= 0 && !dot.target.dead) {
             dot.target.die();
-            this.onStatKill?.(dot.owner.id, dot.target.id);
+            this.recordKill(dot.owner.id, dot.target.id);
           }
         }
         dot.nextTickAt += dot.tickInterval;
@@ -1425,7 +1435,7 @@ export class ServerEngine {
             this.combatSystem.enterCombat(other);
             if (other.hp <= 0 && !other.dead) {
               other.die();
-              this.onStatKill?.(aura.entity.id, other.id);
+              this.recordKill(aura.entity.id, other.id);
             }
           }
         }

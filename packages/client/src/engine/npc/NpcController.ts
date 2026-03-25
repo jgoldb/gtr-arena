@@ -16,7 +16,7 @@ const IDLE_INPUT: AnimationInput = {
 export class NpcController implements Targetable {
   readonly mesh: THREE.Group;
   readonly characterId: CharacterId;
-  readonly name = 'NPC';
+  readonly name: string;
   readonly team: number;
   hp: number;
   maxHp: number;
@@ -42,7 +42,8 @@ export class NpcController implements Targetable {
   private autoAttackTimer = 0;
   private wasInCombat = false;
 
-  constructor(characterId: CharacterId, position: THREE.Vector3, team = 1) {
+  constructor(characterId: CharacterId, position: THREE.Vector3, team = 1, name = 'NPC') {
+    this.name = name;
     this.team = team;
     this.characterId = characterId;
     this.characterModel = createCharacter(characterId);

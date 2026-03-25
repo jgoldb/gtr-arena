@@ -54,6 +54,9 @@ export class GameSession {
   // Per-player match stats (survives entity removal)
   private matchStats = new Map<string, PlayerMatchStats>();
 
+  // Players who left/disconnected before the game ended — they get a loss but no XP
+  private removedBeforeEnd = new Set<string>();
+
   // Rematch state
   private rematchRequester: string | null = null;
   private rematchMapMode: 'random' | 'same' | 'new' | null = null;
@@ -346,7 +349,9 @@ export class GameSession {
       this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
     }
 
+    // Track that this player left before the game ended (loss, no XP)
     if (!this.gameOver) {
+      this.removedBeforeEnd.add(userId);
       this.checkTeamForfeit();
     }
   }
@@ -383,7 +388,10 @@ export class GameSession {
       this.engine.removeEntity(entityId);
       this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
       this.onGracePeriodExpired?.(userId);
-      if (!this.gameOver) this.checkTeamForfeit();
+      if (!this.gameOver) {
+        this.removedBeforeEnd.add(userId);
+        this.checkTeamForfeit();
+      }
     }, GameSession.DISCONNECT_GRACE_PERIOD_MS);
     this.disconnectedPlayers.set(userId, { timer });
 
@@ -524,10 +532,12 @@ export class GameSession {
     }
     for (const info of infos) {
       const won = info.team === winningTeam;
+      // Players removed before game end get no XP
+      const removed = this.removedBeforeEnd.has(info.userId);
       const highestOpponentLevel = infos
         .filter(o => o.team !== info.team)
         .reduce((max, o) => Math.max(max, o.level), 1);
-      const xpGained = calculateXpGain(info.level, highestOpponentLevel, won);
+      const xpGained = removed ? 0 : calculateXpGain(info.level, highestOpponentLevel, won);
       playerInfos.set(info.userId, { level: info.level, xpGained });
     }
 
@@ -590,17 +600,21 @@ export class GameSession {
     }
 
     for (const info of playerInfos) {
-      const won = info.team === winningTeam;
+      const removed = this.removedBeforeEnd.has(info.userId);
+      // Players removed before game end always get a loss
+      const won = removed ? false : info.team === winningTeam;
       this.db.recordGameResult(info.dbId, info.characterId, won);
 
-      // Find highest-level opponent
-      const highestOpponentLevel = playerInfos
-        .filter(o => o.team !== info.team)
-        .reduce((max, o) => Math.max(max, o.level), 1);
+      // Players removed before game end get no XP
+      if (!removed) {
+        const highestOpponentLevel = playerInfos
+          .filter(o => o.team !== info.team)
+          .reduce((max, o) => Math.max(max, o.level), 1);
 
-      const xpGain = calculateXpGain(info.level, highestOpponentLevel, won);
-      const newXp = this.db.addXp(info.dbId, xpGain);
-      this.sendToUser(info.userId, { type: 'xp_update', xp: newXp });
+        const xpGain = calculateXpGain(info.level, highestOpponentLevel, won);
+        const newXp = this.db.addXp(info.dbId, xpGain);
+        this.sendToUser(info.userId, { type: 'xp_update', xp: newXp });
+      }
     }
   }
 

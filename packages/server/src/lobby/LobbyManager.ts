@@ -191,7 +191,7 @@ export class LobbyManager {
         this.handleAdminDeleteUser(userId, msg.targetUserId);
         break;
       case 'admin_ban_user':
-        this.handleAdminBanUser(userId, msg.targetUserId, msg.duration);
+        this.handleAdminBanUser(userId, msg.targetUserId, msg.duration, msg.reason);
         break;
       case 'admin_unban_user':
         this.handleAdminUnbanUser(userId, msg.targetUserId);
@@ -559,6 +559,7 @@ export class LobbyManager {
         wins: r.wins,
         losses: r.losses,
         bannedUntil: r.banned_until,
+        banReason: r.ban_reason,
         lastPlayed: r.last_played,
       })),
     };
@@ -604,7 +605,7 @@ export class LobbyManager {
     'permanent': 'permanent',
   };
 
-  private handleAdminBanUser(userId: string, targetUserId: number, duration: string): void {
+  private handleAdminBanUser(userId: string, targetUserId: number, duration: string, reason?: string): void {
     const user = this.users.get(userId);
     if (!user || !this.auth.getIsAdmin(userId)) {
       if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
@@ -616,6 +617,8 @@ export class LobbyManager {
       this.send(user.socket, { type: 'admin_result', action: 'ban_user', success: false, error: 'Invalid ban duration' });
       return;
     }
+
+    const trimmedReason = reason?.trim() || undefined;
 
     let bannedUntil: string;
     let kickReason: string;
@@ -629,7 +632,11 @@ export class LobbyManager {
       kickReason = `You have been banned for ${dur.label}`;
     }
 
-    const success = this.db.banUser(targetUserId, bannedUntil);
+    if (trimmedReason) {
+      kickReason += `\nReason: ${trimmedReason}`;
+    }
+
+    const success = this.db.banUser(targetUserId, bannedUntil, trimmedReason);
     const result: S2C_AdminResult = {
       type: 'admin_result',
       action: 'ban_user',

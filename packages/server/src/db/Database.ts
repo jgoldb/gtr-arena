@@ -73,6 +73,9 @@ export class GtrDatabase {
     if (!cols.some(c => c.name === 'xp')) {
       this.db.exec('ALTER TABLE users ADD COLUMN xp INTEGER DEFAULT 0');
     }
+    if (!cols.some(c => c.name === 'ban_reason')) {
+      this.db.exec("ALTER TABLE users ADD COLUMN ban_reason TEXT DEFAULT NULL");
+    }
   }
 
   // ── Auth ────────────────────────────────────────────────────────────────
@@ -93,8 +96,8 @@ export class GtrDatabase {
     return { success: true, userId };
   }
 
-  login(username: string, password: string): { success: boolean; userId?: number; storedUsername?: string; bannedUntil?: string; error?: string } {
-    const row = this.db.prepare('SELECT id, username, password_hash, banned_until FROM users WHERE username = ?').get(username) as { id: number; username: string; password_hash: string; banned_until: string | null } | undefined;
+  login(username: string, password: string): { success: boolean; userId?: number; storedUsername?: string; bannedUntil?: string; banReason?: string; error?: string } {
+    const row = this.db.prepare('SELECT id, username, password_hash, banned_until, ban_reason FROM users WHERE username = ?').get(username) as { id: number; username: string; password_hash: string; banned_until: string | null; ban_reason: string | null } | undefined;
     if (!row) {
       return { success: false, error: 'Invalid username or password' };
     }
@@ -106,14 +109,14 @@ export class GtrDatabase {
     // Check ban status
     if (row.banned_until) {
       if (row.banned_until === 'permanent') {
-        return { success: false, bannedUntil: 'permanent', error: 'Your account has been permanently closed' };
+        return { success: false, bannedUntil: 'permanent', banReason: row.ban_reason ?? undefined, error: 'Your account has been permanently closed' };
       }
       const banEnd = new Date(row.banned_until + 'Z');
       if (banEnd > new Date()) {
-        return { success: false, bannedUntil: row.banned_until, error: 'You are banned' };
+        return { success: false, bannedUntil: row.banned_until, banReason: row.ban_reason ?? undefined, error: 'You are banned' };
       }
       // Ban expired — clear it
-      this.db.prepare("UPDATE users SET banned_until = NULL WHERE id = ?").run(row.id);
+      this.db.prepare("UPDATE users SET banned_until = NULL, ban_reason = NULL WHERE id = ?").run(row.id);
     }
 
     return { success: true, userId: row.id, storedUsername: row.username };
@@ -187,9 +190,9 @@ export class GtrDatabase {
     return true;
   }
 
-  getAllUsersWithStats(): { id: number; username: string; is_admin: number; created_at: string; xp: number; games_played: number; wins: number; losses: number; banned_until: string | null; last_played: string | null }[] {
+  getAllUsersWithStats(): { id: number; username: string; is_admin: number; created_at: string; xp: number; games_played: number; wins: number; losses: number; banned_until: string | null; ban_reason: string | null; last_played: string | null }[] {
     return this.db.prepare(`
-      SELECT u.id, u.username, u.is_admin, u.created_at, u.banned_until, u.last_played,
+      SELECT u.id, u.username, u.is_admin, u.created_at, u.banned_until, u.ban_reason, u.last_played,
              COALESCE(u.xp, 0) as xp,
              COALESCE(s.games_played, 0) as games_played,
              COALESCE(s.wins, 0) as wins,
@@ -200,18 +203,18 @@ export class GtrDatabase {
     `).all() as any[];
   }
 
-  banUser(userId: number, bannedUntil: string): boolean {
+  banUser(userId: number, bannedUntil: string, reason?: string): boolean {
     const row = this.db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(userId) as { id: number; is_admin: number } | undefined;
     if (!row) return false;
     if (row.is_admin === 1) return false;
-    this.db.prepare('UPDATE users SET banned_until = ? WHERE id = ?').run(bannedUntil, userId);
+    this.db.prepare('UPDATE users SET banned_until = ?, ban_reason = ? WHERE id = ?').run(bannedUntil, reason ?? null, userId);
     return true;
   }
 
   unbanUser(userId: number): boolean {
     const row = this.db.prepare('SELECT id FROM users WHERE id = ?').get(userId) as { id: number } | undefined;
     if (!row) return false;
-    this.db.prepare('UPDATE users SET banned_until = NULL WHERE id = ?').run(userId);
+    this.db.prepare('UPDATE users SET banned_until = NULL, ban_reason = NULL WHERE id = ?').run(userId);
     return true;
   }
 

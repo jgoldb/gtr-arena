@@ -4,6 +4,7 @@ import type {
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
   S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing, S2C_Knockback,
+  S2C_EntityDied,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
 import { yardsToUnits, getCharacterStats, Sweep } from '@gtr/shared';
@@ -384,7 +385,7 @@ export class ClientEngine {
       case 'gas_cloud_spawn': this.handleGasCloudSpawn(event); break;
       case 'chem_pool_spawn': this.handleChemPoolSpawn(event); break;
       case 'knockback': this.handleKnockback(event); break;
-      case 'entity_died': break; // handled via game state (dead flag)
+      case 'entity_died': this.handleEntityDied(event); break;
     }
   }
 
@@ -728,6 +729,23 @@ export class ClientEngine {
       ...visual, elapsed: 0, duration: msg.duration,
       activationDelay: msg.activationDelay, consumed: false, consumeElapsed: 0,
     });
+  }
+
+  private handleEntityDied(msg: S2C_EntityDied): void {
+    const killerTeam = this.getEntityTeam(msg.killerEntityId);
+    const victimTeam = this.getEntityTeam(msg.entityId);
+    if (killerTeam !== null && victimTeam !== null) {
+      this.mapManager.onKillingBlow(killerTeam, victimTeam);
+    }
+  }
+
+  private getEntityTeam(entityId: string | null): number | null {
+    if (!entityId) return null;
+    if (entityId === this.localEntityId) {
+      return (this.playerController as any).team ?? null;
+    }
+    const remote = this.remoteEntities.get(entityId);
+    return remote?.team ?? null;
   }
 
   handleKnockback(msg: S2C_Knockback): void {

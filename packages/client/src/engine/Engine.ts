@@ -153,7 +153,7 @@ export class Engine {
   onGroundTargetConfirmed?: () => void;
   pendingNpcSpawn: { characterId: CharacterId; team?: number } | null = null;
 
-  private arenaPreparationActive = false;
+  arenaPreparationActive = false;
   private resting = false;
   private rKeyWasDown = false;
   private tabKeyWasDown = false;
@@ -264,6 +264,10 @@ export class Engine {
       if (target === this.playerController && !this.targetingSystem.currentTarget && !this.buffSystem.isBlinded(this.playerController) && !ability?.suppressAutoTarget) {
         this.targetingSystem.currentTarget = attacker;
       }
+      // NPC auto-targets its attacker when it has no target
+      if (target instanceof NpcController && !target.autoAttackTarget && !target.dead) {
+        target.autoAttackTarget = attacker;
+      }
     };
 
   }
@@ -339,9 +343,8 @@ export class Engine {
     this.onCharacterChange?.(this.playerController.abilities);
   }
 
-  spawnNpc(characterId: CharacterId, position: THREE.Vector3, team?: number): NpcController {
-    const npc = new NpcController(characterId, position, team);
-    npc.autoAttackTarget = this.playerController;
+  spawnNpc(characterId: CharacterId, position: THREE.Vector3, team?: number, name?: string): NpcController {
+    const npc = new NpcController(characterId, position, team, name);
     npc.onAutoAttackHit = (attacker, target, damage) => {
       this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
     };

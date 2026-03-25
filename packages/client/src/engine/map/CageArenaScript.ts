@@ -17,6 +17,20 @@ export class CageArenaScript extends ArenaScript {
   private pillarState: 'up' | 'dropping' | 'down' | 'rising' = 'up';
   private pillarStateTimer = 0;
   private currentPillarUpDuration = 30; // first cycle uses initial delay
+
+  // Crowd animation (GPU-driven via vertex shader)
+  private crowdTimeUniform = { value: 0 };
+
+  // Scoreboard + banners
+  private teamKills = [0, 0]; // [red/team0, blue/team1]
+  private scoreboardTextures: THREE.CanvasTexture[] = [];
+  private southBannerTexture: THREE.CanvasTexture | null = null;
+  private northBannerTexture: THREE.CanvasTexture | null = null;
+  private bannerTimer = 0;
+  private bannerActive = false;
+  private bannerKillerTeam = -1;
+  private readonly BANNER_DURATION = 4;
+
   private readonly PILLAR_DROP_ANIM = 2;
   private readonly PILLAR_DOWN_TIME = 30;
   private readonly PILLAR_RISE_ANIM = 2;
@@ -52,9 +66,23 @@ export class CageArenaScript extends ArenaScript {
     this.createStadiumLighting();
     this.createBarricades();
     this.createRingDetails();
+    this.createUpperArena();
   }
 
   protected updateArena(dt: number): void {
+    // Crowd animation runs always (even during countdown)
+    this.crowdTimeUniform.value += dt;
+
+    // Banner animation countdown
+    if (this.bannerActive) {
+      this.bannerTimer -= dt;
+      if (this.bannerTimer <= 0) {
+        this.bannerActive = false;
+        this.drawSouthBanner();
+        this.drawNorthBanner();
+      }
+    }
+
     if (!this.opened) return;
 
     this.pillarStateTimer += dt;
@@ -103,6 +131,29 @@ export class CageArenaScript extends ArenaScript {
     this.pillarColliders = [];
     this.nsPillarMeshes = [];
     this.nsPillarColliders = [];
+    this.scoreboardTextures = [];
+    this.southBannerTexture = null;
+    this.northBannerTexture = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Killing blow hook — updates scoreboard + triggers banners
+  // ---------------------------------------------------------------------------
+  onKillingBlow(killerTeam: number, victimTeam: number): void {
+    // Update kill counts
+    if (killerTeam >= 0 && killerTeam < this.teamKills.length) {
+      this.teamKills[killerTeam]++;
+    }
+
+    // Redraw scoreboard
+    this.drawAllScoreboards();
+
+    // Trigger banners — killer's team gets cheered, victim's team gets shamed
+    this.bannerActive = true;
+    this.bannerTimer = this.BANNER_DURATION;
+    this.bannerKillerTeam = killerTeam;
+    this.drawSouthBanner(killerTeam);
+    this.drawNorthBanner(killerTeam);
   }
 
   protected onOpen(): void {
@@ -134,8 +185,11 @@ export class CageArenaScript extends ArenaScript {
   private createRingFloor(): void {
     // Main ring combat surface
     const ringGeo = new THREE.PlaneGeometry(39, 39);
+    const { map: floorMap, bumpMap: floorBump } = this.createFloorTexture();
     const ringMat = new THREE.MeshStandardMaterial({
-      color: 0xd8d0c0,
+      map: floorMap,
+      bumpMap: floorBump,
+      bumpScale: 0.3,
       roughness: 0.85,
       emissive: 0x332211,
       emissiveIntensity: 0.08,
@@ -173,10 +227,17 @@ export class CageArenaScript extends ArenaScript {
   // Starting pen floors
   // ---------------------------------------------------------------------------
   private createPenFloors(): void {
+    const { map: penFloorMap, bumpMap: penFloorBump } = this.createFloorTexture();
+    penFloorMap.repeat.set(2, 2);
+    penFloorBump.repeat.set(2, 2);
+
     // South pen (Team 1 - red)
     const southGeo = new THREE.PlaneGeometry(11.5, 9.5);
     const southMat = new THREE.MeshStandardMaterial({
-      color: 0x331111,
+      map: penFloorMap,
+      bumpMap: penFloorBump,
+      bumpScale: 0.25,
+      color: 0x442222,
       roughness: 0.9,
       emissive: 0x330000,
       emissiveIntensity: 0.12,
@@ -190,7 +251,10 @@ export class CageArenaScript extends ArenaScript {
     // North pen (Team 2 - blue)
     const northGeo = new THREE.PlaneGeometry(11.5, 9.5);
     const northMat = new THREE.MeshStandardMaterial({
-      color: 0x111133,
+      map: penFloorMap,
+      bumpMap: penFloorBump,
+      bumpScale: 0.25,
+      color: 0x222244,
       roughness: 0.9,
       emissive: 0x000033,
       emissiveIntensity: 0.12,
@@ -207,8 +271,11 @@ export class CageArenaScript extends ArenaScript {
   // ---------------------------------------------------------------------------
   private createCageBars(): void {
     const barGeo = new THREE.CylinderGeometry(0.06, 0.06, 1, 6);
+    const { map: barMap, bumpMap: barBump } = this.createCageBarTexture();
     const barMat = new THREE.MeshStandardMaterial({
-      color: 0x888890,
+      map: barMap,
+      bumpMap: barBump,
+      bumpScale: 0.3,
       metalness: 0.7,
       roughness: 0.25,
     });
@@ -574,6 +641,467 @@ export class CageArenaScript extends ArenaScript {
     return { map, bumpMap };
   }
 
+  /** Procedural dirty, aged arena floor texture. */
+  private createFloorTexture(): { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture } {
+    const W = 1024, H = 1024;
+    let seed = 77;
+    const rng = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+
+    // Base aged concrete — mottled, uneven
+    ctx.fillStyle = '#a89880';
+    ctx.fillRect(0, 0, W, H);
+
+    // Large-scale patchy color variation (organic, no grid)
+    for (let i = 0; i < 50; i++) {
+      const cx = rng() * W, cy = rng() * H;
+      const r = 80 + rng() * 200;
+      const shift = -15 + rng() * 30;
+      const grad = ctx.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
+      grad.addColorStop(0, `rgba(${(168 + shift) | 0},${(152 + shift * 0.8) | 0},${(128 + shift * 0.6) | 0},0.35)`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Fine aggregate speckle
+    for (let i = 0; i < 24000; i++) {
+      const bright = rng() > 0.5;
+      ctx.fillStyle = bright
+        ? `rgba(195,185,165,${(0.03 + rng() * 0.06).toFixed(2)})`
+        : `rgba(75,65,50,${(0.03 + rng() * 0.06).toFixed(2)})`;
+      ctx.fillRect(rng() * W, rng() * H, 1 + ((rng() * 3) | 0), 1 + ((rng() * 3) | 0));
+    }
+
+    // Dirt accumulation patches
+    for (let i = 0; i < 60; i++) {
+      const cx = rng() * W, cy = rng() * H;
+      const rx = 30 + rng() * 100, ry = 25 + rng() * 80;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(rx, ry));
+      grad.addColorStop(0, `rgba(45,38,28,${(0.08 + rng() * 0.15).toFixed(2)})`);
+      grad.addColorStop(0.6, `rgba(55,45,32,${(0.04 + rng() * 0.08).toFixed(2)})`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, rng() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Grime streaks
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 45; i++) {
+      ctx.strokeStyle = `rgba(55,45,30,${(0.06 + rng() * 0.1).toFixed(2)})`;
+      const sx = rng() * W, sy = rng() * H;
+      ctx.beginPath(); ctx.moveTo(sx, sy);
+      for (let j = 0; j < 5; j++) ctx.lineTo(sx + (rng() - 0.5) * 120, sy + (rng() - 0.5) * 120);
+      ctx.stroke();
+    }
+
+    // Scuff marks (combat wear)
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 90; i++) {
+      ctx.strokeStyle = `rgba(70,58,40,${(0.08 + rng() * 0.14).toFixed(2)})`;
+      const sx = rng() * W, sy = rng() * H;
+      ctx.beginPath(); ctx.moveTo(sx, sy);
+      for (let j = 0; j < 3; j++) ctx.lineTo(sx + (rng() - 0.5) * 70, sy + (rng() - 0.5) * 70);
+      ctx.stroke();
+    }
+
+    // Stains (blood, oil, water marks)
+    for (let i = 0; i < 55; i++) {
+      const cx = rng() * W, cy = rng() * H, r = 15 + rng() * 55;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      const t = rng();
+      if (t < 0.3) {
+        grad.addColorStop(0, `rgba(40,32,22,${(0.1 + rng() * 0.12).toFixed(2)})`);
+      } else if (t < 0.55) {
+        grad.addColorStop(0, `rgba(90,25,15,${(0.06 + rng() * 0.1).toFixed(2)})`);
+      } else if (t < 0.75) {
+        grad.addColorStop(0, `rgba(130,120,100,${(0.04 + rng() * 0.06).toFixed(2)})`);
+      } else {
+        grad.addColorStop(0, `rgba(65,55,42,${(0.08 + rng() * 0.1).toFixed(2)})`);
+      }
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Cracks
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 20; i++) {
+      ctx.strokeStyle = `rgba(35,28,18,${(0.2 + rng() * 0.2).toFixed(2)})`;
+      let cx = rng() * W, cy = rng() * H;
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      for (let j = 0; j < 3 + ((rng() * 5) | 0); j++) {
+        cx += (rng() - 0.5) * 90; cy += (rng() - 0.5) * 90;
+        ctx.lineTo(cx, cy);
+      }
+      ctx.stroke();
+    }
+
+    const map = new THREE.CanvasTexture(canvas);
+    map.wrapS = THREE.RepeatWrapping;
+    map.wrapT = THREE.RepeatWrapping;
+
+    // --- Bump map (uneven worn surface, no grid) ---
+    const bc = document.createElement('canvas');
+    bc.width = W; bc.height = H;
+    const bx = bc.getContext('2d')!;
+    bx.fillStyle = '#808080';
+    bx.fillRect(0, 0, W, H);
+
+    // Gentle height variation patches
+    for (let i = 0; i < 60; i++) {
+      const cx = rng() * W, cy = rng() * H, r = 50 + rng() * 120;
+      const v = (120 + rng() * 20) | 0;
+      bx.fillStyle = `rgb(${v},${v},${v})`;
+      bx.beginPath(); bx.arc(cx, cy, r, 0, Math.PI * 2); bx.fill();
+    }
+    // Surface noise
+    for (let i = 0; i < 16000; i++) {
+      const v = (115 + rng() * 30) | 0;
+      bx.fillStyle = `rgb(${v},${v},${v})`;
+      bx.fillRect(rng() * W, rng() * H, 1 + ((rng() * 3) | 0), 1 + ((rng() * 3) | 0));
+    }
+    // Crack depressions
+    bx.strokeStyle = '#555555';
+    bx.lineWidth = 2;
+    for (let i = 0; i < 18; i++) {
+      let cx = rng() * W, cy = rng() * H;
+      bx.beginPath(); bx.moveTo(cx, cy);
+      for (let j = 0; j < 3 + ((rng() * 4) | 0); j++) {
+        cx += (rng() - 0.5) * 80; cy += (rng() - 0.5) * 80;
+        bx.lineTo(cx, cy);
+      }
+      bx.stroke();
+    }
+
+    const bumpMap = new THREE.CanvasTexture(bc);
+    bumpMap.wrapS = THREE.RepeatWrapping;
+    bumpMap.wrapT = THREE.RepeatWrapping;
+
+    return { map, bumpMap };
+  }
+
+  /** Brushed/worn metal texture for cage bars. */
+  private createCageBarTexture(): { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture } {
+    const W = 128, H = 256;
+    let seed = 33;
+    const rng = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+
+    // Base metal
+    ctx.fillStyle = '#8a8a94';
+    ctx.fillRect(0, 0, W, H);
+
+    // Vertical brushed streaks
+    for (let i = 0; i < 60; i++) {
+      const x = rng() * W;
+      const w = 1 + rng() * 2;
+      const bright = rng() > 0.5;
+      ctx.fillStyle = bright
+        ? `rgba(160,160,170,${(0.05 + rng() * 0.15).toFixed(2)})`
+        : `rgba(60,60,68,${(0.05 + rng() * 0.15).toFixed(2)})`;
+      ctx.fillRect(x, 0, w, H);
+    }
+
+    // Rust spots
+    for (let i = 0; i < 8; i++) {
+      const cx = rng() * W, cy = rng() * H, r = 3 + rng() * 8;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grad.addColorStop(0, `rgba(120,65,30,${(0.15 + rng() * 0.2).toFixed(2)})`);
+      grad.addColorStop(0.6, `rgba(100,55,25,${(0.05 + rng() * 0.1).toFixed(2)})`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Pitting/wear dots
+    for (let i = 0; i < 40; i++) {
+      ctx.fillStyle = `rgba(50,50,55,${(0.1 + rng() * 0.15).toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(rng() * W, rng() * H, 0.5 + rng() * 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const map = new THREE.CanvasTexture(canvas);
+    map.wrapS = THREE.RepeatWrapping;
+    map.wrapT = THREE.RepeatWrapping;
+
+    // Bump map
+    const bc = document.createElement('canvas');
+    bc.width = W; bc.height = H;
+    const bx = bc.getContext('2d')!;
+    bx.fillStyle = '#808080';
+    bx.fillRect(0, 0, W, H);
+
+    // Vertical streaks
+    for (let i = 0; i < 40; i++) {
+      const v = (120 + rng() * 20) | 0;
+      bx.fillStyle = `rgb(${v},${v},${v})`;
+      bx.fillRect(rng() * W, 0, 1 + ((rng() * 2) | 0), H);
+    }
+    // Pitting
+    for (let i = 0; i < 30; i++) {
+      bx.fillStyle = '#606060';
+      bx.beginPath();
+      bx.arc(rng() * W, rng() * H, 0.5 + rng() * 1.5, 0, Math.PI * 2);
+      bx.fill();
+    }
+
+    const bumpMap = new THREE.CanvasTexture(bc);
+    bumpMap.wrapS = THREE.RepeatWrapping;
+    bumpMap.wrapT = THREE.RepeatWrapping;
+
+    return { map, bumpMap };
+  }
+
+  /** Wood-plank + steel-band texture for gates/doors (matches pillar style). */
+  private createGateTexture(): { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture } {
+    const W = 512, H = 512;
+    const PLANKS = 8;
+    const BANDS = 3;
+    const BAND_H = 22;
+    const GAP = 3;
+    const RIVET_R = 5;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+
+    // Base wood fill (slightly darker than pillars — aged door)
+    ctx.fillStyle = '#5a3820';
+    ctx.fillRect(0, 0, W, H);
+
+    const plankW = W / PLANKS;
+
+    // Draw each plank with color variation and grain
+    for (let i = 0; i < PLANKS; i++) {
+      const x = i * plankW;
+
+      // Per-plank hue/lightness shift
+      const lShift = (Math.sin(i * 4.3) * 14) | 0;
+      const r = 90 + lShift;
+      const g = 56 + ((lShift * 0.6) | 0);
+      const b = 32 + ((lShift * 0.3) | 0);
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(x + GAP, 0, plankW - GAP * 2, H);
+
+      // Wood grain lines
+      ctx.strokeStyle = 'rgba(30, 16, 6, 0.25)';
+      ctx.lineWidth = 1;
+      const grainCount = 5 + ((Math.sin(i * 5.7) * 3) | 0);
+      for (let g2 = 0; g2 < grainCount; g2++) {
+        const gx = x + GAP + 2 + (plankW - GAP * 2 - 4) * (g2 / grainCount);
+        ctx.beginPath();
+        for (let y = 0; y < H; y += 4) {
+          const wx = gx + Math.sin(y * 0.018 + i * 2.5 + g2) * 2;
+          y === 0 ? ctx.moveTo(wx, y) : ctx.lineTo(wx, y);
+        }
+        ctx.stroke();
+      }
+
+      // Knots
+      if (i % 3 === 1) {
+        const knotX = x + plankW / 2;
+        const knotY = H * (0.25 + Math.sin(i * 2.9) * 0.2);
+        const grad = ctx.createRadialGradient(knotX, knotY, 0, knotX, knotY, 10);
+        grad.addColorStop(0, 'rgba(25, 12, 4, 0.7)');
+        grad.addColorStop(0.6, 'rgba(50, 25, 12, 0.4)');
+        grad.addColorStop(1, 'rgba(50, 25, 12, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(knotX, knotY, 10, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Dark gap between planks
+      ctx.fillStyle = 'rgba(8, 4, 1, 0.9)';
+      ctx.fillRect(x, 0, GAP, H);
+      ctx.fillRect(x + plankW - GAP, 0, GAP, H);
+    }
+
+    // Steel bands
+    const bandPositions: number[] = [];
+    for (let b = 0; b < BANDS; b++) {
+      const by = ((b + 1) / (BANDS + 1)) * H;
+      bandPositions.push(by);
+
+      // Band body gradient
+      const bandGrad = ctx.createLinearGradient(0, by - BAND_H / 2, 0, by + BAND_H / 2);
+      bandGrad.addColorStop(0, '#6a6a72');
+      bandGrad.addColorStop(0.3, '#909098');
+      bandGrad.addColorStop(0.5, '#aaaaB4');
+      bandGrad.addColorStop(0.7, '#909098');
+      bandGrad.addColorStop(1, '#505058');
+      ctx.fillStyle = bandGrad;
+      ctx.fillRect(0, by - BAND_H / 2, W, BAND_H);
+
+      // Band edge highlights
+      ctx.fillStyle = 'rgba(190, 190, 200, 0.4)';
+      ctx.fillRect(0, by - BAND_H / 2, W, 1);
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.fillRect(0, by + BAND_H / 2 - 1, W, 1);
+
+      // Rivets on each plank
+      for (let i = 0; i < PLANKS; i++) {
+        const rx = i * plankW + plankW / 2;
+        const rivetGrad = ctx.createRadialGradient(rx - 1, by - 1, 0, rx, by, RIVET_R);
+        rivetGrad.addColorStop(0, '#d0d0d8');
+        rivetGrad.addColorStop(0.5, '#909098');
+        rivetGrad.addColorStop(1, '#505058');
+        ctx.fillStyle = rivetGrad;
+        ctx.beginPath();
+        ctx.arc(rx, by, RIVET_R, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    const map = new THREE.CanvasTexture(canvas);
+
+    // --- Bump map ---
+    const bCanvas = document.createElement('canvas');
+    bCanvas.width = W; bCanvas.height = H;
+    const bCtx = bCanvas.getContext('2d')!;
+
+    bCtx.fillStyle = '#808080';
+    bCtx.fillRect(0, 0, W, H);
+
+    // Plank surfaces raised, gaps recessed
+    for (let i = 0; i < PLANKS; i++) {
+      const x = i * plankW;
+      bCtx.fillStyle = '#999999';
+      bCtx.fillRect(x + GAP, 0, plankW - GAP * 2, H);
+      bCtx.fillStyle = '#333333';
+      bCtx.fillRect(x, 0, GAP, H);
+      bCtx.fillRect(x + plankW - GAP, 0, GAP, H);
+
+      // Subtle grain bumps
+      bCtx.strokeStyle = 'rgba(60, 60, 60, 0.15)';
+      bCtx.lineWidth = 1;
+      for (let g = 0; g < 4; g++) {
+        const gx = x + GAP + 3 + (plankW - GAP * 2 - 6) * (g / 4);
+        bCtx.beginPath();
+        for (let y = 0; y < H; y += 4) {
+          const wx = gx + Math.sin(y * 0.018 + i * 2.5 + g) * 2;
+          y === 0 ? bCtx.moveTo(wx, y) : bCtx.lineTo(wx, y);
+        }
+        bCtx.stroke();
+      }
+    }
+
+    // Steel bands raised
+    for (const by of bandPositions) {
+      bCtx.fillStyle = '#cccccc';
+      bCtx.fillRect(0, by - BAND_H / 2, W, BAND_H);
+      // Rivets even more raised
+      for (let i = 0; i < PLANKS; i++) {
+        const rx = i * plankW + plankW / 2;
+        bCtx.fillStyle = '#eeeeee';
+        bCtx.beginPath();
+        bCtx.arc(rx, by, RIVET_R, 0, Math.PI * 2);
+        bCtx.fill();
+      }
+    }
+
+    const bumpMap = new THREE.CanvasTexture(bCanvas);
+
+    return { map, bumpMap };
+  }
+
+  /** Machined steel texture for pillar base rings. */
+  private createPillarRingTexture(): { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture } {
+    const W = 256, H = 64;
+    let seed = 99;
+    const rng = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d')!;
+
+    // Base polished steel
+    ctx.fillStyle = '#909098';
+    ctx.fillRect(0, 0, W, H);
+
+    // Concentric machining marks (horizontal = circumferential on the ring)
+    for (let y = 0; y < H; y++) {
+      const a = 0.04 + rng() * 0.08;
+      ctx.fillStyle = rng() > 0.5
+        ? `rgba(170,170,175,${a.toFixed(3)})`
+        : `rgba(100,100,105,${a.toFixed(3)})`;
+      ctx.fillRect(0, y, W, 1);
+    }
+
+    // Edge bevels
+    const bevelH = 8;
+    const topGrad = ctx.createLinearGradient(0, 0, 0, bevelH);
+    topGrad.addColorStop(0, 'rgba(200,200,210,0.35)');
+    topGrad.addColorStop(1, 'rgba(200,200,210,0)');
+    ctx.fillStyle = topGrad;
+    ctx.fillRect(0, 0, W, bevelH);
+
+    const botGrad = ctx.createLinearGradient(0, H - bevelH, 0, H);
+    botGrad.addColorStop(0, 'rgba(30,30,35,0)');
+    botGrad.addColorStop(1, 'rgba(30,30,35,0.35)');
+    ctx.fillStyle = botGrad;
+    ctx.fillRect(0, H - bevelH, W, bevelH);
+
+    // Oil/grease stains
+    for (let i = 0; i < 6; i++) {
+      const cx = rng() * W, cy = rng() * H, r = 5 + rng() * 12;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grad.addColorStop(0, `rgba(50,45,30,${(0.08 + rng() * 0.12).toFixed(2)})`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Scuff marks
+    for (let i = 0; i < 12; i++) {
+      ctx.strokeStyle = rng() > 0.5
+        ? `rgba(150,150,155,${(0.06 + rng() * 0.1).toFixed(2)})`
+        : `rgba(60,60,65,${(0.06 + rng() * 0.1).toFixed(2)})`;
+      ctx.lineWidth = 1;
+      const sx = rng() * W, sy = rng() * H;
+      ctx.beginPath(); ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + (rng() - 0.5) * 30, sy + (rng() - 0.5) * 8);
+      ctx.stroke();
+    }
+
+    const map = new THREE.CanvasTexture(canvas);
+    map.wrapS = THREE.RepeatWrapping;
+
+    // Bump map
+    const bc = document.createElement('canvas');
+    bc.width = W; bc.height = H;
+    const bx = bc.getContext('2d')!;
+    bx.fillStyle = '#808080';
+    bx.fillRect(0, 0, W, H);
+
+    // Machining marks
+    for (let y = 0; y < H; y++) {
+      const v = (125 + rng() * 10) | 0;
+      bx.fillStyle = `rgb(${v},${v},${v})`;
+      bx.fillRect(0, y, W, 1);
+    }
+    // Beveled edges
+    bx.fillStyle = '#999999';
+    bx.fillRect(0, 0, W, 4);
+    bx.fillStyle = '#666666';
+    bx.fillRect(0, H - 4, W, 4);
+
+    const bumpMap = new THREE.CanvasTexture(bc);
+    bumpMap.wrapS = THREE.RepeatWrapping;
+
+    return { map, bumpMap };
+  }
+
   private createPillars(): void {
     const { map, bumpMap } = this.createPillarTextures();
     const pillarMat = new THREE.MeshStandardMaterial({
@@ -649,10 +1177,13 @@ export class CageArenaScript extends ArenaScript {
   // Doors (animated gates)
   // ---------------------------------------------------------------------------
   private createDoors(): void {
+    const { map: gateMap, bumpMap: gateBump } = this.createGateTexture();
     const doorMat = new THREE.MeshStandardMaterial({
-      color: 0x555555,
-      metalness: 0.85,
-      roughness: 0.15,
+      map: gateMap,
+      bumpMap: gateBump,
+      bumpScale: 0.6,
+      metalness: 0.1,
+      roughness: 0.7,
     });
     const halfDoorGeo = new THREE.BoxGeometry(6, 5, 0.2);
 
@@ -833,6 +1364,72 @@ export class CageArenaScript extends ArenaScript {
   }
 
   // ---------------------------------------------------------------------------
+  // Crowd animation — GPU vertex shader displacement
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Creates a MeshStandardMaterial with injected vertex shader code that
+   * displaces instances based on time for a lively crowd effect.
+   * All animation runs on the GPU — zero CPU cost per frame.
+   */
+  private createCrowdMaterial(
+    props: THREE.MeshStandardMaterialParameters,
+    part: 'body' | 'head' | 'sign',
+  ): THREE.MeshStandardMaterial {
+    const mat = new THREE.MeshStandardMaterial(props);
+    const timeUniform = this.crowdTimeUniform;
+
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uCrowdTime = timeUniform;
+
+      // Inject uniform declaration at the top of the vertex shader
+      shader.vertexShader = 'uniform float uCrowdTime;\n' + shader.vertexShader;
+
+      // Inject displacement code after the <begin_vertex> chunk
+      // (which sets `vec3 transformed = vec3(position);`)
+      //
+      // We derive a per-instance phase from the instance matrix's world
+      // position (column 3) so each spectator moves independently.
+      const displacementCode = /* glsl */ `
+        {
+          // Extract instance world position from the instance matrix
+          vec3 iPos = vec3(
+            instanceMatrix[3][0],
+            instanceMatrix[3][1],
+            instanceMatrix[3][2]
+          );
+
+          // Per-instance hashes for unique timing
+          float h1 = fract(sin(iPos.x * 127.1 + iPos.z * 311.7) * 43758.5);
+          float h2 = fract(sin(iPos.x * 269.5 + iPos.z * 183.3) * 28461.3);
+
+          // Each spectator toggles at their own rate (0.4–1.2 Hz)
+          float freq = 0.4 + h1 * 0.8;
+          // Binary state: 0 or 1, hard snap like a sprite swap
+          float state = step(0.5, fract(uCrowdTime * freq + h2));
+
+          ${part === 'sign' ? `
+          // Signs: snap between tilted left / tilted right
+          float side = state * 2.0 - 1.0; // -1 or +1
+          transformed.x += side * 0.1;
+          transformed.y += state * 0.06;
+          ` : `
+          // Body/head: snap between resting and "hands up" pose
+          transformed.y += state * ${part === 'head' ? '0.18' : '0.12'};
+          `}
+        }
+      `;
+
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n' + displacementCode,
+      );
+    };
+
+    return mat;
+  }
+
+  // ---------------------------------------------------------------------------
   // Spectators (InstancedMesh bodies + heads)
   // ---------------------------------------------------------------------------
   private createSpectators(): void {
@@ -859,11 +1456,11 @@ export class CageArenaScript extends ArenaScript {
 
     const maxCount = 2400;
     const bodyGeo = new THREE.BoxGeometry(0.35, 0.65, 0.28);
-    const bodyMat = new THREE.MeshStandardMaterial({ roughness: 0.9 });
+    const bodyMat = this.createCrowdMaterial({ roughness: 0.9 }, 'body');
     const bodyMesh = new THREE.InstancedMesh(bodyGeo, bodyMat, maxCount);
 
     const headGeo = new THREE.SphereGeometry(0.12, 5, 4);
-    const headMat = new THREE.MeshStandardMaterial({ roughness: 0.8 });
+    const headMat = this.createCrowdMaterial({ roughness: 0.8 }, 'head');
     const headMesh = new THREE.InstancedMesh(headGeo, headMat, maxCount);
 
     const dummy = new THREE.Object3D();
@@ -957,7 +1554,7 @@ export class CageArenaScript extends ArenaScript {
       '#ff0000', '#00ff00', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#ffffff',
     ];
     const signGeo = new THREE.BoxGeometry(0.5, 0.35, 0.04);
-    const signMat = new THREE.MeshStandardMaterial({ roughness: 0.7 });
+    const signMat = this.createCrowdMaterial({ roughness: 0.7 }, 'sign');
     const signCount = Math.floor(spectatorCount * 0.04);
     const signMesh = new THREE.InstancedMesh(signGeo, signMat, signCount);
     const dummy = new THREE.Object3D();
@@ -1180,8 +1777,11 @@ export class CageArenaScript extends ArenaScript {
     this.group.add(innerMark);
 
     // Pillar base rings (hollow steel collars the pillars slide through)
+    const { map: ringMap, bumpMap: ringBump } = this.createPillarRingTexture();
     const baseMat = new THREE.MeshStandardMaterial({
-      color: 0x888890,
+      map: ringMap,
+      bumpMap: ringBump,
+      bumpScale: 0.3,
       metalness: 0.8,
       roughness: 0.15,
     });
@@ -1221,5 +1821,739 @@ export class CageArenaScript extends ArenaScript {
     chain.position.set(0, 0.08, 0);
     chain.rotation.z = Math.PI / 2;
     this.group.add(chain);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Upper arena — walls, ceiling, trusses, jumbotron, banner
+  // ---------------------------------------------------------------------------
+  private createUpperArena(): void {
+    const CEILING_Y = 24;
+    const WALL_TOP = CEILING_Y;
+
+    // ── Shared materials ─────────────────────────────────────────────────────
+    const upperWallMat = new THREE.MeshStandardMaterial({
+      color: 0x111115,
+      roughness: 0.95,
+    });
+    const concreteTrimMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1a20,
+      roughness: 0.9,
+    });
+    const trussMat = new THREE.MeshStandardMaterial({
+      color: 0x333338,
+      metalness: 0.7,
+      roughness: 0.3,
+    });
+    const ceilingMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a0e,
+      roughness: 1.0,
+      side: THREE.BackSide,
+    });
+
+    // ── Upper walls (extend from current wall tops to ceiling) ───────────────
+    // Current back walls end at roughly y=10. Extend to WALL_TOP.
+    const upperWallHeight = WALL_TOP - 10;
+    const upperWallY = 10 + upperWallHeight / 2;
+
+    // East / West upper walls
+    const ewGeo = new THREE.BoxGeometry(1, upperWallHeight, 63);
+    for (const x of [36.5, -36.5]) {
+      const wall = new THREE.Mesh(ewGeo, upperWallMat);
+      wall.position.set(x, upperWallY, 0);
+      this.group.add(wall);
+    }
+    // North / South upper walls
+    const nsGeo = new THREE.BoxGeometry(74, upperWallHeight, 1);
+    for (const z of [-42.5, 42.5]) {
+      const wall = new THREE.Mesh(nsGeo, upperWallMat);
+      wall.position.set(0, upperWallY, z);
+      this.group.add(wall);
+    }
+
+    // ── Corner fills (seal the gaps between E/W and N/S walls) ──────────────
+    const cornerGeo = new THREE.BoxGeometry(1, WALL_TOP, 1);
+    for (const x of [36.5, -36.5]) {
+      for (const z of [-42.5, 42.5]) {
+        const corner = new THREE.Mesh(cornerGeo, upperWallMat);
+        corner.position.set(x, WALL_TOP / 2, z);
+        this.group.add(corner);
+      }
+    }
+
+    // ── Concourse rim — ledge at top of seating ─────────────────────────────
+    // East/West: top tier is at y=7.5, add a walkway from x=35.5 to wall
+    const rimEWGeo = new THREE.BoxGeometry(2.5, 0.3, 63);
+    for (const x of [35.75, -35.75]) {
+      const rim = new THREE.Mesh(rimEWGeo, concreteTrimMat);
+      rim.position.set(x, 8.5, 0);
+      this.group.add(rim);
+    }
+    // North/South: top tier is at y=5.5
+    const rimNSGeo = new THREE.BoxGeometry(56, 0.3, 2.5);
+    for (const z of [-41.75, 41.75]) {
+      const rim = new THREE.Mesh(rimNSGeo, concreteTrimMat);
+      rim.position.set(0, 6.5, z);
+      this.group.add(rim);
+    }
+
+    // ── Horizontal trim bands on upper walls ─────────────────────────────────
+    const bandH = 0.3;
+    for (const bandY of [12, 16, 20]) {
+      // East / West bands
+      const bEW = new THREE.BoxGeometry(0.15, bandH, 63);
+      for (const x of [36.0, -36.0]) {
+        const band = new THREE.Mesh(bEW, concreteTrimMat);
+        band.position.set(x, bandY, 0);
+        this.group.add(band);
+      }
+      // North / South bands
+      const bNS = new THREE.BoxGeometry(74, bandH, 0.15);
+      for (const z of [-42.0, 42.0]) {
+        const band = new THREE.Mesh(bNS, concreteTrimMat);
+        band.position.set(0, bandY, z);
+        this.group.add(band);
+      }
+    }
+
+    // ── Ceiling ──────────────────────────────────────────────────────────────
+    const ceilGeo = new THREE.BoxGeometry(74, 0.5, 86);
+    const ceil = new THREE.Mesh(ceilGeo, ceilingMat);
+    ceil.position.set(0, CEILING_Y, 0);
+    this.group.add(ceil);
+
+    // ── Ceiling trusses — primary grid ──────────────────────────────────────
+    const trussH = 1.2;
+    const trussW = 0.25;
+    const trussY = CEILING_Y - trussH / 2 - 0.25;
+    // Longitudinal trusses (run along Z)
+    const trussLongGeo = new THREE.BoxGeometry(trussW, trussH, 86);
+    for (const x of [-30, -15, 0, 15, 30]) {
+      const truss = new THREE.Mesh(trussLongGeo, trussMat);
+      truss.position.set(x, trussY, 0);
+      this.group.add(truss);
+    }
+    // Cross trusses (run along X)
+    const trussCrossGeo = new THREE.BoxGeometry(74, trussH, trussW);
+    for (const z of [-36, -18, 0, 18, 36]) {
+      const truss = new THREE.Mesh(trussCrossGeo, trussMat);
+      truss.position.set(0, trussY, z);
+      this.group.add(truss);
+    }
+
+    // ── Secondary diagonal bracing between trusses ──────────────────────────
+    const braceMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a30,
+      metalness: 0.6,
+      roughness: 0.35,
+    });
+    const braceGeo = new THREE.BoxGeometry(0.1, 0.5, 0.1);
+    // Small X-braces at each truss intersection
+    for (const x of [-30, -15, 0, 15, 30]) {
+      for (const z of [-36, -18, 0, 18, 36]) {
+        // Skip center (jumbotron is there)
+        if (Math.abs(x) <= 15 && Math.abs(z) <= 18) continue;
+        for (const [rx, rz] of [[1, 1], [1, -1]]) {
+          const brace = new THREE.Mesh(braceGeo, braceMat);
+          brace.position.set(x + rx * 2, trussY, z + rz * 2);
+          brace.rotation.set(0, Math.atan2(rz, rx), Math.PI / 4);
+          this.group.add(brace);
+        }
+      }
+    }
+
+    // ── Ceiling catwalks (narrow walkways along trusses) ────────────────────
+    const catwalkMat = new THREE.MeshStandardMaterial({
+      color: 0x222228,
+      metalness: 0.4,
+      roughness: 0.6,
+    });
+    // Two catwalks running along Z at x = ±15
+    const catwalkGeo = new THREE.BoxGeometry(1.2, 0.08, 86);
+    for (const x of [-15, 15]) {
+      const cw = new THREE.Mesh(catwalkGeo, catwalkMat);
+      cw.position.set(x, trussY - trussH / 2 - 0.04, 0);
+      this.group.add(cw);
+    }
+    // Catwalk railings
+    const railGeo = new THREE.BoxGeometry(0.05, 0.6, 86);
+    const railMat = new THREE.MeshStandardMaterial({
+      color: 0x444450,
+      metalness: 0.5,
+      roughness: 0.4,
+    });
+    for (const x of [-15, 15]) {
+      for (const dx of [-0.55, 0.55]) {
+        const rail = new THREE.Mesh(railGeo, railMat);
+        rail.position.set(x + dx, trussY - trussH / 2 - 0.34, 0);
+        this.group.add(rail);
+      }
+    }
+
+    // ── HVAC ducts (big rectangular tubes running along ceiling) ─────────────
+    const ductMat = new THREE.MeshStandardMaterial({
+      color: 0x1e1e24,
+      metalness: 0.3,
+      roughness: 0.7,
+    });
+    // Two long ducts along X between trusses
+    const ductLongGeo = new THREE.BoxGeometry(74, 0.8, 1.5);
+    for (const z of [-27, 27]) {
+      const duct = new THREE.Mesh(ductLongGeo, ductMat);
+      duct.position.set(0, CEILING_Y - 0.65, z);
+      this.group.add(duct);
+    }
+    // Duct rib bands (every ~10 units along each duct)
+    const ribGeo = new THREE.BoxGeometry(0.1, 0.9, 1.6);
+    for (const z of [-27, 27]) {
+      for (let x = -30; x <= 30; x += 10) {
+        const rib = new THREE.Mesh(ribGeo, braceMat);
+        rib.position.set(x, CEILING_Y - 0.65, z);
+        this.group.add(rib);
+      }
+    }
+
+    // ── Ceiling light fixtures ──────────────────────────────────────────────
+    const fixtureMat = new THREE.MeshStandardMaterial({
+      color: 0x888888,
+      metalness: 0.5,
+      roughness: 0.4,
+    });
+    const lightPanelMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xeeeeff,
+      emissiveIntensity: 0.6,
+    });
+    const fixtureBodyGeo = new THREE.BoxGeometry(2, 0.15, 0.8);
+    const lightPanelGeo = new THREE.BoxGeometry(1.8, 0.02, 0.6);
+    const fixtureRodGeo = new THREE.CylinderGeometry(0.04, 0.04, 1.5, 4);
+
+    // Grid of light fixtures between major trusses
+    const lightXs = [-22.5, -7.5, 7.5, 22.5];
+    const lightZs = [-27, -9, 9, 27];
+    for (const lx of lightXs) {
+      for (const lz of lightZs) {
+        // Fixture body
+        const body = new THREE.Mesh(fixtureBodyGeo, fixtureMat);
+        const fixtureY = trussY - trussH / 2 - 1.5;
+        body.position.set(lx, fixtureY, lz);
+        this.group.add(body);
+
+        // Light panel (glowing face underneath)
+        const panel = new THREE.Mesh(lightPanelGeo, lightPanelMat);
+        panel.position.set(lx, fixtureY - 0.08, lz);
+        this.group.add(panel);
+
+        // Suspension rods
+        for (const dx of [-0.7, 0.7]) {
+          const rod = new THREE.Mesh(fixtureRodGeo, fixtureMat);
+          rod.position.set(lx + dx, fixtureY + 0.82, lz);
+          this.group.add(rod);
+        }
+      }
+    }
+
+    // Actual point lights (only a few to keep performance reasonable)
+    const ceilingLightPositions = [
+      [-22.5, -9], [-22.5, 9], [22.5, -9], [22.5, 9],
+      [-7.5, -27], [-7.5, 27], [7.5, -27], [7.5, 27],
+    ];
+    for (const [lx, lz] of ceilingLightPositions) {
+      const light = new THREE.PointLight(0xddeeff, 0.3, 30, 2);
+      light.position.set(lx, trussY - trussH / 2 - 2, lz);
+      this.group.add(light);
+    }
+
+    // ── Wall details ────────────────────────────────────────────────────────
+
+    // Vertical pilasters/columns on upper walls (structural look)
+    const pilasterMat = new THREE.MeshStandardMaterial({
+      color: 0x161620,
+      roughness: 0.85,
+    });
+    const pilasterEWGeo = new THREE.BoxGeometry(0.5, upperWallHeight, 0.8);
+    const pilasterNSGeo = new THREE.BoxGeometry(0.8, upperWallHeight, 0.5);
+
+    // East/West walls — pilasters every ~10 units
+    for (const x of [36.0, -36.0]) {
+      const sign = x > 0 ? -1 : 1; // Inward offset
+      for (let z = -28; z <= 28; z += 8) {
+        const p = new THREE.Mesh(pilasterEWGeo, pilasterMat);
+        p.position.set(x + sign * 0.25, upperWallY, z);
+        this.group.add(p);
+      }
+    }
+    // North/South walls
+    for (const z of [-42.0, 42.0]) {
+      const sign = z > 0 ? -1 : 1;
+      for (let x = -24; x <= 24; x += 8) {
+        const p = new THREE.Mesh(pilasterNSGeo, pilasterMat);
+        p.position.set(x, upperWallY, z + sign * 0.25);
+        this.group.add(p);
+      }
+    }
+
+    // Concourse railing (guard rail at the top of the seating)
+    const concourseRailMat = new THREE.MeshStandardMaterial({
+      color: 0x333340,
+      metalness: 0.6,
+      roughness: 0.3,
+    });
+    // East/West rails
+    const cRailEWGeo = new THREE.BoxGeometry(0.08, 0.7, 63);
+    for (const x of [34.5, -34.5]) {
+      const rail = new THREE.Mesh(cRailEWGeo, concourseRailMat);
+      rail.position.set(x, 9.2, 0);
+      this.group.add(rail);
+    }
+    // North/South rails
+    const cRailNSGeo = new THREE.BoxGeometry(56, 0.7, 0.08);
+    for (const z of [-40.5, 40.5]) {
+      const rail = new THREE.Mesh(cRailNSGeo, concourseRailMat);
+      rail.position.set(0, 7.2, z);
+      this.group.add(rail);
+    }
+    // Railing posts (vertical bars)
+    const postGeo = new THREE.BoxGeometry(0.06, 0.7, 0.06);
+    for (const x of [34.5, -34.5]) {
+      for (let z = -30; z <= 30; z += 4) {
+        const post = new THREE.Mesh(postGeo, concourseRailMat);
+        post.position.set(x, 9.2, z);
+        this.group.add(post);
+      }
+    }
+    for (const z of [-40.5, 40.5]) {
+      for (let x = -24; x <= 24; x += 4) {
+        const post = new THREE.Mesh(postGeo, concourseRailMat);
+        post.position.set(x, 7.2, z);
+        this.group.add(post);
+      }
+    }
+
+    // Exit tunnel openings (dark recesses in the upper walls)
+    const exitMat = new THREE.MeshStandardMaterial({
+      color: 0x050508,
+      roughness: 1.0,
+    });
+    // Two exits on East wall, two on West wall
+    const exitGeo = new THREE.BoxGeometry(0.6, 3, 4);
+    for (const x of [36.0, -36.0]) {
+      const sign = x > 0 ? -1 : 1;
+      for (const z of [-16, 16]) {
+        const exit = new THREE.Mesh(exitGeo, exitMat);
+        exit.position.set(x + sign * 0.2, 10.5, z);
+        this.group.add(exit);
+      }
+    }
+
+    // Accent strip lighting along the concourse rim (emissive strips)
+    const stripMat = new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      emissive: 0x442266,
+      emissiveIntensity: 0.6,
+    });
+    // East/West strip
+    const stripEWGeo = new THREE.BoxGeometry(0.06, 0.06, 63);
+    for (const x of [35.0, -35.0]) {
+      const strip = new THREE.Mesh(stripEWGeo, stripMat);
+      strip.position.set(x, 8.7, 0);
+      this.group.add(strip);
+    }
+    // North/South strip
+    const stripNSGeo = new THREE.BoxGeometry(56, 0.06, 0.06);
+    for (const z of [-41.0, 41.0]) {
+      const strip = new THREE.Mesh(stripNSGeo, stripMat);
+      strip.position.set(0, 6.7, z);
+      this.group.add(strip);
+    }
+
+    // Accent strip along top of wall (just below ceiling)
+    const topStripMat = new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      emissive: 0x331144,
+      emissiveIntensity: 0.4,
+    });
+    const topStripEW = new THREE.BoxGeometry(0.06, 0.06, 63);
+    for (const x of [36.0, -36.0]) {
+      const strip = new THREE.Mesh(topStripEW, topStripMat);
+      strip.position.set(x, CEILING_Y - 0.5, 0);
+      this.group.add(strip);
+    }
+    const topStripNS = new THREE.BoxGeometry(74, 0.06, 0.06);
+    for (const z of [-42.0, 42.0]) {
+      const strip = new THREE.Mesh(topStripNS, topStripMat);
+      strip.position.set(0, CEILING_Y - 0.5, z);
+      this.group.add(strip);
+    }
+
+    // ── Jumbotron (center, suspended from ceiling) ───────────────────────────
+    this.createJumbotron(CEILING_Y);
+
+    // ── "THE CAGE" banner on south upper wall ────────────────────────────────
+    this.createWallBanner();
+  }
+
+  private createJumbotron(ceilingY: number): void {
+    const housingMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1a1e,
+      metalness: 0.5,
+      roughness: 0.4,
+    });
+
+    // Housing — box suspended from ceiling
+    const housingW = 12;
+    const housingH = 3;
+    const housingD = 8;
+    const housingGeo = new THREE.BoxGeometry(housingW, housingH, housingD);
+    const housing = new THREE.Mesh(housingGeo, housingMat);
+    const screenY = ceilingY - 5.5;
+    housing.position.set(0, screenY, 0);
+    this.group.add(housing);
+
+    // Suspension rods from ceiling
+    const rodMat = new THREE.MeshStandardMaterial({
+      color: 0x444448,
+      metalness: 0.7,
+      roughness: 0.3,
+    });
+    const rodLen = ceilingY - screenY - housingH / 2;
+    const rodGeo = new THREE.CylinderGeometry(0.1, 0.1, rodLen, 4);
+    for (const rx of [-4, 4]) {
+      for (const rz of [-2.5, 2.5]) {
+        const rod = new THREE.Mesh(rodGeo, rodMat);
+        rod.position.set(rx, screenY + housingH / 2 + rodLen / 2, rz);
+        this.group.add(rod);
+      }
+    }
+
+    // Scoreboard screens on all 4 faces (canvas textures for dynamic text)
+    // East/West faces (wider)
+    const screenEWGeo = new THREE.PlaneGeometry(housingW - 0.5, housingH - 0.5);
+    for (const dir of [-1, 1]) {
+      const tex = this.createScoreboardTexture(512, 128);
+      this.scoreboardTextures.push(tex);
+      const mat = new THREE.MeshStandardMaterial({
+        map: tex,
+        emissiveMap: tex,
+        emissiveIntensity: 1.2,
+        toneMapped: false,
+      });
+      const screen = new THREE.Mesh(screenEWGeo, mat);
+      screen.position.set(0, screenY, dir * (housingD / 2 + 0.02));
+      if (dir === -1) screen.rotation.y = Math.PI;
+      this.group.add(screen);
+    }
+    // North/South faces (narrower)
+    const screenNSGeo = new THREE.PlaneGeometry(housingD - 0.5, housingH - 0.5);
+    for (const dir of [-1, 1]) {
+      const tex = this.createScoreboardTexture(512, 128);
+      this.scoreboardTextures.push(tex);
+      const mat = new THREE.MeshStandardMaterial({
+        map: tex,
+        emissiveMap: tex,
+        emissiveIntensity: 1.2,
+        toneMapped: false,
+      });
+      const screen = new THREE.Mesh(screenNSGeo, mat);
+      screen.position.set(dir * (housingW / 2 + 0.02), screenY, 0);
+      screen.rotation.y = dir * Math.PI / 2;
+      this.group.add(screen);
+    }
+
+    // Draw initial scoreboard state
+    this.drawAllScoreboards();
+
+    // Subtle glow light underneath the jumbotron
+    const glow = new THREE.PointLight(0x3355cc, 0.4, 20);
+    glow.position.set(0, screenY - housingH / 2 - 0.5, 0);
+    this.group.add(glow);
+
+    // Bottom trim (thin bright strip like a ticker bar)
+    const tickerMat = new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      emissive: 0xff4422,
+      emissiveIntensity: 0.8,
+    });
+    const tickerEW = new THREE.BoxGeometry(housingW + 0.2, 0.2, 0.1);
+    for (const dir of [-1, 1]) {
+      const ticker = new THREE.Mesh(tickerEW, tickerMat);
+      ticker.position.set(0, screenY - housingH / 2 - 0.1, dir * (housingD / 2 + 0.05));
+      this.group.add(ticker);
+    }
+    const tickerNS = new THREE.BoxGeometry(0.1, 0.2, housingD + 0.2);
+    for (const dir of [-1, 1]) {
+      const ticker = new THREE.Mesh(tickerNS, tickerMat);
+      ticker.position.set(dir * (housingW / 2 + 0.05), screenY - housingH / 2 - 0.1, 0);
+      this.group.add(ticker);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scoreboard canvas rendering
+  // ---------------------------------------------------------------------------
+
+  private createScoreboardTexture(w: number, h: number): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    return tex;
+  }
+
+  private drawAllScoreboards(): void {
+    for (const tex of this.scoreboardTextures) {
+      this.drawScoreboard(tex);
+    }
+  }
+
+  private drawScoreboard(tex: THREE.CanvasTexture): void {
+    const canvas = tex.image as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Background
+    ctx.fillStyle = '#080812';
+    ctx.fillRect(0, 0, w, h);
+
+    // Divider line
+    ctx.strokeStyle = '#333344';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(w / 2, 8);
+    ctx.lineTo(w / 2, h - 8);
+    ctx.stroke();
+
+    // "KILLS" header
+    ctx.fillStyle = '#666688';
+    ctx.font = 'bold 18px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('KILLS', w / 2, 22);
+
+    // Red team (left) — team 0
+    ctx.fillStyle = '#ff3333';
+    ctx.font = 'bold 64px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(this.teamKills[0]), w * 0.25, 95);
+
+    // "RED" label
+    ctx.fillStyle = '#cc2222';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('RED', w * 0.25, 118);
+
+    // Blue team (right) — team 1
+    ctx.fillStyle = '#3388ff';
+    ctx.font = 'bold 64px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(this.teamKills[1]), w * 0.75, 95);
+
+    // "BLUE" label
+    ctx.fillStyle = '#2266cc';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('BLUE', w * 0.75, 118);
+
+    // VS in center
+    ctx.fillStyle = '#444466';
+    ctx.font = 'bold 28px monospace';
+    ctx.fillText('—', w / 2, 88);
+
+    tex.needsUpdate = true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wall banners (south = red team, north = blue team)
+  // ---------------------------------------------------------------------------
+
+  private static readonly CHEER_EMOTES = [
+    '🔥', '💀', '⚔️', '👊', '💪', '🏆', '😤',
+  ];
+  private static readonly CHEER_TEXTS = [
+    'DESTROYED!', 'OBLITERATED!', 'CRUSHED!', 'DOMINATED!',
+    'ANNIHILATED!', 'WRECKED!', 'ELIMINATED!',
+  ];
+  private static readonly SHAME_EMOTES = [
+    '💩', '🤡', '😂', '🪦', '👎', '📉', '😬',
+  ];
+  private static readonly SHAME_TEXTS = [
+    'EMBARRASSING!', 'PATHETIC!', 'TRAGIC!', 'YIKES!',
+    'SHAMEFUL!', 'LOL GG', 'DOWN BAD!',
+  ];
+
+  private createWallBanner(): void {
+    const bannerW = 20;
+    const bannerH = 5;
+
+    // ── South banner (Red team) ──────────────────────────────────────────────
+    const southCanvas = document.createElement('canvas');
+    southCanvas.width = 512;
+    southCanvas.height = 128;
+    this.southBannerTexture = new THREE.CanvasTexture(southCanvas);
+    this.southBannerTexture.minFilter = THREE.LinearFilter;
+
+    const southMat = new THREE.MeshStandardMaterial({
+      map: this.southBannerTexture,
+      emissiveMap: this.southBannerTexture,
+      emissiveIntensity: 1.5,
+      toneMapped: false,
+    });
+    const southGeo = new THREE.PlaneGeometry(bannerW, bannerH);
+    const southMesh = new THREE.Mesh(southGeo, southMat);
+    southMesh.position.set(0, 16, 41.5);
+    southMesh.rotation.y = Math.PI;
+    this.group.add(southMesh);
+
+    // South banner border (red)
+    this.createBannerBorder(bannerW, bannerH, 16, 41.45, 0xcc2222);
+
+    // Accent light
+    const southLight = new THREE.PointLight(0xcc2222, 0.5, 15);
+    southLight.position.set(0, 16, 40);
+    this.group.add(southLight);
+
+    // ── North banner (Blue team) ─────────────────────────────────────────────
+    const northCanvas = document.createElement('canvas');
+    northCanvas.width = 512;
+    northCanvas.height = 128;
+    this.northBannerTexture = new THREE.CanvasTexture(northCanvas);
+    this.northBannerTexture.minFilter = THREE.LinearFilter;
+
+    const northMat = new THREE.MeshStandardMaterial({
+      map: this.northBannerTexture,
+      emissiveMap: this.northBannerTexture,
+      emissiveIntensity: 1.5,
+      toneMapped: false,
+    });
+    const northGeo = new THREE.PlaneGeometry(bannerW, bannerH);
+    const northMesh = new THREE.Mesh(northGeo, northMat);
+    northMesh.position.set(0, 16, -41.5);
+    this.group.add(northMesh);
+
+    // North banner border (blue)
+    this.createBannerBorder(bannerW, bannerH, 16, -41.45, 0x2266cc);
+
+    // Accent light
+    const northLight = new THREE.PointLight(0x2255aa, 0.5, 15);
+    northLight.position.set(0, 16, -40);
+    this.group.add(northLight);
+
+    // Draw initial idle state
+    this.drawSouthBanner();
+    this.drawNorthBanner();
+  }
+
+  private createBannerBorder(
+    bW: number, bH: number, y: number, z: number, color: number,
+  ): void {
+    const borderMat = new THREE.MeshStandardMaterial({
+      color: 0x000000,
+      emissive: color,
+      emissiveIntensity: 1.0,
+    });
+    const w = 0.15;
+    const hBar = new THREE.BoxGeometry(bW + w * 2, w, 0.05);
+    for (const dy of [-bH / 2, bH / 2]) {
+      const bar = new THREE.Mesh(hBar, borderMat);
+      bar.position.set(0, y + dy, z);
+      this.group.add(bar);
+    }
+    const vBar = new THREE.BoxGeometry(w, bH, 0.05);
+    for (const dx of [-bW / 2, bW / 2]) {
+      const bar = new THREE.Mesh(vBar, borderMat);
+      bar.position.set(dx, y, z);
+      this.group.add(bar);
+    }
+  }
+
+  private pickRandom<T>(arr: readonly T[]): T {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  /**
+   * Draw the south (red team) banner.
+   * If killerTeam is provided, it's a killing blow event:
+   *   team 0 scored → cheer red, team 1 scored → shame red
+   */
+  private drawSouthBanner(killerTeam?: number): void {
+    if (!this.southBannerTexture) return;
+    const canvas = this.southBannerTexture.image as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+
+    if (killerTeam === 0) {
+      // Red team scored — cheer!
+      this.drawBannerReaction(ctx, canvas.width, canvas.height, 'cheer', '#ff2222', '#330000');
+    } else if (killerTeam === 1) {
+      // Blue team scored — shame red
+      this.drawBannerReaction(ctx, canvas.width, canvas.height, 'shame', '#ff2222', '#330000');
+    } else {
+      // Idle state
+      this.drawBannerIdle(ctx, canvas.width, canvas.height, 'RED TEAM', '#cc2222', '#180000');
+    }
+
+    this.southBannerTexture.needsUpdate = true;
+  }
+
+  /**
+   * Draw the north (blue team) banner.
+   * If killerTeam is provided:
+   *   team 1 scored → cheer blue, team 0 scored → shame blue
+   */
+  private drawNorthBanner(killerTeam?: number): void {
+    if (!this.northBannerTexture) return;
+    const canvas = this.northBannerTexture.image as HTMLCanvasElement;
+    const ctx = canvas.getContext('2d')!;
+
+    if (killerTeam === 1) {
+      // Blue team scored — cheer!
+      this.drawBannerReaction(ctx, canvas.width, canvas.height, 'cheer', '#3388ff', '#000d33');
+    } else if (killerTeam === 0) {
+      // Red team scored — shame blue
+      this.drawBannerReaction(ctx, canvas.width, canvas.height, 'shame', '#3388ff', '#000d33');
+    } else {
+      // Idle state
+      this.drawBannerIdle(ctx, canvas.width, canvas.height, 'BLUE TEAM', '#2266cc', '#000818');
+    }
+
+    this.northBannerTexture.needsUpdate = true;
+  }
+
+  private drawBannerIdle(
+    ctx: CanvasRenderingContext2D, w: number, h: number,
+    label: string, color: string, bg: string,
+  ): void {
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = color;
+    ctx.font = 'bold 48px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, w / 2, h / 2);
+  }
+
+  private drawBannerReaction(
+    ctx: CanvasRenderingContext2D, w: number, h: number,
+    type: 'cheer' | 'shame', color: string, bg: string,
+  ): void {
+    const isCheer = type === 'cheer';
+    const emotes = isCheer ? CageArenaScript.CHEER_EMOTES : CageArenaScript.SHAME_EMOTES;
+    const texts = isCheer ? CageArenaScript.CHEER_TEXTS : CageArenaScript.SHAME_TEXTS;
+    const emote = this.pickRandom(emotes);
+    const text = this.pickRandom(texts);
+
+    // Brighter background for active state
+    ctx.fillStyle = isCheer ? '#110800' : '#0a0000';
+    ctx.fillRect(0, 0, w, h);
+
+    // Emote
+    ctx.font = '52px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emote, w * 0.15, h / 2);
+    ctx.fillText(emote, w * 0.85, h / 2);
+
+    // Text
+    ctx.fillStyle = isCheer ? '#ffcc00' : color;
+    ctx.font = `bold 44px monospace`;
+    ctx.fillText(text, w / 2, h / 2);
   }
 }

@@ -479,6 +479,23 @@ export class AdminScreen {
     title.textContent = `Ban "${user.username}"`;
     title.style.cssText = 'color: #ccaa44; font-size: 18px; font-weight: bold; margin-bottom: 12px;';
 
+    const reasonLabel = document.createElement('div');
+    reasonLabel.textContent = 'Reason (optional):';
+    reasonLabel.style.cssText = 'color: #aaa; font-size: 14px; margin-bottom: 6px;';
+
+    const reasonInput = document.createElement('input');
+    reasonInput.type = 'text';
+    reasonInput.placeholder = 'e.g. Toxic behavior';
+    reasonInput.maxLength = 200;
+    reasonInput.style.cssText = `
+      width: 100%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 16px;
+      background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(100, 120, 200, 0.2);
+      border-radius: 4px; color: #ddd; font-size: 13px; font-family: inherit;
+      outline: none;
+    `;
+    reasonInput.addEventListener('focus', () => reasonInput.style.borderColor = 'rgba(200, 160, 40, 0.4)');
+    reasonInput.addEventListener('blur', () => reasonInput.style.borderColor = 'rgba(100, 120, 200, 0.2)');
+
     const label = document.createElement('div');
     label.textContent = 'Select ban duration:';
     label.style.cssText = 'color: #aaa; font-size: 14px; margin-bottom: 16px;';
@@ -526,7 +543,8 @@ export class AdminScreen {
 
     const confirmBtn = this.makeButton('Ban', 'rgba(160, 120, 20, 0.9)');
     confirmBtn.addEventListener('click', () => {
-      this.network.send({ type: 'admin_ban_user', targetUserId: user.id, duration: selected });
+      const reason = reasonInput.value.trim() || undefined;
+      this.network.send({ type: 'admin_ban_user', targetUserId: user.id, duration: selected, reason });
       this.overlay?.remove();
       this.overlay = null;
     });
@@ -535,6 +553,8 @@ export class AdminScreen {
     btnRow.appendChild(confirmBtn);
 
     dialog.appendChild(title);
+    dialog.appendChild(reasonLabel);
+    dialog.appendChild(reasonInput);
     dialog.appendChild(label);
     dialog.appendChild(grid);
     dialog.appendChild(btnRow);

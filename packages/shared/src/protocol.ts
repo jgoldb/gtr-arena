@@ -147,6 +147,7 @@ export interface S2C_AuthResult {
   isAdmin?: boolean;
   xp?: number;
   bannedUntil?: string;
+  banReason?: string;
   error?: string;
 }
 
@@ -406,6 +407,7 @@ export interface C2S_AdminBanUser {
   type: 'admin_ban_user';
   targetUserId: number; // DB id
   duration: string;     // e.g. '1h', '2h', '1d', '3d', '1w', '1mo', '1y', 'permanent'
+  reason?: string;      // Optional reason shown to the banned user
 }
 
 export interface C2S_AdminUnbanUser {
@@ -454,6 +456,7 @@ export interface AdminUserRecord {
   wins: number;
   losses: number;
   bannedUntil: string | null;
+  banReason: string | null;
   lastPlayed: string | null;
 }
 
