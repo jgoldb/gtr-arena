@@ -21,6 +21,10 @@ export class Renderer {
     this.resize(window.innerWidth, window.innerHeight);
   }
 
+  getCanvas(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
   resize(width: number, height: number): void {
     this.renderer.setSize(width, height);
   }

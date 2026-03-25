@@ -28,6 +28,7 @@ import {
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   disposeGroup,
 } from '../engine/effects/VisualEffects';
+import { BlindEffect } from '../engine/effects/BlindEffect';
 import { keybindManager } from '../ui/KeybindManager';
 
 interface RemoteEntity {
@@ -106,6 +107,9 @@ export class ClientEngine {
   // Active knockbacks (visual displacement on client)
   private activeKnockbacks: { entityId: string; dirX: number; dirZ: number; distance: number; duration: number; elapsed: number }[] = [];
 
+  // Blind state (blur + sand specks + eyelid blinks + targeting prevention)
+  private readonly blindEffect = new BlindEffect();
+
   // Track tab visibility for fast-forwarding client-side timers on restore
   private wasHidden = false;
   private hiddenAt = 0;
@@ -153,6 +157,7 @@ export class ClientEngine {
   onLeaveCombat?: (entityId: string) => void;
   onBuffApplied?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
   onBuffExpired?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
+  onAbilitySuccess?: (abilityId: string) => void;
 
   constructor(canvas: HTMLCanvasElement, network: NetworkManager, mapId: string, localEntityId: string, initialEntities: EntitySnapshot[]) {
     this.network = network;
@@ -534,9 +539,9 @@ export class ClientEngine {
       if ('targetEntityId' in delta) entity.targetEntityId = delta.targetEntityId!;
       if (delta.disconnected !== undefined) entity.disconnected = delta.disconnected;
 
-      // Auto-target hostile entity that begins casting on us
+      // Auto-target hostile entity that begins casting on us (not while blinded)
       if (!wasCasting && entity.castingAbilityId && entity.targetEntityId === this.localEntityId
-          && !this.selectedTargetId && entity.team !== this.playerController.team) {
+          && !this.selectedTargetId && entity.team !== this.playerController.team && !this.blindEffect.isActive()) {
         this.selectTarget(entity.targetable);
       }
     }
@@ -612,6 +617,15 @@ export class ClientEngine {
         this.playerController.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
         this.playerController.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
         this.playerController.setDiscombobulated(this.localBuffs.some(b => b.id === 'discombobulate'));
+
+        // Blind: activate/deactivate effect, clear target on first application
+        const isNowBlinded = this.localBuffs.some(b => b.id === 'blinded');
+        if (isNowBlinded && !this.blindEffect.isActive()) {
+          this.blindEffect.activate(this.renderer.getCanvas());
+          this.selectTarget(null);
+        } else if (!isNowBlinded && this.blindEffect.isActive()) {
+          this.blindEffect.deactivate();
+        }
         continue;
       }
       const entity = this.remoteEntities.get(buffSnap.entityId);
@@ -630,8 +644,8 @@ export class ClientEngine {
   handleCombatEvent(msg: S2C_CombatEvent): void {
     this.onCombatText?.(msg.sourceEntityId, msg.targetEntityId, msg.amount, msg.combatType);
 
-    // Auto-target attacker when player has no target
-    if (msg.targetEntityId === this.localEntityId && !this.selectedTargetId && msg.combatType !== 'heal') {
+    // Auto-target attacker when player has no target (not while blinded)
+    if (msg.targetEntityId === this.localEntityId && !this.selectedTargetId && msg.combatType !== 'heal' && !this.blindEffect.isActive()) {
       const attacker = this.remoteEntities.get(msg.sourceEntityId);
       if (attacker) {
         this.selectTarget(attacker.targetable);
@@ -648,6 +662,14 @@ export class ClientEngine {
     if (msg.entityId === this.localEntityId) {
       const targetPos = groundPos ?? (this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId)?.position.clone() : undefined);
       this.playerController.triggerAbilityAnimation(msg.abilityId, targetPos);
+      this.onAbilitySuccess?.(msg.abilityId);
+      // Optimistically update local buff stacks (server will confirm in next snapshot)
+      if (msg.abilityId === 'shank' || msg.abilityId === 'pocket-sand') {
+        const buff = this.localBuffs.find(b => b.id === 'tweaking');
+        if (buff && buff.stacks !== undefined) {
+          buff.stacks = Math.min(buff.stacks + 15, buff.maxStacks ?? Infinity);
+        }
+      }
       // Start sweep charge for local player
       if (msg.abilityId === 'sweep') {
         this.startSweepCharge();
@@ -1152,6 +1174,11 @@ export class ClientEngine {
       }
     }
 
+    // Blind screen effect — update eyelid blink animation
+    if (this.blindEffect.isActive()) {
+      this.blindEffect.update(dt);
+    }
+
     // Interpolate remote entity positions using snapshot buffer
     // (linear interpolation between two known server states, ~100ms behind real-time)
     for (const entity of this.remoteEntities.values()) {
@@ -1251,9 +1278,9 @@ export class ClientEngine {
     // Update map script (e.g., gate animations)
     this.mapManager.update(dt);
 
-    // Tab targeting — nearest hostile in front within 30 yards
+    // Tab targeting — nearest hostile in front within 30 yards (blocked while blinded)
     const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
-    if (tabDown && !this.tabKeyWasDown) {
+    if (tabDown && !this.tabKeyWasDown && !this.blindEffect.isActive()) {
       const hostiles = this.getAllRemoteEntities().map(e => e.targetable);
       this.targetingSystem.selectNearestHostileInFront(hostiles, yardsToUnits(30));
       const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
@@ -1286,7 +1313,7 @@ export class ClientEngine {
     }
     this.fKeyWasDown = fDown;
 
-    // Process left click for target selection (same as playground: InputManager captures on mousedown)
+    // Process left click for target selection
     const leftClick = this.input.getLeftClick();
     if (leftClick) {
       if (this.targetingSystem.groundTargetActive) {
@@ -1307,7 +1334,7 @@ export class ClientEngine {
       }
     }
 
-    // Process right click for auto-attack (same as playground: InputManager captures on mousedown)
+    // Process right click for auto-attack
     const rightClick = this.input.getRightClick();
     if (rightClick) {
       const target = this.targetingSystem.processRightClick(rightClick.x, rightClick.y);
@@ -1541,6 +1568,7 @@ export class ClientEngine {
 
   destroy(): void {
     this.stop();
+    this.blindEffect.deactivate();
     this.input.dispose();
     this.targetingSystem.dispose();
     this.mapManager.dispose();

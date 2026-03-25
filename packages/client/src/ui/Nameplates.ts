@@ -68,7 +68,7 @@ export class Nameplates {
     `;
   }
 
-  update(player: Targetable, npcs: readonly Targetable[], getDebuffs?: (target: Targetable) => readonly NameplateAura[]): void {
+  update(player: Targetable, npcs: readonly Targetable[], getDebuffs?: (target: Targetable) => readonly NameplateAura[], forceSimple?: boolean): void {
     const allTargets = npcs;
     const activeSet = new Set<Targetable>(allTargets);
 
@@ -100,7 +100,7 @@ export class Nameplates {
       const dx = target.mesh.position.x - player.mesh.position.x;
       const dz = target.mesh.position.z - player.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
-      const inRange = dist <= MAX_RANGE;
+      const inRange = !forceSimple && dist <= MAX_RANGE;
 
       const hostile = target.isHostileTo(player);
 

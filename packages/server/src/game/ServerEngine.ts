@@ -257,6 +257,12 @@ export class ServerEngine {
         this.stopAutoAttack(attacker.id);
       }
     };
+
+    this.combatSystem.onBlindApplied = (_attacker, target) => {
+      // Blinded entity loses target and stops auto-attacking
+      this.targets.set(target.id, null);
+      this.stopAutoAttack(target.id);
+    };
   }
 
   toggleGodMode(entityId: string): boolean {
@@ -662,6 +668,7 @@ export class ServerEngine {
         }
       }
 
+
       // Cancel resting if entity entered combat
       if (entity.inCombat) {
         this.cancelResting(entity.id);
@@ -1054,6 +1061,9 @@ export class ServerEngine {
     }
     if (ability.id === 'kaboom') {
       this.executeKaboom(entity);
+    }
+    if (ability.id === 'shank' || ability.id === 'pocket-sand') {
+      this.buffSystem.addStacks(entity, 'tweaking', 15);
     }
     if (ability.id === 'crotch-rot') {
       const target = this.getTarget(entity.id);

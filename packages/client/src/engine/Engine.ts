@@ -24,6 +24,7 @@ import {
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   disposeGroup,
 } from './effects/VisualEffects';
+import { BlindEffect } from './effects/BlindEffect';
 import { keybindManager } from '../ui/KeybindManager';
 
 interface ActiveGasCloud extends GasCloudVisual {
@@ -120,6 +121,7 @@ export class Engine {
   private crotchRotVisuals = new Map<Targetable, CrotchRotVisual & { elapsed: number }>();
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamTarget: Targetable | null = null;
+  private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
   private autoAttackTimer = 0;
   private autoAttackTarget: Targetable | null = null;
@@ -238,6 +240,14 @@ export class Engine {
       }
     };
 
+    this.combatSystem.onBlindApplied = (_attacker, target) => {
+      // Blinded player loses target and stops auto-attacking
+      if (target === this.playerController) {
+        this.targetingSystem.currentTarget = null;
+        if (this.autoAttacking) this.stopAutoAttack();
+      }
+    };
+
     // Flinch animation on direct damage (not DoT/channel ticks)
     this.combatSystem.onFlinchDamage = (target) => {
       if (target === this.playerController) {
@@ -249,9 +259,9 @@ export class Engine {
       }
     };
 
-    // Auto-target attacker when player has no target
+    // Auto-target attacker when player has no target (not while blinded)
     this.combatSystem.onHostileAction = (attacker, target) => {
-      if (target === this.playerController && !this.targetingSystem.currentTarget) {
+      if (target === this.playerController && !this.targetingSystem.currentTarget && !this.buffSystem.isBlinded(this.playerController)) {
         this.targetingSystem.currentTarget = attacker;
       }
     };
@@ -1480,9 +1490,9 @@ export class Engine {
     }
     this.rKeyWasDown = rKeyDown;
 
-    // Tab targeting — nearest hostile in front within 30 yards
+    // Tab targeting — nearest hostile in front within 30 yards (blocked while blinded)
     const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
-    if (tabDown && !this.tabKeyWasDown) {
+    if (tabDown && !this.tabKeyWasDown && !this.buffSystem.isBlinded(this.playerController)) {
       this.targetingSystem.selectNearestHostileInFront(this.npcs, yardsToUnits(30));
     }
     this.tabKeyWasDown = tabDown;
@@ -1554,6 +1564,17 @@ export class Engine {
     this.playerController.setDiscombobulated(
       this.buffSystem.isDiscombobulated(this.playerController)
     );
+
+    // Blind state — player (blur + sand specks + eyelid blinks + prevent targeting)
+    const playerBlinded = this.buffSystem.isBlinded(this.playerController);
+    if (playerBlinded) {
+      if (!this.blindEffect.isActive()) {
+        this.blindEffect.activate(this.renderer.getCanvas());
+      }
+      this.blindEffect.update(deltaTime);
+    } else if (this.blindEffect.isActive()) {
+      this.blindEffect.deactivate();
+    }
 
     // Stun/sleep state — NPCs
     for (const npc of this.npcs) {
@@ -1676,6 +1697,7 @@ export class Engine {
 
   dispose(): void {
     this.stop();
+    this.blindEffect.deactivate();
     this.clearGasClouds();
     this.clearChemicalPools();
     this.cleanupFullRetardFumes();

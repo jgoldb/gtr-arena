@@ -10,7 +10,7 @@ export function yardsToUnits(yards: number): number {
 // ── Buff/debuff system types ────────────────────────────────────────────
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'damageDealtPercent' | 'manaCostPercent';
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'blind' | 'damageDealtPercent' | 'manaCostPercent';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
   readonly minStacks?: number; // effect only applies when buff has >= this many stacks
 }
@@ -544,7 +544,7 @@ export const Shank: Ability = {
   name: 'Shank',
   icon: '🔪',
   range: yardsToUnits(3),
-  manaCost: 60,
+  manaCost: 145,
   cooldown: 3,
   damage: 0,
   damageMin: 200,
@@ -552,4 +552,29 @@ export const Shank: Ability = {
   requiresHostileTarget: true,
   description:
     'Quick stab dealing 200-240 damage. If used from behind the target, deals 50% bonus damage. +15 Tweaking.',
+};
+
+export const BlindedDebuff: BuffDefinition = {
+  id: 'blinded',
+  name: 'Blinded',
+  icon: '🙈',
+  duration: 4,
+  type: 'debuff',
+  description: 'Unable to see.',
+  effects: [{ type: 'blind', value: 0 }],
+  drCategory: 'blind',
+};
+
+export const PocketSand: Ability = {
+  id: 'pocket-sand',
+  name: 'Pocket Sand',
+  icon: '🏜️',
+  range: yardsToUnits(10),
+  manaCost: 175,
+  cooldown: 12,
+  damage: 0,
+  requiresHostileTarget: true,
+  description:
+    'Throws sand in the target\'s eyes, blinding for 4 seconds. +15 Tweaking.',
+  appliesDebuff: BlindedDebuff,
 };

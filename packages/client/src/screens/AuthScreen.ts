@@ -471,6 +471,7 @@ export class AuthScreen {
       "Sure could use a sammich right about now",
       "I just shidded all over myself",
       "I'm Sketch MC Flex, I'm the best...",
+      "I haven't shit in 3 weeks"
     ];
     let shuffledThoughts: string[] = [];
     let thoughtIndex = 0;

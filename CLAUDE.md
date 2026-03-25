@@ -221,6 +221,18 @@ The server tracks the last-broadcast state per entity (`lastBroadcastState` map)
 
 1 yard = 0.6 world units. Use `yardsToUnits()` from shared package. Melee range ~5 yards, most abilities 10-20 yards.
 
+### Character Model Coordinate System (IMPORTANT)
+
+**CharacterModel `group` has `rotation.y = Math.PI` baked in.** This means:
+
+- **`getWorldDirection()` returns the OPPOSITE of the character's visual facing direction.** Do NOT use it to determine forward. Instead, get the forward direction from the **parent mesh** (PlayerController.mesh / RemoteEntity.mesh) using: `new THREE.Vector3(Math.sin(mesh.rotation.y), 0, Math.cos(mesh.rotation.y))` — this is the same convention used throughout Engine.ts.
+- **Arm `rotation.x`:** Positive = forward (toward the target), Negative = backward/upward (behind the character). Reference: Shank animation uses `+0.5` for forward stab thrust.
+- **Arm `rotation.z`:** On the right arm, negative = outward (away from body), positive = inward (across body). Mirrored for left arm.
+- **Body `rotation.x`:** Positive = lean forward (hunch/lunge), Negative = lean backward.
+- **Body `rotation.y`:** Positive = rotate torso to the right, Negative = rotate left.
+
+When spawning particles/projectiles from a character (e.g., sand, projectiles), always derive the forward vector from `parent.rotation.y`, never from `getWorldDirection()` or the model group.
+
 ## Common Patterns
 
 ### Adding a New Ability

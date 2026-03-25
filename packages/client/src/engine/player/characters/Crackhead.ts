@@ -29,6 +29,9 @@ export class Crackhead extends CharacterModel {
   // Knife mesh for Shank animation
   private declare knifeGroup: THREE.Group;
 
+  // Sand particle state for Pocket Sand
+  private sandParticles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
+
   // Twitch state
   private twitchTimer = 0;
   private twitchIntensity = 0;
@@ -485,6 +488,24 @@ export class Crackhead extends CharacterModel {
   // to add our lunatic flair on top of the base run cycle
 
   protected override onAnimate(dt: number, input: AnimationInput): void {
+    // Update sand particles
+    for (let i = this.sandParticles.length - 1; i >= 0; i--) {
+      const p = this.sandParticles[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        p.mesh.parent?.remove(p.mesh);
+        (p.mesh.material as THREE.Material).dispose();
+        this.sandParticles.splice(i, 1);
+        continue;
+      }
+      p.vel.y -= 3.0 * dt; // gravity
+      p.mesh.position.addScaledVector(p.vel, dt);
+      // Fade out in last 30% of life
+      const totalLife = 0.5 + 0.15; // average
+      const fade = Math.min(1, p.life / (totalLife * 0.3));
+      (p.mesh.material as THREE.MeshBasicMaterial).opacity = fade * 0.9;
+    }
+
     // Sore pulsing
     for (let i = 0; i < this.soreMeshes.length; i++) {
       const pulse = 1.0 + Math.sin(this.idleTime * 3 + i * 1.5) * 0.15;
@@ -623,11 +644,127 @@ export class Crackhead extends CharacterModel {
 
   protected override getAbilityAnimDuration(abilityId: string): number {
     if (abilityId === 'shank') return 0.7;
+    if (abilityId === 'pocket-sand') return 0.6;
     return 0.6;
   }
 
   protected override animateAbilityUse(abilityId: string, t: number): void {
     if (abilityId === 'shank') this.animateShank(t);
+    if (abilityId === 'pocket-sand') this.animatePocketSand(t);
+  }
+
+  private sandSpawned = false;
+
+  private animatePocketSand(t: number): void {
+    // rotation.x: positive = forward, negative = backward/up
+    // rotation.z on right arm: negative = outward, positive = inward
+
+    // Pocket position: arm reaches down to hip pocket
+    const pocketX = 0.8;   // arm hangs down
+    const pocketZ = -0.6;  // tucked inward
+
+    // Throw position: arm fully extended forward
+    const throwX = 1.6;    // arm thrust forward
+    const throwZ = 0.3;    // slightly inward
+
+    if (t < 0.15) {
+      // Phase 1: Reach into pocket at hip
+      const p = t / 0.15;
+      const ease = p * p;
+      this.rightArmGroup.rotation.x += pocketX * ease;
+      this.rightArmGroup.rotation.z += pocketZ * ease;
+      this.bodyGroup.rotation.x += 0.08 * ease;
+      this.sandSpawned = false;
+    } else if (t < 0.30) {
+      // Phase 2: Scoop sand, pull arm up to chest, wind up body
+      const p = (t - 0.15) / 0.15;
+      const ease = p * p * (3 - 2 * p);
+      // Arm lifts from pocket to ready position (slight forward lean)
+      this.rightArmGroup.rotation.x += pocketX * (1 - ease) + 0.3 * ease;
+      this.rightArmGroup.rotation.z += pocketZ * (1 - ease) + (-0.3) * ease;
+      this.bodyGroup.rotation.x += 0.08 * (1 - ease * 0.5);
+      // Body winds up (rotate torso to the right)
+      this.bodyGroup.rotation.y += 0.2 * ease;
+    } else if (t < 0.50) {
+      // Phase 3: Throw! Explosive forward arm thrust + sand particles
+      const p = (t - 0.30) / 0.20;
+      const ease = 1 - Math.pow(1 - p, 3); // ease-out snap
+
+      // Right arm thrusts forward
+      this.rightArmGroup.rotation.x += 0.3 * (1 - ease) + throwX * ease;
+      this.rightArmGroup.rotation.z += -0.3 * (1 - ease) + throwZ * ease;
+      // Body lunges forward and unwinds
+      this.bodyGroup.rotation.x += 0.04 + 0.15 * ease;
+      this.bodyGroup.rotation.y += 0.2 * (1 - ease) + (-0.15) * ease;
+      // Left arm counterbalance
+      this.leftArmGroup.rotation.x -= 0.3 * ease;
+      this.leftArmGroup.rotation.z -= 0.15 * ease;
+      // Head tracks forward
+      this.headGroup.rotation.x += 0.1 * ease;
+
+      // Spawn sand at the moment of release
+      if (!this.sandSpawned && p > 0.3) {
+        this.spawnSandParticles();
+        this.sandSpawned = true;
+      }
+    } else {
+      // Phase 4: Recovery
+      const p = (t - 0.50) / 0.50;
+      const ease = p * p * (3 - 2 * p);
+      this.rightArmGroup.rotation.x += throwX * (1 - ease);
+      this.rightArmGroup.rotation.z += throwZ * (1 - ease);
+      this.bodyGroup.rotation.x += 0.19 * (1 - ease);
+      this.bodyGroup.rotation.y += -0.15 * (1 - ease);
+      this.leftArmGroup.rotation.x -= 0.3 * (1 - ease);
+      this.leftArmGroup.rotation.z -= 0.15 * (1 - ease);
+      this.headGroup.rotation.x += 0.1 * (1 - ease);
+    }
+  }
+
+  private spawnSandParticles(): void {
+    // Get right hand world position as the spawn point
+    const handPos = new THREE.Vector3();
+    this.rightArmGroup.getWorldPosition(handPos);
+
+    // Parent mesh (PlayerController.mesh / RemoteEntity.mesh) holds the facing rotation
+    const parent = this.group.parent;
+    if (!parent) return;
+    const scene = parent.parent; // mesh -> scene
+    if (!scene) return;
+
+    // Forward direction from mesh rotation (same convention as Engine.ts)
+    const rotY = parent.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+
+    // Spawn a burst of sand grains
+    const count = 20;
+    const geo = new THREE.SphereGeometry(0.02, 4, 4);
+
+    for (let i = 0; i < count; i++) {
+      const sandColors = [0xc2a34f, 0xd4b96a, 0xa88c3a, 0xe0c878, 0x9b7d2e];
+      const color = sandColors[Math.floor(Math.random() * sandColors.length)];
+      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
+      const mesh = new THREE.Mesh(geo, mat);
+
+      // Start at hand position, offset slightly forward
+      mesh.position.copy(handPos);
+      mesh.position.y += 0.1 + Math.random() * 0.2;
+      mesh.position.addScaledVector(forward, 0.2);
+
+      // Random scale for variety
+      const s = 0.5 + Math.random() * 1.5;
+      mesh.scale.setScalar(s);
+
+      // Velocity: primarily forward with spread
+      const spread = 0.4;
+      const vel = forward.clone().multiplyScalar(2.5 + Math.random() * 1.5);
+      vel.x += (Math.random() - 0.5) * spread;
+      vel.y += Math.random() * 1.0 + 0.3;
+      vel.z += (Math.random() - 0.5) * spread;
+
+      scene.add(mesh);
+      this.sandParticles.push({ mesh, vel, life: 0.5 + Math.random() * 0.3 });
+    }
   }
 
   private animateShank(t: number): void {

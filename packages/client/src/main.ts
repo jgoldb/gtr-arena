@@ -461,6 +461,14 @@ function startMultiplayer(msg: S2C_GameStart): void {
       }
     }
   };
+  clientEngine.onAbilitySuccess = (abilityId) => {
+    if (abilityId === 'shank' || abilityId === 'pocket-sand') {
+      const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
+      }
+    }
+  };
 
   // Create UI elements for MP game
   setupMultiplayerUI(msg);
@@ -536,6 +544,14 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
       const mesh = clientEngine!.getEntityMesh(entityId);
       if (mesh && mpCombatText) {
         mpCombatText.spawnText(mesh, `-${buff.name}`, '#888888', true);
+      }
+    }
+  };
+  clientEngine.onAbilitySuccess = (abilityId) => {
+    if (abilityId === 'shank' || abilityId === 'pocket-sand') {
+      const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
       }
     }
   };
@@ -946,7 +962,8 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
           }
         }
       }
-      mpNameplates.update(player, npcsTargetable, (target) => debuffMap.get(target) ?? []);
+      const isBlinded = clientEngine.getLocalBuffs().some(b => b.id === 'blinded');
+      mpNameplates.update(player, npcsTargetable, (target) => debuffMap.get(target) ?? [], isBlinded);
     }
 
     // Unit tooltip (hover)
@@ -1860,7 +1877,7 @@ async function startPlayground(): Promise<void> {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
       }
     }
-    if (ability.id === 'shank') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
     }
 
@@ -2020,7 +2037,7 @@ async function startPlayground(): Promise<void> {
     combatText.update(dt);
     nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
       return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
-    });
+    }, bs.isBlinded(engine.playerController));
 
     // Unit tooltip (hover)
     const hovered = engine.targetingSystem.getHoveredTarget();

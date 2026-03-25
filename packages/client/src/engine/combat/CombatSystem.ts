@@ -30,6 +30,7 @@ export class CombatSystem {
   onDirectDamageDealt?: (target: Targetable) => void;
   onFlinchDamage?: (target: Targetable) => void;
   onSleepApplied?: (attacker: Targetable, target: Targetable) => void;
+  onBlindApplied?: (attacker: Targetable, target: Targetable) => void;
   onHostileAction?: (attacker: Targetable, target: Targetable) => void;
   onEnterCombat?: (entity: Targetable) => void;
   onLeaveCombat?: (entity: Targetable) => void;
@@ -317,6 +318,9 @@ export class CombatSystem {
           if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
             this.onSleepApplied?.(attacker, target);
           }
+          if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
+            this.onBlindApplied?.(attacker, target);
+          }
         }
 
         // Check for kill
@@ -434,6 +438,9 @@ export class CombatSystem {
       this.buffSystem.apply(target, ability.appliesDebuff);
       if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
         this.onSleepApplied?.(attacker, target);
+      }
+      if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
+        this.onBlindApplied?.(attacker, target);
       }
     }
 

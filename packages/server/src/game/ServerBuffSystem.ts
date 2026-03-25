@@ -206,6 +206,12 @@ export class ServerBuffSystem {
     if (buffs.length === 0) this.activeBuffs.delete(target);
   }
 
+  isBlinded(target: ServerEntity): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'blind' && this.isEffectActive(b, e)));
+  }
+
   isDiscombobulated(target: ServerEntity): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;
