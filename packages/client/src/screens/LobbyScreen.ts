@@ -578,10 +578,14 @@ export class LobbyScreen {
 
   // ── Public API ────────────────────────────────────────────────────
 
-  addChatMessage(username: string, message: string): void {
+  addChatMessage(username: string, message: string, isAnnouncement?: boolean): void {
     const line = document.createElement('div');
     line.className = 'lby-chat-msg';
-    line.innerHTML = `<span style="color: #7a9de0; font-weight: 600;">${this.escapeHtml(username)}</span><span style="color: rgba(100,120,160,0.4); margin: 0 6px;">›</span><span style="color: rgba(200,205,220,0.85);">${this.escapeHtml(message)}</span>`;
+    if (isAnnouncement) {
+      line.innerHTML = `<span style="color: #e0c354; font-weight: 600;">[Server]</span><span style="color: rgba(224,195,84,0.4); margin: 0 6px;">›</span><span style="color: #e0c354;">${this.escapeHtml(message)}</span>`;
+    } else {
+      line.innerHTML = `<span style="color: #7a9de0; font-weight: 600;">${this.escapeHtml(username)}</span><span style="color: rgba(100,120,160,0.4); margin: 0 6px;">›</span><span style="color: rgba(200,205,220,0.85);">${this.escapeHtml(message)}</span>`;
+    }
     this.chatLog.appendChild(line);
     this.chatLog.scrollTop = this.chatLog.scrollHeight;
   }

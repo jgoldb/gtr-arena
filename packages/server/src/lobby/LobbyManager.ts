@@ -218,12 +218,19 @@ export class LobbyManager {
     const user = this.users.get(userId);
     if (!user || !message.trim()) return;
 
+    const trimmed = message.trim();
+    const isAdmin = this.auth.getIsAdmin(userId);
+    const isAnnouncement = isAdmin && trimmed.startsWith('/a ');
+    const finalMessage = isAnnouncement ? trimmed.slice(3).trim() : trimmed;
+    if (!finalMessage) return;
+
     const chatMsg: S2C_LobbyChat = {
       type: 'lobby_chat',
       userId,
-      username: LobbyManager.gmTag(user.username, this.auth.getIsAdmin(userId)),
-      message: message.trim().substring(0, 500),
+      username: LobbyManager.gmTag(user.username, isAdmin),
+      message: finalMessage.substring(0, 500),
       timestamp: Date.now(),
+      ...(isAnnouncement && { isAnnouncement: true }),
     };
 
     // Send to all lobby users (not in-game)

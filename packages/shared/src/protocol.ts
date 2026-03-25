@@ -163,6 +163,7 @@ export interface S2C_LobbyChat {
   username: string;
   message: string;
   timestamp: number;
+  isAnnouncement?: boolean;
 }
 
 export interface S2C_GameLobbyState {

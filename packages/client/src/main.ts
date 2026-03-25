@@ -1137,7 +1137,7 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
 
     case 'lobby_chat':
-      lobbyScreen?.addChatMessage(msg.username, msg.message);
+      lobbyScreen?.addChatMessage(msg.username, msg.message, msg.isAnnouncement);
       break;
 
     case 'user_profile':
