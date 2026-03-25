@@ -67,6 +67,10 @@ export abstract class CharacterModel {
   private channelAnimProgress = 0;
   private channelAnimActive = false;
 
+  // Team flag (MP only)
+  private flagCloth: THREE.Mesh | null = null;
+  private flagTime = 0;
+
   // Stun animation state
   protected stunActive = false;
   protected stunWeight = 0;
@@ -374,6 +378,28 @@ export abstract class CharacterModel {
       this.animateChanneling(this.channelAnimId, this.channelAnimProgress);
     }
 
+    // Flag wave animation — layered wind ripple
+    if (this.flagCloth) {
+      this.flagTime += dt;
+      const t = this.flagTime;
+      const verts = this.flagCloth.geometry.attributes.position;
+      const count = verts.count;
+      for (let i = 0; i < count; i++) {
+        const x = verts.getX(i);   // 0 at pole edge, ~0.6 at free tip
+        const y = verts.getY(i);
+        const pct = x / 0.6;       // 0–1 normalized distance from pole
+        const pct2 = pct * pct;    // quadratic falloff — tip moves most
+        // Primary travelling wave
+        const wave1 = Math.sin(t * 8 + x * 10) * 0.06 * pct2;
+        // Secondary faster ripple for turbulence
+        const wave2 = Math.sin(t * 13 + x * 18 + y * 6) * 0.025 * pct2;
+        // Slow broad billow
+        const wave3 = Math.sin(t * 3 + x * 4) * 0.03 * pct;
+        verts.setZ(i, wave1 + wave2 + wave3);
+      }
+      verts.needsUpdate = true;
+    }
+
     // Character-specific animation
     this.onAnimate(dt, input);
   }
@@ -395,6 +421,34 @@ export abstract class CharacterModel {
   }
 
   setAbilityBuffActive(_buffId: string, _active: boolean): void {}
+
+  /** Attach a team-colored flag to the character's back (MP only). */
+  addTeamFlag(team: number): void {
+    const flagGroup = new THREE.Group();
+    // Upper back, slightly behind center (model-local +Z = back)
+    flagGroup.position.set(0.05, 1.05, 0.15);
+
+    // Pole
+    const poleGeo = new THREE.CylinderGeometry(0.018, 0.018, 1.0, 5);
+    const pole = this.createMesh(poleGeo, 0x888888, { roughness: 0.4, metalness: 0.4 });
+    pole.position.y = 0.5;
+    flagGroup.add(pole);
+
+    // Flag cloth — hangs from top of pole
+    const flagColor = team === 0 ? 0xcc2222 : 0x2266dd;
+    const clothGeo = new THREE.PlaneGeometry(0.6, 0.4, 12, 4);
+    const cloth = this.createMesh(clothGeo, flagColor, {
+      roughness: 0.9,
+      side: THREE.DoubleSide,
+    });
+    // Shift pivot to left edge so it hangs from the pole
+    clothGeo.translate(0.3, 0, 0);
+    cloth.position.set(0, 0.85, 0);
+    this.flagCloth = cloth;
+    flagGroup.add(cloth);
+
+    this.bodyGroup.add(flagGroup);
+  }
 
   protected getSwingDuration(): number {
     return 0.4;

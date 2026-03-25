@@ -200,6 +200,7 @@ export class ClientEngine {
       this.playerController.setCharacter(localSnap.characterId as CharacterId);
       (this.playerController as any).team = localSnap.team;
       (this.playerController as any).name = localSnap.name;
+      this.playerController.model.addTeamFlag(localSnap.team);
       this.playerController.mesh.position.set(localSnap.x, localSnap.y, localSnap.z);
       this.playerController.mesh.rotation.y = localSnap.rotationY;
       (this.playerController as any).targetRotation = localSnap.rotationY;
@@ -237,6 +238,7 @@ export class ClientEngine {
 
   private createRemoteEntity(snap: EntitySnapshot): RemoteEntity {
     const model = createCharacter(snap.characterId as CharacterId);
+    model.addTeamFlag(snap.team);
     // Wrap model in a parent group (same pattern as PlayerController.mesh)
     // so rotation on the wrapper doesn't overwrite CharacterModel's built-in π offset
     const mesh = new THREE.Group();

@@ -19,7 +19,7 @@ export class CharacterSelector {
       width: 100%;
     `;
 
-    for (const char of CHARACTER_LIST) {
+    for (const char of CHARACTER_LIST.filter(c => !c.playgroundOnly)) {
       const option = document.createElement('option');
       option.value = char.id;
       option.textContent = char.name;
