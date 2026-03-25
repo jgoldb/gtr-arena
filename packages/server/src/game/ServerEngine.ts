@@ -292,6 +292,28 @@ export class ServerEngine {
     } as import('@gtr/shared').S2C_EntityDied);
   }
 
+  private applyFallDamage(entity: ServerEntity, fallDistance: number): void {
+    if (entity.dead || entity.godMode) return;
+    const SAFE_FALL = 8;   // ~13 yards — no damage below this
+    const FATAL_FALL = 28; // ~47 yards — 100% HP damage
+    if (fallDistance <= SAFE_FALL) return;
+    const pct = Math.min(1, (fallDistance - SAFE_FALL) / (FATAL_FALL - SAFE_FALL));
+    const damage = Math.round(entity.maxHp * pct);
+    if (damage <= 0) return;
+    entity.hp = Math.max(0, entity.hp - damage);
+    this.pendingEvents.push({
+      type: 'combat_event',
+      sourceEntityId: entity.id,
+      targetEntityId: entity.id,
+      amount: damage,
+      combatType: 'damage',
+    } as S2C_CombatEvent);
+    if (entity.hp <= 0 && !entity.dead) {
+      entity.die();
+      this.recordKill(entity.id, entity.id);
+    }
+  }
+
   getEntity(entityId: string): ServerEntity | undefined {
     return this.entities.find(e => e.id === entityId);
   }
@@ -404,6 +426,19 @@ export class ServerEngine {
     entity.rotationY = rotationY;
     entity.isMoving = isMoving;
     if (isMoving) this.cancelResting(entityId);
+
+    // Fall damage detection: track peak Y while airborne
+    const resolved = this.collision.resolve(x, z, y, entity.collisionRadius);
+    const onGround = y <= resolved.groundY + 0.1;
+    if (!onGround) {
+      if (y > entity.fallPeakY) entity.fallPeakY = y;
+    } else if (entity.fallPeakY > resolved.groundY + 0.5) {
+      const fallDistance = entity.fallPeakY - resolved.groundY;
+      entity.fallPeakY = 0;
+      this.applyFallDamage(entity, fallDistance);
+    } else {
+      entity.fallPeakY = 0;
+    }
   }
 
   setTarget(entityId: string, targetEntityId: string | null): void {

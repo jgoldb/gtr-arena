@@ -37,6 +37,7 @@ export class PlayerController implements Targetable {
   private movementAzimuth = 0;
   private velocityY = 0;
   private grounded = true;
+  private fallPeakY = 0;
   private inWater = false;
   private spaceWasDown = false;
   private airVelocity = new THREE.Vector3();
@@ -163,6 +164,7 @@ export class PlayerController implements Targetable {
   discombobulated = false;
   isMoving = false;
   godMode = false;
+  onFallDamage?: (fallDistance: number) => void;
   private keyScramble = new Map<string, string>();
 
   setDiscombobulated(active: boolean): void {
@@ -241,6 +243,9 @@ export class PlayerController implements Targetable {
       // No movement or input, just animate the stun
       this.velocityY -= this.gravity * deltaTime;
       this.mesh.position.y += this.velocityY * deltaTime;
+      if (!this.grounded && this.mesh.position.y > this.fallPeakY) {
+        this.fallPeakY = this.mesh.position.y;
+      }
       const resolved = this.mapManager.collision.resolve(
         this.mesh.position.x, this.mesh.position.z,
         this.mesh.position.y, this.collisionRadius
@@ -248,9 +253,14 @@ export class PlayerController implements Targetable {
       this.mesh.position.x = resolved.x;
       this.mesh.position.z = resolved.z;
       if (this.mesh.position.y <= resolved.groundY) {
+        const wasAirborne = !this.grounded;
         this.mesh.position.y = resolved.groundY;
         this.velocityY = 0;
         this.grounded = true;
+        if (wasAirborne) {
+          const fallDistance = this.fallPeakY - resolved.groundY;
+          if (fallDistance > 0) this.onFallDamage?.(fallDistance);
+        }
       }
       this.characterModel.update(deltaTime, {
         isMoving: false,
@@ -267,6 +277,9 @@ export class PlayerController implements Targetable {
       // During charge: skip input, resolve collision on position set by Engine
       this.velocityY -= this.gravity * deltaTime;
       this.mesh.position.y += this.velocityY * deltaTime;
+      if (!this.grounded && this.mesh.position.y > this.fallPeakY) {
+        this.fallPeakY = this.mesh.position.y;
+      }
       const resolved = this.mapManager.collision.resolve(
         this.mesh.position.x, this.mesh.position.z,
         this.mesh.position.y, this.collisionRadius
@@ -274,9 +287,14 @@ export class PlayerController implements Targetable {
       this.mesh.position.x = resolved.x;
       this.mesh.position.z = resolved.z;
       if (this.mesh.position.y <= resolved.groundY) {
+        const wasAirborne = !this.grounded;
         this.mesh.position.y = resolved.groundY;
         this.velocityY = 0;
         this.grounded = true;
+        if (wasAirborne) {
+          const fallDistance = this.fallPeakY - resolved.groundY;
+          if (fallDistance > 0) this.onFallDamage?.(fallDistance);
+        }
       }
       const bounds = this.mapManager.getBounds();
       const margin = this.collisionRadius;
@@ -404,10 +422,16 @@ export class PlayerController implements Targetable {
         }
         this.velocityY = this.jumpForce;
         this.grounded = false;
+        this.fallPeakY = this.mesh.position.y;
       }
 
       this.velocityY -= this.gravity * deltaTime;
       this.mesh.position.y += this.velocityY * deltaTime;
+
+      // Track highest point while airborne
+      if (!this.grounded && this.mesh.position.y > this.fallPeakY) {
+        this.fallPeakY = this.mesh.position.y;
+      }
 
       // Resolve collisions (3D-aware: handles ground height, water, obstacle push-out)
       const preResolveX = this.mesh.position.x;
@@ -434,13 +458,22 @@ export class PlayerController implements Targetable {
 
       // Land on surfaces
       if (this.mesh.position.y <= resolved.groundY) {
+        const wasAirborne = !this.grounded;
         this.mesh.position.y = resolved.groundY;
         this.velocityY = 0;
         this.grounded = true;
+        if (wasAirborne) {
+          const fallDistance = this.fallPeakY - resolved.groundY;
+          if (fallDistance > 0) this.onFallDamage?.(fallDistance);
+        }
       } else if (this.grounded && this.mesh.position.y - resolved.groundY < 1) {
         // Follow descending platforms smoothly instead of free-falling in tiny steps
         this.mesh.position.y = resolved.groundY;
         this.velocityY = 0;
+      } else if (this.grounded && this.mesh.position.y - resolved.groundY >= 1) {
+        // Walked off a ledge — start falling
+        this.grounded = false;
+        this.fallPeakY = this.mesh.position.y;
       }
     }
     this.spaceWasDown = spaceDown;

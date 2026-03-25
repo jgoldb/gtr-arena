@@ -634,14 +634,14 @@ export class CelestialBallroomScript extends ArenaScript {
       const sDist = Math.sqrt(hDist * hDist + dy * dy);
       const yAngle = Math.atan2(dz, dx);
       const rotZ = Math.atan2(dy, hDist);
-      const halfH = 0.15;
+      const halfH = radius;
 
       this.collision.addCollider({
         type: 'box',
         cx: midX,
         cz: midZ,
         halfW: sDist / 2 + 0.15,
-        halfD: walkableHalfD,
+        halfD: radius,
         cosY: Math.cos(yAngle),
         sinY: Math.sin(yAngle),
         centerY: midSY - halfH * Math.cos(rotZ),

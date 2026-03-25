@@ -270,6 +270,22 @@ export class Engine {
       }
     };
 
+    // Fall damage (WoW-style: no damage below threshold, then scales with distance)
+    this.playerController.onFallDamage = (fallDistance: number) => {
+      if (this.godMode || this.playerController.dead) return;
+      const SAFE_FALL = 8;   // ~13 yards — no damage below this
+      const FATAL_FALL = 28; // ~47 yards — 100% HP damage
+      if (fallDistance <= SAFE_FALL) return;
+      const pct = Math.min(1, (fallDistance - SAFE_FALL) / (FATAL_FALL - SAFE_FALL));
+      const damage = Math.round(this.playerController.maxHp * pct);
+      if (damage <= 0) return;
+      this.playerController.hp = Math.max(0, this.playerController.hp - damage);
+      this.combatSystem.onCombatText?.(this.playerController, damage, 'damage');
+      if (this.playerController.hp <= 0 && !this.playerController.dead) {
+        this.playerController.die();
+      }
+    };
+
   }
 
   start(): void {
@@ -349,6 +365,7 @@ export class Engine {
       this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
     };
     npc.checkLineOfSight = (a, b) => this.combatSystem.hasLineOfSight(a, b);
+    npc.resolveGround = (x, z, y) => this.mapManager.collision.resolve(x, z, y, 0.5).groundY;
     this.npcs.push(npc);
     this.scene.add(npc.mesh);
     return npc;

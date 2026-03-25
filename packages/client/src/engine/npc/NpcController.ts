@@ -39,6 +39,7 @@ export class NpcController implements Targetable {
   autoAttackTarget: Targetable | null = null;
   onAutoAttackHit?: (attacker: Targetable, target: Targetable, damage: number) => void;
   checkLineOfSight?: (a: THREE.Vector3, b: THREE.Vector3) => boolean;
+  resolveGround?: (x: number, z: number, y: number) => number;
   private autoAttackTimer = 0;
   private wasInCombat = false;
 
@@ -151,6 +152,12 @@ export class NpcController implements Targetable {
           this.autoAttackTimer = this.characterModel.autoAttackSpeed;
         }
       }
+    }
+
+    // Track moving ground (e.g. elevator platforms)
+    if (this.resolveGround) {
+      const pos = this.mesh.position;
+      pos.y = this.resolveGround(pos.x, pos.z, pos.y);
     }
 
     this.characterModel.update(dt, IDLE_INPUT);

@@ -49,6 +49,7 @@ export class ServerEntity {
   readonly airDriftFraction = 0.25;
   velocityY = 0;
   grounded = true;
+  fallPeakY = 0;
 
   // State
   discombobulated = false;
