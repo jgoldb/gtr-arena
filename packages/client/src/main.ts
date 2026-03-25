@@ -17,6 +17,7 @@ import { KeybindMenu } from './ui/KeybindMenu';
 import { DebugHUD } from './ui/DebugHUD';
 import { ReconnectOverlay } from './ui/ReconnectOverlay';
 import { ArenaFrames } from './ui/ArenaFrames';
+import { PartyFrames } from './ui/PartyFrames';
 import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
@@ -74,6 +75,7 @@ let mpGameOver = false;
 let mpEscapeMenu: EscapeMenu | null = null;
 let mpDebugHUD: DebugHUD | null = null;
 let mpArenaFrames: ArenaFrames | null = null;
+let mpPartyFrames: PartyFrames | null = null;
 let mpPositioner: UnitFramePositioner | null = null;
 let mpDeathFrame: DeathFrame | null = null;
 let mpFrameLoopId: number | null = null;
@@ -200,6 +202,8 @@ function cleanupMultiplayerUI(): void {
   mpDebugHUD = null;
   mpArenaFrames?.dispose();
   mpArenaFrames = null;
+  mpPartyFrames?.dispose();
+  mpPartyFrames = null;
   mpDeathFrame?.element.remove();
   mpDeathFrame = null;
   if (mpFrameLoopId !== null) {
@@ -429,6 +433,9 @@ function startMultiplayer(msg: S2C_GameStart): void {
     if (mpArenaFrames?.hasEntity(targetEntityId)) {
       mpArenaFrames.showCombatText(targetEntityId, amount, type as any);
     }
+    if (mpPartyFrames?.hasEntity(targetEntityId)) {
+      mpPartyFrames.showCombatText(targetEntityId, amount, type as any);
+    }
   };
 
   clientEngine.onEnterCombat = (entityId) => {
@@ -514,6 +521,9 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
     }
     if (mpArenaFrames?.hasEntity(targetEntityId)) {
       mpArenaFrames.showCombatText(targetEntityId, amount, type as any);
+    }
+    if (mpPartyFrames?.hasEntity(targetEntityId)) {
+      mpPartyFrames.showCombatText(targetEntityId, amount, type as any);
     }
   };
 
@@ -666,22 +676,27 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   mpArenaFrames.element.style.transform = '';
   mpArenaFrames.element.style.zIndex = '';
 
+  // Party frames (friendly team members on left side, below player frame)
+  mpPartyFrames = new PartyFrames({ localPlayer: player, getPortrait, onClick: mpSetTarget });
+
   // Register frames with positioner for drag-to-reposition
   mpPositioner = new UnitFramePositioner();
   document.body.appendChild(mpPositioner.register('player', mpPlayerFrame.element, { top: 12, left: 12 }));
   document.body.appendChild(mpPositioner.register('target', mpTargetFrame.element, { top: 12, left: 280 }));
   document.body.appendChild(mpPositioner.register('tot', mpToTFrame.element, { top: 84, left: 390 }));
+  document.body.appendChild(mpPositioner.register('party', mpPartyFrames.element, { top: 100, left: 12 }, { stayBelow: { frameId: 'player', gap: 80 } }));
   const arenaDefaultLeft = window.innerWidth - 250;
   const arenaDefaultTop = Math.round(window.innerHeight / 2 - 100);
   document.body.appendChild(mpPositioner.register('arena', mpArenaFrames.element, { top: arenaDefaultTop, left: arenaDefaultLeft }));
-  const arenaEntities = msg.entities
+  const allEntities = msg.entities
     .filter(e => e.id !== msg.localEntityId)
     .map(e => {
       const targetable = makeTargetable(e.id);
       return targetable ? { entityId: e.id, targetable } : null;
     })
     .filter((e): e is { entityId: string; targetable: Targetable } => e !== null);
-  mpArenaFrames.setEntities(arenaEntities);
+  mpArenaFrames.setEntities(allEntities);
+  mpPartyFrames.setEntities(allEntities);
 
   // Death frame
   mpDeathFrame = new DeathFrame();
@@ -938,6 +953,24 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
           count: dr.count,
           remaining: dr.remaining,
           total: dr.total,
+        }));
+      });
+    }
+
+    // Party frames (friendly team members on left side)
+    if (mpPartyFrames) {
+      const inPrep = clientEngine.getLocalBuffs().some(b => b.id === 'arena-preparation');
+      mpPartyFrames.setVisible(true);
+      mpPartyFrames.setDisabled(inPrep);
+      mpPartyFrames.setSelectedTarget(mpSelectedTargetId);
+      mpPartyFrames.update(dt, (entityId) => {
+        const e = clientEngine!.getRemoteEntity(entityId);
+        if (!e?.buffs) return [];
+        return e.buffs.filter(b => b.type === 'debuff').map(b => ({
+          definition: { id: b.id, name: b.name, icon: b.icon, duration: b.duration, type: b.type as 'debuff', description: b.description, effects: [] },
+          remaining: b.remaining,
+          appliedAt: Date.now(),
+          stacks: b.stacks,
         }));
       });
     }
@@ -1246,6 +1279,7 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'entity_removed':
       clientEngine?.handleEntityRemoved(msg.entityId);
       mpArenaFrames?.removeEntity(msg.entityId);
+      mpPartyFrames?.removeEntity(msg.entityId);
       if (msg.username) {
         mpErrorText?.show(`${msg.username} has left the game`, 3000);
       }

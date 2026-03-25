@@ -10,6 +10,7 @@ interface FrameConfig {
   positionPct: { top: number; left: number };   // current position as 0–1
   locked: boolean;
   originalCursor: string;
+  stayBelow?: { frameId: string; gap: number }; // enforce min distance below another frame
 }
 
 interface SavedPosition {
@@ -40,6 +41,7 @@ export class UnitFramePositioner {
     id: string,
     element: HTMLElement,
     defaultPosition: { top: number; left: number },
+    options?: { stayBelow?: { frameId: string; gap: number } },
   ): HTMLElement {
     const defaultPct = {
       top: defaultPosition.top / window.innerHeight,
@@ -64,6 +66,7 @@ export class UnitFramePositioner {
 
     const config: FrameConfig = {
       id, element, wrapper, defaultPct, positionPct: { ...positionPct }, locked, originalCursor,
+      stayBelow: options?.stayBelow,
     };
     this.frames.set(id, config);
     this.applyPctPosition(config);
@@ -109,8 +112,19 @@ export class UnitFramePositioner {
   private applyPctPosition(config: FrameConfig): void {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const top = Math.max(0, Math.min(Math.round(config.positionPct.top * vh), vh - 20));
+    let top = Math.max(0, Math.min(Math.round(config.positionPct.top * vh), vh - 20));
     const left = Math.round(config.positionPct.left * vw);
+
+    // Enforce minimum distance below a reference frame
+    if (config.stayBelow) {
+      const ref = this.frames.get(config.stayBelow.frameId);
+      if (ref) {
+        const refBottom = ref.wrapper.getBoundingClientRect().bottom;
+        const minTop = refBottom + config.stayBelow.gap;
+        if (top < minTop) top = Math.round(minTop);
+      }
+    }
+
     // Clamp so the frame can't extend past the right edge
     const width = config.wrapper.getBoundingClientRect().width || config.element.offsetWidth || 0;
     const maxLeft = Math.max(0, vw - width);
