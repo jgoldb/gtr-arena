@@ -76,10 +76,11 @@ export class ServerCombatSystem {
     return Math.random() < ServerCombatSystem.MISS_CHANCE;
   }
 
-  private getDistance(ax: number, az: number, bx: number, bz: number): number {
+  private getDistance(ax: number, az: number, bx: number, bz: number, ay = 0, by = 0): number {
     const dx = ax - bx;
+    const dy = ay - by;
     const dz = az - bz;
-    return Math.sqrt(dx * dx + dz * dz);
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
   update(dt: number): void {
@@ -161,8 +162,8 @@ export class ServerCombatSystem {
     this.combatTimers.delete(entity);
   }
 
-  hasLineOfSight(ax: number, az: number, bx: number, bz: number): boolean {
-    return this.collision.hasLineOfSight(ax, az, bx, bz);
+  hasLineOfSight(ax: number, az: number, bx: number, bz: number, ay?: number, by?: number): boolean {
+    return this.collision.hasLineOfSight(ax, az, bx, bz, ay, by);
   }
 
   validateAbility(
@@ -198,12 +199,12 @@ export class ServerCombatSystem {
       // Use rewound target position for range/facing/LoS if available (lag compensation)
       const tx = targetPosOverride?.x ?? target.x;
       const tz = targetPosOverride?.z ?? target.z;
-      const dist = this.getDistance(attacker.x, attacker.z, tx, tz);
+      if (!this.collision.hasLineOfSight(attacker.x, attacker.z, tx, tz, attacker.y, target!.y)) {
+        return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
+      }
+      const dist = this.getDistance(attacker.x, attacker.z, tx, tz, attacker.y, target!.y);
       if (dist > ability.range! + ServerCombatSystem.RANGE_TOLERANCE) {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
-      }
-      if (!this.collision.hasLineOfSight(attacker.x, attacker.z, tx, tz)) {
-        return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
       }
       if (!this.isFacing(attacker.x, attacker.z, attacker.rotationY, tx, tz)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
@@ -216,12 +217,12 @@ export class ServerCombatSystem {
       if (ability.range) {
         const tx = targetPosOverride?.x ?? target.x;
         const tz = targetPosOverride?.z ?? target.z;
-        const dist = this.getDistance(attacker.x, attacker.z, tx, tz);
+        if (!this.collision.hasLineOfSight(attacker.x, attacker.z, tx, tz, attacker.y, target!.y)) {
+          return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
+        }
+        const dist = this.getDistance(attacker.x, attacker.z, tx, tz, attacker.y, target!.y);
         if (dist > ability.range + ServerCombatSystem.RANGE_TOLERANCE) {
           return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
-        }
-        if (!this.collision.hasLineOfSight(attacker.x, attacker.z, tx, tz)) {
-          return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
         }
       }
     }
@@ -246,10 +247,10 @@ export class ServerCombatSystem {
     }
 
     if (ability.requiresHostileTarget && target) {
-      const outcome = this.rollOutcome(attacker, target, false);
+      const outcome = this.rollOutcome(attacker, target, !!ability.isMelee);
 
-      if (outcome === 'miss') {
-        this.onCombatText?.(attacker, target, 0, 'miss', ability);
+      if (outcome === 'miss' || outcome === 'dodge') {
+        this.onCombatText?.(attacker, target, 0, outcome, ability);
       } else {
         let baseDamage: number;
         if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
@@ -333,9 +334,9 @@ export class ServerCombatSystem {
   applySweepDamage(attacker: ServerEntity, target: ServerEntity, baseDamage: number): void {
     if (attacker.dead || target.dead) return;
 
-    const roll = Math.random();
-    if (roll < ServerCombatSystem.MISS_CHANCE) {
-      this.onCombatText?.(attacker, target, 0, 'miss');
+    const outcome = this.rollOutcome(attacker, target, true);
+    if (outcome === 'miss' || outcome === 'dodge') {
+      this.onCombatText?.(attacker, target, 0, outcome);
       this.enterCombat(attacker);
       this.enterCombat(target);
       return;
@@ -344,8 +345,7 @@ export class ServerCombatSystem {
     let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
     if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
     const adjustedBase = Math.round(baseDamage * damageMult);
-    const isCrit = Math.random() < attacker.critChance;
-    const multiplier = isCrit ? 2 : 1;
+    const multiplier = outcome === 'crit' ? 2 : 1;
     const damage = Math.round(adjustedBase * multiplier);
     const actualDamage = target.godMode ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
@@ -354,7 +354,7 @@ export class ServerCombatSystem {
       this.onFlinchDamage?.(target);
     }
     if (actualDamage > 0) {
-      this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage');
+      this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
     }
 
     this.enterCombat(attacker);
@@ -371,9 +371,9 @@ export class ServerCombatSystem {
   applyAoeDamage(attacker: ServerEntity, target: ServerEntity, ability: Ability): void {
     if (attacker.dead || target.dead) return;
 
-    const outcome = this.rollOutcome(attacker, target, false);
-    if (outcome === 'miss') {
-      this.onCombatText?.(attacker, target, 0, 'miss');
+    const outcome = this.rollOutcome(attacker, target, !!ability.isMelee);
+    if (outcome === 'miss' || outcome === 'dodge') {
+      this.onCombatText?.(attacker, target, 0, outcome);
       this.enterCombat(attacker);
       this.enterCombat(target);
       return;

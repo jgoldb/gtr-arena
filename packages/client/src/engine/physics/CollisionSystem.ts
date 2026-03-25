@@ -286,50 +286,90 @@ export class CollisionSystem {
     return { x: px + wx, z: pz + wz };
   }
 
+  private static readonly SIGHT_HEIGHT = 1.5;
+
   /**
-   * Returns true if the 2D line segment (ax,az)→(bx,bz) is clear of all
-   * colliders tall enough to block sight (top > minBlockHeight).
+   * Returns true if the line segment (ax,az)→(bx,bz) is clear of all
+   * colliders tall enough to block sight.
+   * When ay/by are provided, performs 3D-aware checking: the sight line
+   * travels from (ax, ay+SIGHT_HEIGHT, az) to (bx, by+SIGHT_HEIGHT, bz)
+   * and only colliders whose vertical extent intersects the sight line Y
+   * at the XZ intersection point can block.
    */
-  hasLineOfSight(ax: number, az: number, bx: number, bz: number, minBlockHeight = 0.5): boolean {
+  hasLineOfSight(ax: number, az: number, bx: number, bz: number, ay?: number, by?: number): boolean {
     const dx = bx - ax;
     const dz = bz - az;
+    const yAware = ay !== undefined && by !== undefined;
+    const eyeA = yAware ? ay! + CollisionSystem.SIGHT_HEIGHT : 0;
+    const eyeB = yAware ? by! + CollisionSystem.SIGHT_HEIGHT : 0;
 
     for (const col of this.colliders) {
-      // Only block if the collider pokes above the ground
-      const topY = col.centerY + col.halfH;
-      if (topY <= minBlockHeight) continue;
+      // Compute the full Y range of the collider
+      let colMinY: number, colMaxY: number;
+      if (col.type === 'circle' || col.rotZ === 0) {
+        colMinY = col.centerY - col.halfH;
+        colMaxY = col.centerY + col.halfH;
+      } else {
+        const slopeRange = col.halfW * Math.abs(Math.sin(col.rotZ));
+        const flatH = col.halfH * Math.cos(col.rotZ);
+        colMinY = col.centerY - slopeRange - flatH;
+        colMaxY = col.centerY + slopeRange + flatH;
+      }
 
-      const blocked = col.type === 'circle'
-        ? this.segmentIntersectsCircle(ax, az, dx, dz, col)
-        : this.segmentIntersectsBox(ax, az, dx, dz, col);
+      if (yAware) {
+        // Collider entirely above both entities' eyes — overhead, skip
+        if (colMinY >= Math.max(eyeA, eyeB)) continue;
+        // Collider entirely below both entities' feet — underfoot, skip
+        if (colMaxY <= Math.min(ay!, by!) + STEP_HEIGHT) continue;
+      } else {
+        if (colMaxY <= 0.5) continue;
+      }
 
-      if (blocked) return false;
+      // XZ intersection: get t-range [tMin, tMax] within [0,1]
+      const tRange = col.type === 'circle'
+        ? this.segmentHitRangeCircle(ax, az, dx, dz, col)
+        : this.segmentHitRangeBox(ax, az, dx, dz, col);
+
+      if (!tRange) continue;
+
+      // If Y-aware, check sight line Y at intersection against collider Y
+      if (yAware) {
+        const yAtT0 = eyeA + tRange[0] * (eyeB - eyeA);
+        const yAtT1 = eyeA + tRange[1] * (eyeB - eyeA);
+        const sightMinY = Math.min(yAtT0, yAtT1);
+        const sightMaxY = Math.max(yAtT0, yAtT1);
+
+        // No vertical overlap: sight line passes above or below collider
+        if (sightMinY >= colMaxY || sightMaxY <= colMinY) continue;
+      }
+
+      return false;
     }
     return true;
   }
 
-  /** Does the segment origin+(t*dir) for t∈[0,1] hit the circle? */
-  private segmentIntersectsCircle(
+  /** Returns the [tMin, tMax] parameter range where the segment hits the circle, or null. */
+  private segmentHitRangeCircle(
     ox: number, oz: number, dx: number, dz: number, col: CircleCollider
-  ): boolean {
+  ): [number, number] | null {
     const fx = ox - col.cx;
     const fz = oz - col.cz;
     const a = dx * dx + dz * dz;
     const b = 2 * (fx * dx + fz * dz);
     const c = fx * fx + fz * fz - col.radius * col.radius;
     const disc = b * b - 4 * a * c;
-    if (disc < 0) return false;
+    if (disc < 0) return null;
     const sqrtDisc = Math.sqrt(disc);
     const t1 = (-b - sqrtDisc) / (2 * a);
     const t2 = (-b + sqrtDisc) / (2 * a);
-    return t2 >= 0 && t1 <= 1;
+    if (t2 < 0 || t1 > 1) return null;
+    return [Math.max(0, t1), Math.min(1, t2)];
   }
 
-  /** Does the segment hit the oriented box (2D slab test in local space)? */
-  private segmentIntersectsBox(
+  /** Returns the [tMin, tMax] parameter range where the segment hits the oriented box, or null. */
+  private segmentHitRangeBox(
     ox: number, oz: number, dx: number, dz: number, col: BoxCollider
-  ): boolean {
-    // Transform into box-local space
+  ): [number, number] | null {
     const relOx = ox - col.cx;
     const relOz = oz - col.cz;
     const lox = relOx * col.cosY + relOz * col.sinY;
@@ -342,29 +382,29 @@ export class CollisionSystem {
 
     // X slab
     if (Math.abs(ldx) < 1e-8) {
-      if (lox < -col.halfW || lox > col.halfW) return false;
+      if (lox < -col.halfW || lox > col.halfW) return null;
     } else {
       let t1 = (-col.halfW - lox) / ldx;
       let t2 = (col.halfW - lox) / ldx;
       if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
       tMin = Math.max(tMin, t1);
       tMax = Math.min(tMax, t2);
-      if (tMin > tMax) return false;
+      if (tMin > tMax) return null;
     }
 
     // Z slab
     if (Math.abs(ldz) < 1e-8) {
-      if (loz < -col.halfD || loz > col.halfD) return false;
+      if (loz < -col.halfD || loz > col.halfD) return null;
     } else {
       let t1 = (-col.halfD - loz) / ldz;
       let t2 = (col.halfD - loz) / ldz;
       if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
       tMin = Math.max(tMin, t1);
       tMax = Math.min(tMax, t2);
-      if (tMin > tMax) return false;
+      if (tMin > tMax) return null;
     }
 
-    return true;
+    return [tMin, tMax];
   }
 
   addCollider(collider: Collider): void {

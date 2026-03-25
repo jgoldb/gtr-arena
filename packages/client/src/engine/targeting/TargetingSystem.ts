@@ -354,6 +354,22 @@ export class TargetingSystem {
     return this.groundTargetPos.clone();
   }
 
+  /** Returns true if the hit is on a walkable (upward-facing) surface that is part of the map. */
+  private isWalkableSurface(hit: THREE.Intersection): boolean {
+    if (!(hit.object instanceof THREE.Mesh)) return false;
+    if (!hit.face) return false;
+    const worldNormal = hit.face.normal.clone()
+      .transformDirection(hit.object.matrixWorld);
+    if (worldNormal.y <= 0.5) return false;
+    // Must be part of the map or ground group
+    let current: THREE.Object3D | null = hit.object;
+    while (current) {
+      if (current.name === 'ground' || current.name === 'map') return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
   /** Raycast mouse position to the ground plane and update the reticle position, clamped to range. */
   private updateGroundTargetPosition(screenX: number, screenY: number): void {
     const rect = this.canvas.getBoundingClientRect();
@@ -362,11 +378,31 @@ export class TargetingSystem {
 
     this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
 
-    const hitPoint = new THREE.Vector3();
-    if (!this.raycaster.ray.intersectPlane(this.groundPlane, hitPoint)) return;
-
-    // Clamp to max range from the player
     const playerPos = this.getLocalPlayer().mesh.position;
+
+    // Try to hit a walkable surface in the scene (elevated platforms, archways, pillars, ground)
+    const hitPoint = new THREE.Vector3();
+    let surfaceY = playerPos.y;
+
+    const sceneHits = this.raycaster.intersectObjects(this.scene.children, true);
+    let foundSurface = false;
+    for (const hit of sceneHits) {
+      if (this.isWalkableSurface(hit)) {
+        hitPoint.copy(hit.point);
+        surfaceY = hit.point.y;
+        foundSurface = true;
+        break;
+      }
+    }
+
+    // Fallback: intersect a ground plane at the player's current Y
+    if (!foundSurface) {
+      this.groundPlane.constant = -playerPos.y;
+      if (!this.raycaster.ray.intersectPlane(this.groundPlane, hitPoint)) return;
+      surfaceY = playerPos.y;
+    }
+
+    // Clamp to max range from the player (XZ distance only)
     const dx = hitPoint.x - playerPos.x;
     const dz = hitPoint.z - playerPos.z;
     const dist = Math.sqrt(dx * dx + dz * dz);
@@ -374,13 +410,17 @@ export class TargetingSystem {
       const scale = this.groundTargetRange / dist;
       hitPoint.x = playerPos.x + dx * scale;
       hitPoint.z = playerPos.z + dz * scale;
+      // When clamped, revert to player Y since we moved off the original surface
+      surfaceY = playerPos.y;
     }
 
-    // LOS check: raycast horizontally from player to ground target point
+    // LOS check: raycast from player eye height to target surface height
     this.groundTargetBlocked = false;
     if (!this.groundTargetSkipLOS) {
-      const losOrigin = new THREE.Vector3(playerPos.x, 0.5, playerPos.z);
-      const losTarget = new THREE.Vector3(hitPoint.x, 0.5, hitPoint.z);
+      const losOriginY = playerPos.y + 0.5;
+      const losTargetY = surfaceY + 0.5;
+      const losOrigin = new THREE.Vector3(playerPos.x, losOriginY, playerPos.z);
+      const losTarget = new THREE.Vector3(hitPoint.x, losTargetY, hitPoint.z);
       const losDir = new THREE.Vector3().subVectors(losTarget, losOrigin);
       const losDist = losDir.length();
       if (losDist > 0.01) {
@@ -398,8 +438,8 @@ export class TargetingSystem {
       }
     }
 
-    this.groundTargetPos.set(hitPoint.x, 0, hitPoint.z);
-    this.groundTargetCircle.position.set(hitPoint.x, 0.04, hitPoint.z);
+    this.groundTargetPos.set(hitPoint.x, surfaceY, hitPoint.z);
+    this.groundTargetCircle.position.set(hitPoint.x, surfaceY + 0.04, hitPoint.z);
   }
 
   // ── Highlight system (target + hover) ───────────────────────────────

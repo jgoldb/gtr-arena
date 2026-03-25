@@ -951,13 +951,14 @@ export class ServerEngine {
     const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(entity) * (entity.godMode ? 6 : 1);
     if (state.timer >= entity.autoAttackSpeed / atkSpeedMult) {
       const dx = entity.x - state.target.x;
+      const dy = entity.y - state.target.y;
       const dz = entity.z - state.target.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist > entity.autoAttackRange + ServerEngine.RANGE_TOLERANCE) {
         state.timer = entity.autoAttackSpeed;
         return;
       }
-      if (!this.combatSystem.hasLineOfSight(entity.x, entity.z, state.target.x, state.target.z)) {
+      if (!this.combatSystem.hasLineOfSight(entity.x, entity.z, state.target.x, state.target.z, entity.y, state.target.y)) {
         state.timer = entity.autoAttackSpeed;
         return;
       }

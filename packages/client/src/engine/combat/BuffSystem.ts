@@ -329,6 +329,21 @@ export class BuffSystem {
     return { remaining, reflectDamage: totalReflect };
   }
 
+  getDRTimers(target: Targetable): { icon: string; count: number; remaining: number; total: number }[] {
+    const categories = this.drState.get(target);
+    if (!categories) return [];
+    const timers: { icon: string; count: number; remaining: number; total: number }[] = [];
+    for (const dr of categories.values()) {
+      timers.push({
+        icon: dr.lastIcon,
+        count: dr.count,
+        remaining: dr.remaining,
+        total: DR_RESET_TIMER,
+      });
+    }
+    return timers;
+  }
+
   clearEntity(entity: Targetable): void {
     this.activeBuffs.delete(entity);
     this.drState.delete(entity);

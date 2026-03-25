@@ -129,8 +129,9 @@ export class CombatSystem {
 
   private getDistance(a: THREE.Vector3, b: THREE.Vector3): number {
     const dx = a.x - b.x;
+    const dy = a.y - b.y;
     const dz = a.z - b.z;
-    return Math.sqrt(dx * dx + dz * dz);
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
   update(dt: number): void {
@@ -230,15 +231,16 @@ export class CombatSystem {
       }
     }
     if (ability.requiresHostileTarget && target) {
+      if (!this.collisionSystem.hasLineOfSight(
+        attacker.mesh.position.x, attacker.mesh.position.z,
+        target.mesh.position.x, target.mesh.position.z,
+        attacker.mesh.position.y, target.mesh.position.y
+      )) {
+        return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
+      }
       const dist = this.getDistance(attacker.mesh.position, target.mesh.position);
       if (dist > ability.range!) {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
-      }
-      if (!this.collisionSystem.hasLineOfSight(
-        attacker.mesh.position.x, attacker.mesh.position.z,
-        target.mesh.position.x, target.mesh.position.z
-      )) {
-        return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
       }
       if (!this.isFacing(attacker.mesh.position, attackerRotY, target.mesh.position)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
@@ -249,15 +251,16 @@ export class CombatSystem {
         return { success: false, error: 'no-target', errorMessage: 'No target' };
       }
       if (ability.range) {
+        if (!this.collisionSystem.hasLineOfSight(
+          attacker.mesh.position.x, attacker.mesh.position.z,
+          target.mesh.position.x, target.mesh.position.z,
+          attacker.mesh.position.y, target.mesh.position.y
+        )) {
+          return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
+        }
         const dist = this.getDistance(attacker.mesh.position, target.mesh.position);
         if (dist > ability.range) {
           return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
-        }
-        if (!this.collisionSystem.hasLineOfSight(
-          attacker.mesh.position.x, attacker.mesh.position.z,
-          target.mesh.position.x, target.mesh.position.z
-        )) {
-          return { success: false, error: 'not-in-los', errorMessage: 'Not in line of sight' };
         }
       }
     }
@@ -282,11 +285,10 @@ export class CombatSystem {
       }
     }
     if (ability.requiresHostileTarget && target) {
-      // Abilities cannot be dodged (only auto-attacks can)
-      const outcome = this.rollOutcome(attacker, target, false);
+      const outcome = this.rollOutcome(attacker, target, !!ability.isMelee);
 
-      if (outcome === 'miss') {
-        this.onCombatText?.(target, 0, 'miss');
+      if (outcome === 'miss' || outcome === 'dodge') {
+        this.onCombatText?.(target, 0, outcome);
       } else {
         // Calculate base damage (variable or flat)
         let baseDamage: number;
@@ -377,18 +379,18 @@ export class CombatSystem {
   }
 
   hasLineOfSight(a: THREE.Vector3, b: THREE.Vector3): boolean {
-    return this.collisionSystem.hasLineOfSight(a.x, a.z, b.x, b.z);
+    return this.collisionSystem.hasLineOfSight(a.x, a.z, b.x, b.z, a.y, b.y);
   }
 
   /** Apply sweep charge damage: can miss or crit, but CANNOT be dodged. */
   applySweepDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {
     if (attacker.dead || target.dead) return;
 
-    const roll = Math.random();
     this.onHostileAction?.(attacker, target);
 
-    if (roll < CombatSystem.MISS_CHANCE) {
-      this.onCombatText?.(target, 0, 'miss');
+    const outcome = this.rollOutcome(attacker, target, true);
+    if (outcome === 'miss' || outcome === 'dodge') {
+      this.onCombatText?.(target, 0, outcome);
       this.enterCombat(attacker);
       this.enterCombat(target);
       return;
@@ -399,8 +401,7 @@ export class CombatSystem {
     if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
     const adjustedBase = Math.round(baseDamage * damageMult);
 
-    const isCrit = Math.random() < attacker.critChance;
-    const multiplier = isCrit ? 2 : 1;
+    const multiplier = outcome === 'crit' ? 2 : 1;
     const damage = Math.round(adjustedBase * multiplier);
     const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
@@ -409,7 +410,7 @@ export class CombatSystem {
       this.onFlinchDamage?.(target);
     }
     if (actualDamage > 0) {
-      this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
+      this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
     }
 
     this.enterCombat(attacker);
@@ -427,9 +428,9 @@ export class CombatSystem {
 
     this.onHostileAction?.(attacker, target);
 
-    const outcome = this.rollOutcome(attacker, target, false);
-    if (outcome === 'miss') {
-      this.onCombatText?.(target, 0, 'miss');
+    const outcome = this.rollOutcome(attacker, target, !!ability.isMelee);
+    if (outcome === 'miss' || outcome === 'dodge') {
+      this.onCombatText?.(target, 0, outcome);
       this.enterCombat(attacker);
       this.enterCombat(target);
       return;

@@ -83,6 +83,7 @@ export interface Ability {
   readonly groundTargeted?: boolean; // ability targets a ground location (click-to-place AoE)
   readonly aoeRadius?: number; // world units — radius of the AoE effect
   readonly suppressAutoTarget?: boolean; // if true, target does NOT auto-target the caster when hit
+  readonly isMelee?: boolean; // melee attacks can be dodged; spells cannot
 }
 
 // ── Buff definitions ────────────────────────────────────────────────────
@@ -308,6 +309,7 @@ export const Sweep: Ability = {
   cooldown: 10,
   damage: 409,
   requiresHostileTarget: false,
+  isMelee: true,
   chargeDuration: 0.714,
   chargeSpeed: yardsToUnits(28), // 28 yards/sec — covers 20 yards in ~0.714s
   chargeMaxDamage: 409,
@@ -342,6 +344,7 @@ export const Mop: Ability = {
   damageMin: 100,
   damageMax: 116,
   requiresHostileTarget: true,
+  isMelee: true,
   description:
     'Strikes the target with a dirty mop, dealing 100-116 damage. Damage is increased by 125% if the target has Covered in Piss.',
   bonusDamagePercent: 125,
@@ -357,6 +360,7 @@ export const BigBoot: Ability = {
   cooldown: 18,
   damage: 50,
   requiresHostileTarget: true,
+  isMelee: true,
   description:
     'Kick the target right in the neck, dealing 50 damage and stunning for 3 seconds.',
   appliesDebuff: BigBootStun,
@@ -511,6 +515,7 @@ export const JimmyLegs: Ability = {
   cooldown: 1.5,
   damage: 49,
   requiresHostileTarget: true,
+  isMelee: true,
   description:
     'Inflicts the target with the Jimmy Legs, reducing movement speed by 50% for 5 seconds. If used on a target with Jimmy Legs, the target will become immobilized for 2 seconds.',
   appliesDebuff: JimmyLegsDebuff,
@@ -554,6 +559,7 @@ export const Shank: Ability = {
   damageMin: 200,
   damageMax: 240,
   requiresHostileTarget: true,
+  isMelee: true,
   description:
     'Quick stab dealing 200-240 damage. If used from behind the target, deals 50% bonus damage. +15 Tweaking.',
 };

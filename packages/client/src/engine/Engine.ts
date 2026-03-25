@@ -1413,10 +1413,11 @@ export class Engine {
 
     const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(player) * (this.godMode ? 6 : 1);
     if (this.autoAttackTimer >= player.autoAttackSpeed / atkSpeedMult) {
-      // Check range
+      // Check range (3D distance including Y)
       const dx = player.mesh.position.x - target.mesh.position.x;
+      const dy = player.mesh.position.y - target.mesh.position.y;
       const dz = player.mesh.position.z - target.mesh.position.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist > player.autoAttackRange) {
         this.autoAttackTimer = player.autoAttackSpeed;
         return;

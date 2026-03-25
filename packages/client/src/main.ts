@@ -771,8 +771,9 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
         if (!target || target.dead || target.team === player.team) return 'no-target';
         const pos = player.getPosition();
         const dx = pos.x - target.mesh.position.x;
+        const dy = pos.y - target.mesh.position.y;
         const dz = pos.z - target.mesh.position.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (ability.range && dist > ability.range) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {
@@ -785,8 +786,9 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
           if (ability.range) {
             const pos = player.getPosition();
             const dx = pos.x - target.mesh.position.x;
+            const dy = pos.y - target.mesh.position.y;
             const dz = pos.z - target.mesh.position.z;
-            if (Math.sqrt(dx * dx + dz * dz) > ability.range) return 'out-of-range';
+            if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range) return 'out-of-range';
           }
         }
       }
@@ -1994,16 +1996,18 @@ async function startPlayground(): Promise<void> {
         const target = engine.targetingSystem.currentTarget;
         if (!target || !target.isHostileTo(player) || target.dead) return 'no-target';
         const dx = player.mesh.position.x - target.mesh.position.x;
+        const dy = player.mesh.position.y - target.mesh.position.y;
         const dz = player.mesh.position.z - target.mesh.position.z;
-        if (Math.sqrt(dx * dx + dz * dz) > ability.range!) return 'out-of-range';
+        if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range!) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {
         const target = engine.targetingSystem.currentTarget ?? player;
         if (target.dead) return 'no-target';
         if (ability.range && target !== player) {
           const dx = player.mesh.position.x - target.mesh.position.x;
+          const dy = player.mesh.position.y - target.mesh.position.y;
           const dz = player.mesh.position.z - target.mesh.position.z;
-          if (Math.sqrt(dx * dx + dz * dz) > ability.range) return 'out-of-range';
+          if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range) return 'out-of-range';
         }
       }
       return 'usable';
@@ -2187,6 +2191,7 @@ async function startUISetup(): Promise<void> {
     entityId: `practice_npc_${i}`,
     targetable: npc as unknown as Targetable,
   }));
+  const npcByEntityId = new Map(npcEntities.map(e => [e.entityId, e.targetable]));
 
   const partyFrames = new PartyFrames({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
   pgPartyFrames = partyFrames;
@@ -2385,16 +2390,18 @@ async function startUISetup(): Promise<void> {
         const target = engine.targetingSystem.currentTarget;
         if (!target || !target.isHostileTo(player) || target.dead) return 'no-target';
         const dx = player.mesh.position.x - target.mesh.position.x;
+        const dy = player.mesh.position.y - target.mesh.position.y;
         const dz = player.mesh.position.z - target.mesh.position.z;
-        if (Math.sqrt(dx * dx + dz * dz) > ability.range!) return 'out-of-range';
+        if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range!) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {
         const target = engine.targetingSystem.currentTarget ?? player;
         if (target.dead) return 'no-target';
         if (ability.range && target !== player) {
           const dx = player.mesh.position.x - target.mesh.position.x;
+          const dy = player.mesh.position.y - target.mesh.position.y;
           const dz = player.mesh.position.z - target.mesh.position.z;
-          if (Math.sqrt(dx * dx + dz * dz) > ability.range) return 'out-of-range';
+          if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range) return 'out-of-range';
         }
       }
       return 'usable';
@@ -2500,9 +2507,17 @@ async function startUISetup(): Promise<void> {
     }, dt);
 
     partyFrames.setVisible(true);
-    partyFrames.update(dt);
+    partyFrames.update(dt, (entityId) => {
+      const t = npcByEntityId.get(entityId);
+      if (!t) return [];
+      return bs.getDebuffs(t);
+    });
     arenaFrames.setVisible(true);
-    arenaFrames.update(dt);
+    arenaFrames.update(dt, (entityId) => {
+      const t = npcByEntityId.get(entityId);
+      if (!t) return [];
+      return bs.getDRTimers(t);
+    });
 
     pgDebugHUD?.update(dt);
 

@@ -78,7 +78,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     manaRegen: 16,
     abilities: [Shank, PocketSand],
     startingBuffs: [TweakingBuff],
-    playgroundOnly: false,
+    playgroundOnly: true,
   },
 };
 
