@@ -14,6 +14,8 @@ export interface ActionBarCallbacks {
   onActivate: (ability: Ability) => void;
   getAbilityStatus: (ability: Ability) => AbilityUsabilityStatus;
   getCombatSystem: () => CombatSystem;
+  getGcdRemaining?: () => number;
+  getGcdTotal?: () => number;
   isDisabled?: () => boolean;
 }
 
@@ -184,7 +186,8 @@ export class ActionBar {
 
       const status = this.callbacks.getAbilityStatus(slot.ability);
       const cdRemaining = combat.getCooldownRemaining(slot.ability.id);
-      const onCooldown = cdRemaining > 0;
+      const gcdRemaining = this.callbacks.getGcdRemaining?.() ?? 0;
+      const onCooldown = cdRemaining > 0 || gcdRemaining > 0;
 
       // Status tint: red for out-of-range, blue for not-enough-resource
       if (status === 'out-of-range') {
@@ -199,15 +202,24 @@ export class ActionBar {
       slotEl.style.opacity =
         status === 'no-target' || onCooldown ? '0.5' : '1';
 
-      // Circular cooldown sweep (clock-wipe from 12 o'clock, clockwise)
+      // Circular cooldown sweep — show whichever cooldown is longer (ability CD or GCD)
       if (onCooldown) {
-        const totalCd = combat.getCooldownTotal(slot.ability.id);
-        const degrees = totalCd > 0 ? (cdRemaining / totalCd) * 360 : 0;
+        let sweepRemaining: number;
+        let sweepTotal: number;
+        if (cdRemaining >= gcdRemaining) {
+          sweepRemaining = cdRemaining;
+          sweepTotal = combat.getCooldownTotal(slot.ability.id);
+        } else {
+          sweepRemaining = gcdRemaining;
+          sweepTotal = this.callbacks.getGcdTotal?.() ?? 0;
+        }
+        const degrees = sweepTotal > 0 ? (sweepRemaining / sweepTotal) * 360 : 0;
         overlay.style.background =
           `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`;
-        cdText.textContent = cdRemaining < 10
-          ? cdRemaining.toFixed(1)
-          : String(Math.ceil(cdRemaining));
+        const effectiveRemaining = Math.max(cdRemaining, gcdRemaining);
+        cdText.textContent = effectiveRemaining < 10
+          ? effectiveRemaining.toFixed(1)
+          : String(Math.ceil(effectiveRemaining));
       } else {
         overlay.style.background = 'transparent';
         cdText.textContent = '';

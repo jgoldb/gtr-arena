@@ -13,10 +13,11 @@ export interface CombatResult {
   errorMessage?: string;
 }
 
-export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge';
+export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune';
 
 export class ServerCombatSystem {
   private cooldowns = new Map<string, Map<string, { remaining: number; total: number }>>(); // entityId -> (abilityId -> cooldown)
+  private gcds = new Map<string, { remaining: number; total: number }>(); // entityId -> GCD state
   private static readonly COMBAT_DURATION = 5;
   private static readonly MISS_CHANCE = 0.03;
   private static readonly GOD_MODE_DAMAGE_MULT = 11; // +1000% damage
@@ -28,7 +29,7 @@ export class ServerCombatSystem {
   private buffSystem: ServerBuffSystem;
   private collision: CollisionSystem;
 
-  onCombatText?: (source: ServerEntity, target: ServerEntity, amount: number, type: CombatTextType) => void;
+  onCombatText?: (source: ServerEntity, target: ServerEntity, amount: number, type: CombatTextType, ability?: Ability) => void;
   onDirectDamageDealt?: (target: ServerEntity) => void;
   onFlinchDamage?: (target: ServerEntity) => void;
   onSleepApplied?: (attacker: ServerEntity, target: ServerEntity) => void;
@@ -82,6 +83,12 @@ export class ServerCombatSystem {
   }
 
   update(dt: number): void {
+    // Update per-entity GCDs
+    for (const [entityId, gcd] of this.gcds) {
+      gcd.remaining -= dt;
+      if (gcd.remaining <= 0) this.gcds.delete(entityId);
+    }
+
     // Update per-entity cooldowns
     for (const [entityId, cds] of this.cooldowns) {
       for (const [abilityId, cd] of cds) {
@@ -134,6 +141,19 @@ export class ServerCombatSystem {
 
   clearAllCooldowns(entityId: string): void {
     this.cooldowns.delete(entityId);
+    this.gcds.delete(entityId);
+  }
+
+  triggerGcd(entityId: string, duration: number): void {
+    this.gcds.set(entityId, { remaining: duration, total: duration });
+  }
+
+  getGcdRemaining(entityId: string): number {
+    return this.gcds.get(entityId)?.remaining ?? 0;
+  }
+
+  getGcdTotal(entityId: string): number {
+    return this.gcds.get(entityId)?.total ?? 0;
   }
 
   leaveCombat(entity: ServerEntity): void {
@@ -229,7 +249,7 @@ export class ServerCombatSystem {
       const outcome = this.rollOutcome(attacker, target, false);
 
       if (outcome === 'miss') {
-        this.onCombatText?.(attacker, target, 0, 'miss');
+        this.onCombatText?.(attacker, target, 0, 'miss', ability);
       } else {
         let baseDamage: number;
         if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
@@ -259,24 +279,29 @@ export class ServerCombatSystem {
           this.onFlinchDamage?.(target);
         }
         if (actualDamage > 0) {
-          this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+          this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage', ability);
         } else if (damage === 0) {
           // 0-damage hostile ability (e.g. debuff-only) — still notify for auto-targeting
-          this.onCombatText?.(attacker, target, 0, 'damage');
+          this.onCombatText?.(attacker, target, 0, 'damage', ability);
         }
 
         // Jimmy Legs: if target already has it, also immobilize
         if (ability.id === 'jimmy-legs' && this.buffSystem.hasDebuff(target, 'jimmy-legs')) {
-          this.buffSystem.apply(target, JimmyLegdDebuff);
+          if (!this.buffSystem.apply(target, JimmyLegdDebuff)) {
+            this.onCombatText?.(attacker, target, 0, 'immune', ability);
+          }
         }
 
         if (ability.appliesDebuff) {
-          this.buffSystem.apply(target, ability.appliesDebuff);
-          if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
-            this.onSleepApplied?.(attacker, target);
-          }
-          if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
-            this.onBlindApplied?.(attacker, target);
+          if (!this.buffSystem.apply(target, ability.appliesDebuff)) {
+            this.onCombatText?.(attacker, target, 0, 'immune', ability);
+          } else {
+            if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
+              this.onSleepApplied?.(attacker, target);
+            }
+            if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
+              this.onBlindApplied?.(attacker, target);
+            }
           }
         }
 
@@ -379,12 +404,15 @@ export class ServerCombatSystem {
 
     // Apply debuff on hit
     if (ability.appliesDebuff) {
-      this.buffSystem.apply(target, ability.appliesDebuff);
-      if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
-        this.onSleepApplied?.(attacker, target);
-      }
-      if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
-        this.onBlindApplied?.(attacker, target);
+      if (!this.buffSystem.apply(target, ability.appliesDebuff)) {
+        this.onCombatText?.(attacker, target, 0, 'immune');
+      } else {
+        if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
+          this.onSleepApplied?.(attacker, target);
+        }
+        if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
+          this.onBlindApplied?.(attacker, target);
+        }
       }
     }
 

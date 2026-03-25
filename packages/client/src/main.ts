@@ -21,7 +21,7 @@ import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats, xpToLevel, CHARACTER_LIST } from '@gtr/shared';
-import type { Ability } from './engine/combat/Ability';
+import { GLOBAL_COOLDOWN, type Ability } from './engine/combat/Ability';
 import type { Targetable } from './engine/types';
 
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -411,7 +411,7 @@ function startMultiplayer(msg: S2C_GameStart): void {
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
     // Skip 0-amount damage text (e.g. debuff-only abilities, hostile channel starts)
-    if (amount === 0 && type !== 'miss' && type !== 'dodge') return;
+    if (amount === 0 && type !== 'miss' && type !== 'dodge' && type !== 'immune') return;
     const localId = clientEngine!.localId;
     const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
     if (isLocalInvolved) {
@@ -497,7 +497,7 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
     // Skip 0-amount damage text (e.g. debuff-only abilities, hostile channel starts)
-    if (amount === 0 && type !== 'miss' && type !== 'dodge') return;
+    if (amount === 0 && type !== 'miss' && type !== 'dodge' && type !== 'immune') return;
     const localId = clientEngine!.localId;
     const isLocalInvolved = sourceEntityId === localId || targetEntityId === localId;
     if (isLocalInvolved) {
@@ -716,6 +716,8 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       if (castState?.isChannel && clientEngine!.getCooldownRemaining(ability.id) <= 0) {
         clientEngine!.sendCancelCast();
       }
+      // Block during GCD
+      if (clientEngine!.getGcdRemaining() > 0) return;
       // Ground-targeted abilities enter reticle mode
       if (ability.groundTargeted) {
         if (mpPendingGroundAbility?.id === ability.id) {
@@ -765,6 +767,8 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       getCooldownRemaining: (id: string) => clientEngine!.getCooldownRemaining(id),
       getCooldownTotal: (id: string) => clientEngine!.getCooldownTotal(id),
     }) as any,
+    getGcdRemaining: () => clientEngine!.getGcdRemaining(),
+    getGcdTotal: () => clientEngine!.getGcdTotal(),
     isDisabled: () => {
       const castState = clientEngine!.getLocalCastingState();
       const isCasting = castState !== null && !castState.isChannel;
@@ -1898,6 +1902,8 @@ async function startPlayground(): Promise<void> {
     onActivate: (ability) => {
       if (engine.isResting()) engine.stopResting();
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
+      // Block during GCD (unless god mode)
+      if (!engine.godMode && engine.combatSystem.getGcdRemaining() > 0) return;
       // Ground-targeted abilities enter reticle mode instead of executing immediately
       if (ability.groundTargeted) {
         if (pendingGroundAbility?.id === ability.id) {
@@ -1922,7 +1928,10 @@ async function startPlayground(): Promise<void> {
         if (!result.success && result.errorMessage) errorText.show(result.errorMessage);
       } else {
         const result = engine.combatSystem.useAbility(ability, engine.playerController, engine.playerController.mesh.rotation.y, target);
-        if (result.success) onAbilitySuccess(ability);
+        if (result.success) {
+          onAbilitySuccess(ability);
+          if (!engine.godMode) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+        }
         else if (result.errorMessage) errorText.show(result.errorMessage);
       }
     },
@@ -1949,6 +1958,8 @@ async function startPlayground(): Promise<void> {
       return 'usable';
     },
     getCombatSystem: () => engine.combatSystem,
+    getGcdRemaining: () => engine.combatSystem.getGcdRemaining(),
+    getGcdTotal: () => engine.combatSystem.getGcdTotal(),
     isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || (engine.isCasting() && !engine.isChanneling()),
   });
   pgActionBar = actionBar;

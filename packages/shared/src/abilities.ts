@@ -1,3 +1,6 @@
+// ── Global cooldown ─────────────────────────────────────────────────────
+export const GLOBAL_COOLDOWN = 1; // seconds — triggered on every ability use
+
 // ── Distance conversion ─────────────────────────────────────────────────
 // 1 yard = 0.6 world units.
 // Melee range (3 yd) = 1.8 world units, matching existing auto-attack ranges.
@@ -79,6 +82,7 @@ export interface Ability {
   readonly chargeMaxDamage?: number; // max damage at full distance
   readonly groundTargeted?: boolean; // ability targets a ground location (click-to-place AoE)
   readonly aoeRadius?: number; // world units — radius of the AoE effect
+  readonly suppressAutoTarget?: boolean; // if true, target does NOT auto-target the caster when hit
 }
 
 // ── Buff definitions ────────────────────────────────────────────────────
@@ -577,4 +581,5 @@ export const PocketSand: Ability = {
   description:
     'Throws sand in the target\'s eyes, blinding for 4 seconds. +15 Tweaking.',
   appliesDebuff: BlindedDebuff,
+  suppressAutoTarget: true,
 };

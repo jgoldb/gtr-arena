@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, type Ability } from './combat/Ability';
+import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { getCharacterStats } from '@gtr/shared';
@@ -260,8 +260,8 @@ export class Engine {
     };
 
     // Auto-target attacker when player has no target (not while blinded)
-    this.combatSystem.onHostileAction = (attacker, target) => {
-      if (target === this.playerController && !this.targetingSystem.currentTarget && !this.buffSystem.isBlinded(this.playerController)) {
+    this.combatSystem.onHostileAction = (attacker, target, ability) => {
+      if (target === this.playerController && !this.targetingSystem.currentTarget && !this.buffSystem.isBlinded(this.playerController) && !ability?.suppressAutoTarget) {
         this.targetingSystem.currentTarget = attacker;
       }
     };
@@ -414,6 +414,11 @@ export class Engine {
     );
     if (!validation.success) return validation;
 
+    // Trigger GCD at cast/channel start
+    if (!this.godMode) {
+      this.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+    }
+
     const isChannel = ability.isChannel ?? false;
 
     if (isChannel) {
@@ -498,6 +503,9 @@ export class Engine {
     if (!this.godMode && this.combatSystem.getCooldownRemaining(ability.id) > 0) {
       return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
     }
+    if (!this.godMode && this.combatSystem.getGcdRemaining() > 0) {
+      return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
+    }
     if (!this.godMode) {
       const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
       if (attacker.mana < effectiveCost) return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
@@ -507,6 +515,7 @@ export class Engine {
 
     if (!this.godMode) {
       this.combatSystem.setCooldown(ability.id, ability.cooldown);
+      this.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
     }
 
     // Schedule damage for when the projectile lands

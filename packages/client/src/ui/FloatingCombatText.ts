@@ -94,7 +94,7 @@ export class FloatingCombatText {
     });
   }
 
-  spawn(target: THREE.Object3D, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge', isIncoming = false): void {
+  spawn(target: THREE.Object3D, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune', isIncoming = false): void {
     const el = document.createElement('div');
 
     let text: string;
@@ -125,6 +125,12 @@ export class FloatingCombatText {
         color = '#aaaaaa';
         fontSize = FONT_SIZE;
         lane = 'left';
+        break;
+      case 'immune':
+        text = 'Immune';
+        color = '#aaaaaa';
+        fontSize = FONT_SIZE;
+        lane = 'center';
         break;
       default:
         text = `${amount}`;

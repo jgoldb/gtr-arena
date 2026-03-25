@@ -319,7 +319,7 @@ export class ArenaFrames {
     return { bar, fill, text };
   }
 
-  showCombatText(entityId: string, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge'): void {
+  showCombatText(entityId: string, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune'): void {
     const frame = this.frames.find(f => f.entityId === entityId);
     if (!frame) return;
 
@@ -341,6 +341,11 @@ export class ArenaFrames {
         break;
       case 'dodge':
         frame.combatTextEl.textContent = 'Dodge';
+        frame.combatTextEl.style.color = '#aaaaaa';
+        frame.combatTextEl.style.fontSize = '12px';
+        break;
+      case 'immune':
+        frame.combatTextEl.textContent = 'Immune';
         frame.combatTextEl.style.color = '#aaaaaa';
         frame.combatTextEl.style.fontSize = '12px';
         break;

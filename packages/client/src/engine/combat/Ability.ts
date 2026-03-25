@@ -1,5 +1,6 @@
 // Re-export everything from the shared package so existing client imports work unchanged.
 export {
+  GLOBAL_COOLDOWN,
   YARDS_TO_UNITS,
   yardsToUnits,
   CoveredInPiss,

@@ -198,7 +198,8 @@ export interface S2C_CombatEvent {
   sourceEntityId: string;
   targetEntityId: string;
   amount: number;
-  combatType: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge';
+  combatType: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune';
+  suppressAutoTarget?: boolean;
 }
 
 export interface S2C_Flinch {

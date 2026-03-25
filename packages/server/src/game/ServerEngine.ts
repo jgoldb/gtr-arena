@@ -7,7 +7,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, Sweep, getBuffDescription, getCharacterStats } from '@gtr/shared';
+import { GLOBAL_COOLDOWN, yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, Sweep, getBuffDescription, getCharacterStats } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -203,13 +203,14 @@ export class ServerEngine {
     this.regenSystem.setBuffSystem(this.buffSystem);
     this.combatSystem = new ServerCombatSystem(this.regenSystem, this.buffSystem, this.collision);
 
-    this.combatSystem.onCombatText = (source, target, amount, type) => {
+    this.combatSystem.onCombatText = (source, target, amount, type, ability) => {
       this.pendingEvents.push({
         type: 'combat_event',
         sourceEntityId: source.id,
         targetEntityId: target.id,
         amount,
         combatType: type,
+        ...(ability?.suppressAutoTarget ? { suppressAutoTarget: true } : {}),
       } as S2C_CombatEvent);
       // Track match stats
       if (amount > 0) {
@@ -439,6 +440,9 @@ export class ServerEngine {
     const ability = entity.abilities.find(a => a.id === abilityId);
     if (!ability) return;
 
+    // Block during GCD
+    if (!entity.godMode && this.combatSystem.getGcdRemaining(entityId) > 0) return;
+
     // Cancel channel if starting new ability
     if (this.castingStates.has(entityId) && this.combatSystem.getCooldownRemaining(entityId, abilityId) <= 0) {
       this.cancelCasting(entityId);
@@ -449,6 +453,7 @@ export class ServerEngine {
       const result = this.useGroundTargetAbility(entity, ability, groundTarget.x, groundTarget.z);
       if (result.success) {
         this.onAbilitySuccess(entity, ability, groundTarget);
+        this.triggerEntityGcd(entity);
       } else if (result.errorMessage) {
         this.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
       }
@@ -476,6 +481,7 @@ export class ServerEngine {
       const result = this.combatSystem.useAbility(ability, entity, target, targetPosOverride);
       if (result.success) {
         this.onAbilitySuccess(entity, ability);
+        this.triggerEntityGcd(entity);
       } else if (result.errorMessage) {
         this.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
       }
@@ -738,6 +744,9 @@ export class ServerEngine {
       }
       return;
     }
+
+    // Trigger GCD at cast/channel start
+    this.triggerEntityGcd(entity);
 
     const isChannel = ability.isChannel ?? false;
 
@@ -1030,7 +1039,7 @@ export class ServerEngine {
 
   // ── Ability success effects ─────────────────────────────────────────
 
-  private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs'];
+  private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank'];
 
   private onAbilitySuccess(entity: ServerEntity, ability: Ability, groundTarget?: { x: number; z: number }): void {
     this.pendingEvents.push({
@@ -1084,6 +1093,17 @@ export class ServerEngine {
         this.requestAutoAttack(entity.id, target.id);
       }
     }
+  }
+
+  private triggerEntityGcd(entity: ServerEntity): void {
+    if (entity.godMode) return;
+    this.combatSystem.triggerGcd(entity.id, GLOBAL_COOLDOWN);
+    this.onSendToPlayer?.(entity.id, {
+      type: 'cooldown_update',
+      abilityId: '__gcd__',
+      remaining: GLOBAL_COOLDOWN,
+      total: GLOBAL_COOLDOWN,
+    } as S2C_CooldownUpdate);
   }
 
   private startSweepCharge(entity: ServerEntity): void {

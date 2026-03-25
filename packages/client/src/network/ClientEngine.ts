@@ -89,6 +89,7 @@ export class ClientEngine {
 
   // Cooldowns (local tracking from server updates)
   private cooldowns = new Map<string, { remaining: number; total: number }>();
+  private gcd: { remaining: number; total: number } | null = null;
 
   // Local entity casting state (from server snapshots)
   private localCastingAbilityId: string | null = null;
@@ -645,7 +646,7 @@ export class ClientEngine {
     this.onCombatText?.(msg.sourceEntityId, msg.targetEntityId, msg.amount, msg.combatType);
 
     // Auto-target attacker when player has no target (not while blinded)
-    if (msg.targetEntityId === this.localEntityId && !this.selectedTargetId && msg.combatType !== 'heal' && !this.blindEffect.isActive()) {
+    if (msg.targetEntityId === this.localEntityId && !this.selectedTargetId && msg.combatType !== 'heal' && !this.blindEffect.isActive() && !msg.suppressAutoTarget) {
       const attacker = this.remoteEntities.get(msg.sourceEntityId);
       if (attacker) {
         this.selectTarget(attacker.targetable);
@@ -708,6 +709,10 @@ export class ClientEngine {
   }
 
   handleCooldownUpdate(msg: S2C_CooldownUpdate): void {
+    if (msg.abilityId === '__gcd__') {
+      this.gcd = { remaining: msg.remaining, total: msg.total };
+      return;
+    }
     this.cooldowns.set(msg.abilityId, { remaining: msg.remaining, total: msg.total });
     this.onCooldownUpdate?.(msg.abilityId, msg.remaining, msg.total);
   }
@@ -860,6 +865,14 @@ export class ClientEngine {
 
   getCooldownTotal(abilityId: string): number {
     return this.cooldowns.get(abilityId)?.total ?? 0;
+  }
+
+  getGcdRemaining(): number {
+    return this.gcd?.remaining ?? 0;
+  }
+
+  getGcdTotal(): number {
+    return this.gcd?.total ?? 0;
   }
 
   getLocalCastingState(): { abilityId: string; elapsed: number; totalTime: number; isChannel: boolean } | null {
@@ -1030,6 +1043,10 @@ export class ClientEngine {
       cd.remaining = Math.max(0, cd.remaining - gap);
       if (cd.remaining <= 0) this.cooldowns.delete(id);
     }
+    if (this.gcd) {
+      this.gcd.remaining -= gap;
+      if (this.gcd.remaining <= 0) this.gcd = null;
+    }
 
     // Buff remaining timers (local + remote)
     for (const b of this.localBuffs) {
@@ -1161,6 +1178,10 @@ export class ClientEngine {
     for (const [id, cd] of this.cooldowns) {
       cd.remaining = Math.max(0, cd.remaining - dt);
       if (cd.remaining <= 0) this.cooldowns.delete(id);
+    }
+    if (this.gcd) {
+      this.gcd.remaining -= dt;
+      if (this.gcd.remaining <= 0) this.gcd = null;
     }
 
     // Locally decrement buff remaining timers so UI stays smooth between

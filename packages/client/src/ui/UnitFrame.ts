@@ -436,7 +436,7 @@ export class UnitFrame {
   private static readonly CT_POP_IN = 0.15;
   private static readonly CT_FADE_START = 1.0;
 
-  showCombatText(amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge'): void {
+  showCombatText(amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune'): void {
     switch (type) {
       case 'heal':
         this.combatTextEl.textContent = `+${amount}`;
@@ -455,6 +455,11 @@ export class UnitFrame {
         break;
       case 'dodge':
         this.combatTextEl.textContent = 'Dodge';
+        this.combatTextEl.style.color = '#aaaaaa';
+        this.combatTextEl.style.fontSize = '16px';
+        break;
+      case 'immune':
+        this.combatTextEl.textContent = 'Immune';
         this.combatTextEl.style.color = '#aaaaaa';
         this.combatTextEl.style.fontSize = '16px';
         break;

@@ -14,10 +14,11 @@ export interface CombatResult {
   errorMessage?: string;
 }
 
-export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge';
+export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune';
 
 export class CombatSystem {
   private cooldowns = new Map<string, { remaining: number; total: number }>(); // ability id → cooldown state
+  private gcd: { remaining: number; total: number } | null = null;
   private static readonly COMBAT_DURATION = 5; // seconds before leaving combat
   private static readonly MISS_CHANCE = 0.03; // 3% flat miss chance
   private static readonly GOD_MODE_DAMAGE_MULT = 11; // +1000% damage
@@ -31,7 +32,7 @@ export class CombatSystem {
   onFlinchDamage?: (target: Targetable) => void;
   onSleepApplied?: (attacker: Targetable, target: Targetable) => void;
   onBlindApplied?: (attacker: Targetable, target: Targetable) => void;
-  onHostileAction?: (attacker: Targetable, target: Targetable) => void;
+  onHostileAction?: (attacker: Targetable, target: Targetable, ability?: Ability) => void;
   onEnterCombat?: (entity: Targetable) => void;
   onLeaveCombat?: (entity: Targetable) => void;
 
@@ -133,6 +134,12 @@ export class CombatSystem {
   }
 
   update(dt: number): void {
+    // Tick GCD
+    if (this.gcd) {
+      this.gcd.remaining -= dt;
+      if (this.gcd.remaining <= 0) this.gcd = null;
+    }
+
     for (const [id, cd] of this.cooldowns) {
       const next = cd.remaining - dt;
       if (next <= 0) {
@@ -166,8 +173,21 @@ export class CombatSystem {
     return this.cooldowns.get(abilityId)?.total ?? 0;
   }
 
+  triggerGcd(duration: number): void {
+    this.gcd = { remaining: duration, total: duration };
+  }
+
+  getGcdRemaining(): number {
+    return this.gcd?.remaining ?? 0;
+  }
+
+  getGcdTotal(): number {
+    return this.gcd?.total ?? 0;
+  }
+
   clearCooldowns(): void {
     this.cooldowns.clear();
+    this.gcd = null;
   }
 
   leaveCombat(entity: Targetable): void {
@@ -309,17 +329,22 @@ export class CombatSystem {
 
         // Jimmy Legs: if target already has it, also immobilize
         if (ability.id === 'jimmy-legs' && this.buffSystem.hasDebuff(target, 'jimmy-legs')) {
-          this.buffSystem.apply(target, JimmyLegdDebuff);
+          if (!this.buffSystem.apply(target, JimmyLegdDebuff)) {
+            this.onCombatText?.(target, 0, 'immune');
+          }
         }
 
         // Apply debuff only on hit
         if (ability.appliesDebuff) {
-          this.buffSystem.apply(target, ability.appliesDebuff);
-          if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
-            this.onSleepApplied?.(attacker, target);
-          }
-          if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
-            this.onBlindApplied?.(attacker, target);
+          if (!this.buffSystem.apply(target, ability.appliesDebuff)) {
+            this.onCombatText?.(target, 0, 'immune');
+          } else {
+            if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
+              this.onSleepApplied?.(attacker, target);
+            }
+            if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
+              this.onBlindApplied?.(attacker, target);
+            }
           }
         }
 
@@ -332,7 +357,7 @@ export class CombatSystem {
 
       // Combat entry rules (regardless of outcome)
       if (target.isHostileTo(attacker)) {
-        this.onHostileAction?.(attacker, target);
+        this.onHostileAction?.(attacker, target, ability);
         this.enterCombat(attacker);
         this.enterCombat(target);
       } else if (target.inCombat) {
@@ -435,12 +460,15 @@ export class CombatSystem {
 
     // Apply debuff on hit
     if (ability.appliesDebuff) {
-      this.buffSystem.apply(target, ability.appliesDebuff);
-      if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
-        this.onSleepApplied?.(attacker, target);
-      }
-      if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
-        this.onBlindApplied?.(attacker, target);
+      if (!this.buffSystem.apply(target, ability.appliesDebuff)) {
+        this.onCombatText?.(target, 0, 'immune');
+      } else {
+        if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
+          this.onSleepApplied?.(attacker, target);
+        }
+        if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
+          this.onBlindApplied?.(attacker, target);
+        }
       }
     }
 
