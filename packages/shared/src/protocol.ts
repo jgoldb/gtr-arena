@@ -214,6 +214,7 @@ export interface S2C_AbilityEffect {
   abilityId: string;
   groundTargetX?: number;
   groundTargetZ?: number;
+  manaStolen?: number;
 }
 
 export interface S2C_CooldownUpdate {

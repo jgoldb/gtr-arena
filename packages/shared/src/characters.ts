@@ -2,7 +2,7 @@ import type { Ability, BuffDefinition } from './abilities.js';
 import {
   Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper,
   BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom,
-  Shank, PocketSand,
+  Shank, PocketSand, StickyFingers,
   TweakingBuff,
 } from './abilities.js';
 
@@ -76,7 +76,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.10,
     hpRegen: 28,
     manaRegen: 16,
-    abilities: [Shank, PocketSand],
+    abilities: [Shank, PocketSand, StickyFingers],
     startingBuffs: [TweakingBuff],
     playgroundOnly: true,
   },

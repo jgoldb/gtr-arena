@@ -4,7 +4,7 @@ import { CHARACTER_LIST, CharacterId } from '../engine/player/characters';
 export class CharacterSelector {
   private select: HTMLSelectElement;
 
-  constructor(engine: Engine, container: HTMLElement) {
+  constructor(engine: Engine, container: HTMLElement, opts?: { excludePlaygroundOnly?: boolean }) {
     this.select = document.createElement('select');
     this.select.style.cssText = `
       padding: 6px 10px;
@@ -19,7 +19,8 @@ export class CharacterSelector {
       width: 100%;
     `;
 
-    for (const char of CHARACTER_LIST.filter(c => !c.playgroundOnly)) {
+    const chars = opts?.excludePlaygroundOnly ? CHARACTER_LIST.filter(c => !c.playgroundOnly) : CHARACTER_LIST;
+    for (const char of chars) {
       const option = document.createElement('option');
       option.value = char.id;
       option.textContent = char.name;

@@ -1088,12 +1088,13 @@ export class ServerEngine {
   private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank'];
 
   private onAbilitySuccess(entity: ServerEntity, ability: Ability, groundTarget?: { x: number; z: number }): void {
-    this.pendingEvents.push({
+    const abilityEvent: S2C_AbilityEffect = {
       type: 'ability_effect',
       entityId: entity.id,
       abilityId: ability.id,
       ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetZ: groundTarget.z } : {}),
-    } as S2C_AbilityEffect);
+    };
+    this.pendingEvents.push(abilityEvent);
 
     // Send cooldown update to the entity's player (skip in god mode)
     if (ability.cooldown > 0 && !entity.godMode) {
@@ -1117,8 +1118,26 @@ export class ServerEngine {
     if (ability.id === 'kaboom') {
       this.executeKaboom(entity);
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
       this.buffSystem.addStacks(entity, 'tweaking', 15);
+    }
+    if (ability.id === 'sticky-fingers') {
+      const target = this.getTarget(entity.id);
+      if (target) {
+        const stealable = this.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
+        if (stealable.length > 0) {
+          const stolen = stealable[Math.floor(Math.random() * stealable.length)];
+          const remainingTime = stolen.remaining;
+          this.buffSystem.remove(target, stolen.definition.id);
+          this.buffSystem.apply(entity, stolen.definition);
+          this.buffSystem.setRemaining(entity, stolen.definition.id, remainingTime);
+        } else {
+          const drain = Math.min(150, target.mana);
+          target.mana -= drain;
+          entity.mana = Math.min(entity.mana + 150, entity.maxMana);
+          abilityEvent.manaStolen = 150;
+        }
+      }
     }
     if (ability.id === 'crotch-rot') {
       const target = this.getTarget(entity.id);

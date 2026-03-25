@@ -589,3 +589,16 @@ export const PocketSand: Ability = {
   appliesDebuff: BlindedDebuff,
   suppressAutoTarget: true,
 };
+
+export const StickyFingers: Ability = {
+  id: 'sticky-fingers',
+  name: 'Sticky Fingers',
+  icon: '🖐️',
+  range: yardsToUnits(3),
+  manaCost: 100,
+  cooldown: 20,
+  damage: 0,
+  requiresHostileTarget: true,
+  description:
+    'Steals a buff from the target. If the target has no buffs, instead steals 150 mana. +15 Tweaking.',
+};

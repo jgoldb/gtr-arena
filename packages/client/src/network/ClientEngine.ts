@@ -160,6 +160,7 @@ export class ClientEngine {
   onBuffApplied?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
   onBuffExpired?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
   onAbilitySuccess?: (abilityId: string) => void;
+  onManaDrained?: (amount: number) => void;
 
   constructor(canvas: HTMLCanvasElement, network: NetworkManager, mapId: string, localEntityId: string, initialEntities: EntitySnapshot[]) {
     this.network = network;
@@ -667,8 +668,9 @@ export class ClientEngine {
       const targetPos = groundPos ?? (this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId)?.position.clone() : undefined);
       this.playerController.triggerAbilityAnimation(msg.abilityId, targetPos);
       this.onAbilitySuccess?.(msg.abilityId);
+      if (msg.manaStolen) this.onManaDrained?.(msg.manaStolen);
       // Optimistically update local buff stacks (server will confirm in next snapshot)
-      if (msg.abilityId === 'shank' || msg.abilityId === 'pocket-sand') {
+      if (msg.abilityId === 'shank' || msg.abilityId === 'pocket-sand' || msg.abilityId === 'sticky-fingers') {
         const buff = this.localBuffs.find(b => b.id === 'tweaking');
         if (buff && buff.stacks !== undefined) {
           buff.stacks = Math.min(buff.stacks + 15, buff.maxStacks ?? Infinity);

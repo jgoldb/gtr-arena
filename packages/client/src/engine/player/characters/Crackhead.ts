@@ -32,6 +32,18 @@ export class Crackhead extends CharacterModel {
   // Sand particle state for Pocket Sand
   private sandParticles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
 
+  // Sticky Fingers blue glow state
+  private stickyGlowMeshes: { mesh: THREE.Mesh; life: number }[] = [];
+  private stickyGlowSpawned = false;
+
+  // Stolen buff animation state
+  private crashOutActive = false;
+  private crashOutWeight = 0;
+  private retardStrengthActive = false;
+  private retardStrengthWeight = 0;
+  private fullRetardActive = false;
+  private fullRetardWeight = 0;
+
   // Twitch state
   private twitchTimer = 0;
   private twitchIntensity = 0;
@@ -49,6 +61,7 @@ export class Crackhead extends CharacterModel {
     this.buildArms();
     this.buildLegs();
     this.buildKnife();
+
   }
 
   // ── Head ───────────────────────────────────────────────
@@ -506,6 +519,22 @@ export class Crackhead extends CharacterModel {
       (p.mesh.material as THREE.MeshBasicMaterial).opacity = fade * 0.9;
     }
 
+    // Update sticky fingers blue glow particles
+    for (let i = this.stickyGlowMeshes.length - 1; i >= 0; i--) {
+      const p = this.stickyGlowMeshes[i];
+      p.life -= dt;
+      p.mesh.position.y += dt * 0.5;
+      const mat = p.mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = Math.max(0, p.life / 0.4);
+      p.mesh.scale.multiplyScalar(1 - dt * 1.5);
+      if (p.life <= 0) {
+        p.mesh.removeFromParent();
+        (p.mesh.material as THREE.Material).dispose();
+        p.mesh.geometry.dispose();
+        this.stickyGlowMeshes.splice(i, 1);
+      }
+    }
+
     // Sore pulsing
     for (let i = 0; i < this.soreMeshes.length; i++) {
       const pulse = 1.0 + Math.sin(this.idleTime * 3 + i * 1.5) * 0.15;
@@ -552,6 +581,79 @@ export class Crackhead extends CharacterModel {
 
       // Torso bounces more than normal
       this.bodyGroup.position.y += Math.abs(Math.sin(phase * 1.5)) * 0.03 * w;
+    }
+
+    // ── Stolen buff visuals ────────────────────────────────
+
+    // Crash Out: scale up + red emissive (same as TheJanitor)
+    const coTarget = this.crashOutActive ? 1 : 0;
+    this.crashOutWeight += (coTarget - this.crashOutWeight) * Math.min(1, 8 * dt);
+    if (this.crashOutWeight > 0.01) {
+      this.group.scale.setScalar(1 + this.crashOutWeight * 0.25);
+      const r = this.crashOutWeight * 0.35;
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) (child.material as THREE.MeshStandardMaterial).emissive?.setRGB(r, 0, 0);
+      });
+    } else if (this.crashOutWeight > 0) {
+      this.crashOutWeight = 0;
+      this.group.scale.setScalar(1);
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) (child.material as THREE.MeshStandardMaterial).emissive?.setRGB(0, 0, 0);
+      });
+    }
+
+    // Retard Strength: scale up + green pulsating glow (same as DrRetardo)
+    const rsTarget = this.retardStrengthActive ? 1 : 0;
+    this.retardStrengthWeight += (rsTarget - this.retardStrengthWeight) * Math.min(1, 6 * dt);
+    if (this.retardStrengthWeight > 0.01) {
+      const w = this.retardStrengthWeight;
+      this.group.scale.setScalar(1 + 0.12 * w);
+      const pulse = 0.5 + Math.sin(this.idleTime * 8) * 0.5;
+      const glow = w * (0.3 + pulse * 0.4);
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.emissive) {
+            mat.emissive.setRGB(0.2 * w, 0.9 * w, 0.1 * w);
+            mat.emissiveIntensity = 1 + glow;
+          }
+        }
+      });
+    } else if (this.retardStrengthWeight > 0) {
+      this.retardStrengthWeight = 0;
+      this.group.scale.setScalar(1);
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.emissive) { mat.emissive.setRGB(0, 0, 0); mat.emissiveIntensity = 1; }
+        }
+      });
+    }
+
+    // Full Retard: yellow-brown pulsating glow (same as DrRetardo)
+    const frTarget = this.fullRetardActive ? 1 : 0;
+    this.fullRetardWeight += (frTarget - this.fullRetardWeight) * Math.min(1, 6 * dt);
+    if (this.fullRetardWeight > 0.01) {
+      const w = this.fullRetardWeight;
+      const pulse = 0.5 + Math.sin(this.idleTime * 6) * 0.5;
+      const glow = w * (0.3 + pulse * 0.5);
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.emissive) {
+            mat.emissive.setRGB(0.7 * w, 0.6 * w, 0.05 * w);
+            mat.emissiveIntensity = 1 + glow;
+          }
+        }
+      });
+    } else if (this.fullRetardWeight > 0) {
+      this.fullRetardWeight = 0;
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.emissive) { mat.emissive.setRGB(0, 0, 0); mat.emissiveIntensity = 1; }
+        }
+      });
     }
 
     // Scratching (only when not running and not in combat)
@@ -645,12 +747,14 @@ export class Crackhead extends CharacterModel {
   protected override getAbilityAnimDuration(abilityId: string): number {
     if (abilityId === 'shank') return 0.7;
     if (abilityId === 'pocket-sand') return 0.6;
+    if (abilityId === 'sticky-fingers') return 0.6;
     return 0.6;
   }
 
   protected override animateAbilityUse(abilityId: string, t: number): void {
     if (abilityId === 'shank') this.animateShank(t);
     if (abilityId === 'pocket-sand') this.animatePocketSand(t);
+    if (abilityId === 'sticky-fingers') this.animateStickyFingers(t);
   }
 
   private sandSpawned = false;
@@ -833,4 +937,109 @@ export class Crackhead extends CharacterModel {
       this.rightArmGroup.rotation.z += pocketZ * (1 - ease);
     }
   }
+
+  // ── Sticky Fingers Ability Animation ─────────────────────────
+
+  private animateStickyFingers(t: number): void {
+    // Both arms thrust forward, flash blue, then return
+
+    const thrustX = 1.4;   // arms extended forward
+    const thrustZ = -0.2;  // slightly inward (grabbing motion)
+
+    if (t < 0.15) {
+      // Phase 1: Wind up — arms pull back slightly, body coils
+      const p = t / 0.15;
+      const ease = p * p;
+      this.rightArmGroup.rotation.x -= 0.3 * ease;
+      this.leftArmGroup.rotation.x -= 0.3 * ease;
+      this.bodyGroup.rotation.x -= 0.06 * ease;
+      this.stickyGlowSpawned = false;
+    } else if (t < 0.35) {
+      // Phase 2: Lunge — both arms shoot forward
+      const p = (t - 0.15) / 0.20;
+      const ease = 1 - Math.pow(1 - p, 3); // ease-out snap
+      this.rightArmGroup.rotation.x += -0.3 * (1 - ease) + thrustX * ease;
+      this.leftArmGroup.rotation.x += -0.3 * (1 - ease) + thrustX * ease;
+      this.rightArmGroup.rotation.z += thrustZ * ease;
+      this.leftArmGroup.rotation.z += -thrustZ * ease; // mirrored
+      this.bodyGroup.rotation.x += -0.06 * (1 - ease) + 0.15 * ease;
+      this.headGroup.rotation.x += 0.08 * ease;
+
+      // Spawn blue glow at peak of thrust
+      if (!this.stickyGlowSpawned && p > 0.7) {
+        this.spawnStickyFingersGlow();
+        this.stickyGlowSpawned = true;
+      }
+    } else if (t < 0.55) {
+      // Phase 3: Hold with blue flash — arms extended, glow fading
+      const p = (t - 0.35) / 0.20;
+      this.rightArmGroup.rotation.x += thrustX;
+      this.leftArmGroup.rotation.x += thrustX;
+      this.rightArmGroup.rotation.z += thrustZ;
+      this.leftArmGroup.rotation.z += -thrustZ;
+      this.bodyGroup.rotation.x += 0.15;
+      this.headGroup.rotation.x += 0.08 * (1 - p * 0.5);
+    } else {
+      // Phase 4: Recovery — arms return to normal
+      const p = (t - 0.55) / 0.45;
+      const ease = p * p * (3 - 2 * p);
+      this.rightArmGroup.rotation.x += thrustX * (1 - ease);
+      this.leftArmGroup.rotation.x += thrustX * (1 - ease);
+      this.rightArmGroup.rotation.z += thrustZ * (1 - ease);
+      this.leftArmGroup.rotation.z += -thrustZ * (1 - ease);
+      this.bodyGroup.rotation.x += 0.15 * (1 - ease);
+    }
+  }
+
+  override setAbilityBuffActive(buffId: string, active: boolean): void {
+    if (buffId === 'crash-out') {
+      this.crashOutActive = active;
+    } else if (buffId === 'retard-strength') {
+      this.retardStrengthActive = active;
+    } else if (buffId === 'full-retard') {
+      this.fullRetardActive = active;
+    }
+  }
+
+  private spawnStickyFingersGlow(): void {
+    const parent = this.group.parent;
+    if (!parent) return;
+    const scene = parent.parent;
+    if (!scene) return;
+
+    // Forward direction from parent mesh rotation (not model group which has PI baked in)
+    const rotY = parent.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+
+    const geo = new THREE.SphereGeometry(0.06, 8, 8);
+
+    // Spawn glowing orbs on both hands
+    for (const armGroup of [this.rightArmGroup, this.leftArmGroup]) {
+      const handPos = new THREE.Vector3();
+      armGroup.getWorldPosition(handPos);
+      // Offset forward to hand tip (arms are thrust forward in the animation)
+      handPos.addScaledVector(forward, 0.45);
+      handPos.y -= 0.15;
+
+      // Burst of small blue particles from each hand
+      for (let i = 0; i < 8; i++) {
+        const mat = new THREE.MeshBasicMaterial({
+          color: i < 4 ? 0x44aaff : 0x88ccff,
+          transparent: true,
+          opacity: 0.9,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.copy(handPos);
+        // Small random spread around the hand
+        mesh.position.x += (Math.random() - 0.5) * 0.1;
+        mesh.position.y += (Math.random() - 0.5) * 0.1;
+        mesh.position.z += (Math.random() - 0.5) * 0.1;
+        const s = 0.4 + Math.random() * 0.8;
+        mesh.scale.setScalar(s);
+        scene.add(mesh);
+        this.stickyGlowMeshes.push({ mesh, life: 0.3 + Math.random() * 0.2 });
+      }
+    }
+  }
+
 }

@@ -490,6 +490,12 @@ function startMultiplayer(msg: S2C_GameStart): void {
       }
     }
   };
+  clientEngine.onManaDrained = (amount) => {
+    const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
+    if (mesh && mpCombatText) {
+      mpCombatText.spawnText(mesh, `+${amount} Mana`, '#3388ff', true);
+    }
+  };
 
   // Create UI elements for MP game
   setupMultiplayerUI(msg);
@@ -577,6 +583,12 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
       if (mesh && mpCombatText) {
         mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
       }
+    }
+  };
+  clientEngine.onManaDrained = (amount) => {
+    const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
+    if (mesh && mpCombatText) {
+      mpCombatText.spawnText(mesh, `+${amount} Mana`, '#3388ff', true);
     }
   };
 
@@ -1936,8 +1948,26 @@ async function startPlayground(): Promise<void> {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
       }
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
+    }
+    if (ability.id === 'sticky-fingers') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target) {
+        const stealable = engine.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
+        if (stealable.length > 0) {
+          const stolen = stealable[Math.floor(Math.random() * stealable.length)];
+          const remainingTime = stolen.remaining;
+          engine.buffSystem.remove(target, stolen.definition.id);
+          engine.buffSystem.apply(engine.playerController, stolen.definition);
+          engine.buffSystem.setRemaining(engine.playerController, stolen.definition.id, remainingTime);
+        } else {
+          const drain = Math.min(150, target.mana);
+          target.mana -= drain;
+          engine.playerController.mana = Math.min(engine.playerController.mana + 150, engine.playerController.maxMana);
+          combatText.spawnText(engine.playerController.mesh, '+150 Mana', '#3388ff', true);
+        }
+      }
     }
 
     // Melee abilities automatically engage auto-attack on the target
@@ -2166,7 +2196,7 @@ async function startUISetup(): Promise<void> {
 
   // Character selector (floating top-left panel, no debug sidebar)
   const charContainer = document.getElementById('character-selector-container')!;
-  new CharacterSelector(engine, charContainer);
+  new CharacterSelector(engine, charContainer, { excludePlaygroundOnly: true });
 
   // Unit frames
   const setTarget = (t: Targetable) => { engine.targetingSystem.currentTarget = t; };
@@ -2336,8 +2366,26 @@ async function startUISetup(): Promise<void> {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
       }
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
+    }
+    if (ability.id === 'sticky-fingers') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target) {
+        const stealable = engine.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
+        if (stealable.length > 0) {
+          const stolen = stealable[Math.floor(Math.random() * stealable.length)];
+          const remainingTime = stolen.remaining;
+          engine.buffSystem.remove(target, stolen.definition.id);
+          engine.buffSystem.apply(engine.playerController, stolen.definition);
+          engine.buffSystem.setRemaining(engine.playerController, stolen.definition.id, remainingTime);
+        } else {
+          const drain = Math.min(150, target.mana);
+          target.mana -= drain;
+          engine.playerController.mana = Math.min(engine.playerController.mana + 150, engine.playerController.maxMana);
+          combatText.spawnText(engine.playerController.mesh, '+150 Mana', '#3388ff', true);
+        }
+      }
     }
     if (MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {
       const target = engine.targetingSystem.currentTarget;
