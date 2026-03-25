@@ -674,6 +674,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   mpPlayerFrame = new UnitFrame({
     getPortrait,
     onClick: mpSetTarget,
+    hideCastBar: true,
     onBuffRightClick: (buffId) => {
       clientEngine?.sendCancelBuff(buffId);
     },
@@ -697,7 +698,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   mpPositioner = new UnitFramePositioner();
   document.body.appendChild(mpPositioner.register('player', mpPlayerFrame.element, { top: 12, left: 12 }));
   document.body.appendChild(mpPositioner.register('target', mpTargetFrame.element, { top: 12, left: 280 }));
-  document.body.appendChild(mpPositioner.register('tot', mpToTFrame.element, { top: 84, left: 390 }));
+  document.body.appendChild(mpPositioner.register('tot', mpToTFrame.element, { top: 51, left: 544 }));
   document.body.appendChild(mpPositioner.register('party', mpPartyFrames.element, { top: 150, left: 12 }, { stayBelow: { frameId: 'player', gap: 8 } }));
   const arenaDefaultLeft = window.innerWidth - 250;
   const arenaDefaultTop = Math.round(window.innerHeight / 2 - 100);
@@ -1783,6 +1784,7 @@ async function startPlayground(): Promise<void> {
   const playerFrame = new UnitFrame({
     getPortrait,
     onClick: setTarget,
+    hideCastBar: true,
     onBuffRightClick: (buffId) => {
       engine.buffSystem.remove(engine.playerController, buffId);
     },
@@ -1797,7 +1799,7 @@ async function startPlayground(): Promise<void> {
   pgPositioner = new UnitFramePositioner();
   document.body.appendChild(pgPositioner.register('player', playerFrame.element, { top: 12, left: 12 }));
   document.body.appendChild(pgPositioner.register('target', targetFrame.element, { top: 12, left: 280 }));
-  document.body.appendChild(pgPositioner.register('tot', totFrame.element, { top: 84, left: 390 }));
+  document.body.appendChild(pgPositioner.register('tot', totFrame.element, { top: 51, left: 544 }));
 
   const errorText = new ErrorText();
   pgErrorText = errorText;
@@ -2171,6 +2173,7 @@ async function startUISetup(): Promise<void> {
   const playerFrame = new UnitFrame({
     getPortrait,
     onClick: setTarget,
+    hideCastBar: true,
     onBuffRightClick: (buffId) => {
       engine.buffSystem.remove(engine.playerController, buffId);
     },
@@ -2184,7 +2187,7 @@ async function startUISetup(): Promise<void> {
   pgPositioner = new UnitFramePositioner();
   document.body.appendChild(pgPositioner.register('player', playerFrame.element, { top: 12, left: 12 }));
   document.body.appendChild(pgPositioner.register('target', targetFrame.element, { top: 12, left: 280 }));
-  document.body.appendChild(pgPositioner.register('tot', totFrame.element, { top: 84, left: 390 }));
+  document.body.appendChild(pgPositioner.register('tot', totFrame.element, { top: 51, left: 544 }));
 
   // ── Party & arena frames backed by real NPCs ────────────────────────
   const npcEntities = practiceNpcs.map((npc, i) => ({

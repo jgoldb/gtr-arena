@@ -1122,6 +1122,21 @@ export class ClientEngine {
       }
     }
 
+    // Sync local casting state to PlayerController so the target frame cast bar works when targeting self
+    if (this.localCastingAbilityId) {
+      const stats = getCharacterStats(this.playerController.characterId as CharacterId);
+      const ability = stats.abilities.find(a => a.id === this.localCastingAbilityId);
+      this.playerController.castingAbilityName = ability?.name ?? this.localCastingAbilityId;
+      this.playerController.castingElapsed = this.localCastingElapsed;
+      this.playerController.castingTotalTime = this.localCastingTotalTime;
+      this.playerController.castingIsChannel = this.localCastingIsChannel;
+    } else {
+      this.playerController.castingAbilityName = null;
+      this.playerController.castingElapsed = 0;
+      this.playerController.castingTotalTime = 0;
+      this.playerController.castingIsChannel = false;
+    }
+
     // Update local player cast/channel animations
     if (this.localCastingAbilityId) {
       if (this.localCastingIsChannel) {
@@ -1157,6 +1172,11 @@ export class ClientEngine {
       this.network.send({ type: 'toggle_god_mode' });
     }
     this.gKeyWasDown = gKeyDown;
+
+    // Cancel casting on jump
+    if (this.localCastingAbilityId && this.input.isBindDown(keybindManager.getCode('jump'))) {
+      this.sendCancelCast();
+    }
 
     // Cancel resting on movement or jump
     if (this.resting) {
@@ -1392,7 +1412,7 @@ export class ClientEngine {
     }
 
     // Update cursor for hover detection (only when pointer is unlocked)
-    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.getMouseScreenPosAlways());
+    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.isMouseButtonDown('right'));
 
     // Update targeting ring animation + target highlight
     this.targetingSystem.update(dt);

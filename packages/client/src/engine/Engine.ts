@@ -1481,7 +1481,7 @@ export class Engine {
     }
 
     // Update cursor for hover detection (only when pointer is unlocked)
-    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.getMouseScreenPosAlways());
+    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.isMouseButtonDown('right'));
 
     this.updateAutoAttack(deltaTime);
 
@@ -1598,11 +1598,12 @@ export class Engine {
     if (this.casting) {
       this.casting.elapsed += deltaTime;
 
-      // Cancel if dead, stunned, or moving
+      // Cancel if dead, stunned, moving, or jumping
       const castMoving =
         this.input.isKeyDown('KeyW') || this.input.isKeyDown('KeyS') ||
         this.input.isKeyDown('KeyA') || this.input.isKeyDown('KeyD') ||
-        (this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right'));
+        (this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right')) ||
+        this.input.isBindDown(keybindManager.getCode('jump'));
 
       if (this.playerController.dead || playerStunned || castMoving) {
         this.cancelCasting();
@@ -1667,6 +1668,19 @@ export class Engine {
     } else {
       this.playerController.setCastAnimation(null, 0);
       this.playerController.setChannelAnimation(null, 0);
+    }
+
+    // Sync casting state to PlayerController so the target frame cast bar works when targeting self
+    if (this.casting) {
+      this.playerController.castingAbilityName = this.casting.ability.name;
+      this.playerController.castingElapsed = this.casting.elapsed;
+      this.playerController.castingTotalTime = this.casting.totalTime;
+      this.playerController.castingIsChannel = this.casting.isChannel;
+    } else {
+      this.playerController.castingAbilityName = null;
+      this.playerController.castingElapsed = 0;
+      this.playerController.castingTotalTime = 0;
+      this.playerController.castingIsChannel = false;
     }
 
     // Sweep charge: move player before collision resolution in player update

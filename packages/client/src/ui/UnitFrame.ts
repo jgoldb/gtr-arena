@@ -7,6 +7,7 @@ export interface UnitFrameOptions {
   getPortrait?: (modelName: string) => string | undefined;
   onClick?: (target: Targetable) => void;
   onBuffRightClick?: (buffId: string) => void;
+  hideCastBar?: boolean;
 }
 
 export class UnitFrame {
@@ -31,15 +32,20 @@ export class UnitFrame {
   private currentTarget: Targetable | null = null;
   private onClick: ((target: Targetable) => void) | undefined;
   private onBuffRightClick: ((buffId: string) => void) | undefined;
+  private hideCastBar: boolean;
   private combatTextEl: HTMLElement;
   private combatTextTimer = -1; // -1 = inactive
   private disconnectOverlay: HTMLElement;
   private tooltipEl: HTMLElement;
   private tooltipHoveredEl: HTMLElement | null = null;
+  private castBarContainer: HTMLElement;
+  private castBarFill: HTMLElement;
+  private castBarLabel: HTMLElement;
 
   constructor(options?: UnitFrameOptions) {
     this.localPlayer = options?.localPlayer;
     this.getPortrait = options?.getPortrait;
+    this.hideCastBar = options?.hideCastBar ?? false;
     this.onClick = options?.onClick;
     this.onBuffRightClick = options?.onBuffRightClick;
 
@@ -182,6 +188,40 @@ export class UnitFrame {
     this.debuffTray = document.createElement('div');
     this.debuffTray.style.cssText = 'display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px;';
     this.element.appendChild(this.debuffTray);
+
+    // Cast bar (below debuffs, hidden by default)
+    this.castBarContainer = document.createElement('div');
+    this.castBarContainer.style.cssText = `
+      display: none;
+      margin-top: 4px;
+      height: 14px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      position: relative;
+      overflow: hidden;
+    `;
+
+    this.castBarFill = document.createElement('div');
+    this.castBarFill.style.cssText = `
+      position: absolute;
+      top: 0; left: 0; bottom: 0;
+      background: linear-gradient(to right, #4488ff, #66aaff);
+      width: 0%;
+      transition: width 0.05s linear;
+    `;
+    this.castBarContainer.appendChild(this.castBarFill);
+
+    this.castBarLabel = document.createElement('div');
+    this.castBarLabel.style.cssText = `
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-size: 10px;
+      text-shadow: 1px 1px 1px rgba(0,0,0,0.9);
+    `;
+    this.castBarContainer.appendChild(this.castBarLabel);
+    this.element.appendChild(this.castBarContainer);
 
     // Shared tooltip for buff/debuff icons
     this.tooltipEl = document.createElement('div');
@@ -570,5 +610,23 @@ export class UnitFrame {
     // Buff / debuff trays
     this.updateAuraTray(this.buffTray, this.buffIcons, buffs ?? [], false);
     this.updateAuraTray(this.debuffTray, this.debuffIcons, debuffs ?? [], true);
+
+    // Cast bar
+    if (!this.hideCastBar && target.castingAbilityName && target.castingTotalTime > 0) {
+      this.castBarContainer.style.display = 'block';
+      let progress: number;
+      if (target.castingIsChannel) {
+        progress = Math.max(0, (target.castingTotalTime - target.castingElapsed) / target.castingTotalTime);
+        this.castBarFill.style.background = 'linear-gradient(to right, #cc8833, #eebb55)';
+      } else {
+        progress = Math.min(1, target.castingElapsed / target.castingTotalTime);
+        this.castBarFill.style.background = 'linear-gradient(to right, #4488ff, #66aaff)';
+      }
+      this.castBarFill.style.width = `${progress * 100}%`;
+      const remaining = Math.max(0, target.castingTotalTime - target.castingElapsed);
+      this.castBarLabel.textContent = `${target.castingAbilityName} ${remaining.toFixed(1)}s`;
+    } else {
+      this.castBarContainer.style.display = 'none';
+    }
   }
 }

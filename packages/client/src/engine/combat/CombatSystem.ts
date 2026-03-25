@@ -250,7 +250,7 @@ export class CombatSystem {
       if (!target) {
         return { success: false, error: 'no-target', errorMessage: 'No target' };
       }
-      if (ability.range) {
+      if (ability.range && attacker !== target) {
         if (!this.collisionSystem.hasLineOfSight(
           attacker.mesh.position.x, attacker.mesh.position.z,
           target.mesh.position.x, target.mesh.position.z,

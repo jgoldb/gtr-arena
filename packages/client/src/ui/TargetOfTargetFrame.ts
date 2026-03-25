@@ -34,8 +34,6 @@ export class TargetOfTargetFrame {
       display: none;
       cursor: pointer;
       user-select: none;
-      margin-top: 4px;
-      margin-left: auto;
     `;
 
     this.element.addEventListener('mousedown', (e) => {

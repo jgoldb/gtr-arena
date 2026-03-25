@@ -504,8 +504,8 @@ export class ArenaFrames {
       frame.element.style.borderColor = isSelected ? '#ff4444' : 'rgba(255, 255, 255, 0.15)';
       frame.element.style.borderWidth = isSelected ? '2px' : '1px';
 
-      // Cast bar
-      if (t.castingAbilityName && t.castingTotalTime > 0) {
+      // Cast bar (hidden during arena prep)
+      if (!this._disabled && t.castingAbilityName && t.castingTotalTime > 0) {
         frame.castBarContainer.style.display = 'block';
         let progress: number;
         if (t.castingIsChannel) {

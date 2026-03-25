@@ -123,9 +123,6 @@ export class InputManager {
       } else {
         this.mouseDelta.x += e.movementX;
         this.mouseDelta.y += e.movementY;
-        // Track virtual screen position during pointer lock (for ground targeting)
-        this.mouseScreenX = Math.max(0, Math.min(window.innerWidth, this.mouseScreenX + e.movementX));
-        this.mouseScreenY = Math.max(0, Math.min(window.innerHeight, this.mouseScreenY + e.movementY));
       }
     } else {
       // Track screen position for hover detection

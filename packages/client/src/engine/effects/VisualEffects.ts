@@ -324,8 +324,8 @@ export function createChannelBeam(scene: THREE.Scene): THREE.Mesh {
 
 /** Position and animate channel beam between caster and target. */
 export function updateChannelBeam(beam: THREE.Mesh, casterPos: THREE.Vector3, targetPos: THREE.Vector3, elapsed: number): void {
-  const start = new THREE.Vector3(casterPos.x, 1.6, casterPos.z);
-  const end = new THREE.Vector3(targetPos.x, 1.0, targetPos.z);
+  const start = new THREE.Vector3(casterPos.x, casterPos.y + 1.6, casterPos.z);
+  const end = new THREE.Vector3(targetPos.x, targetPos.y + 1.0, targetPos.z);
   const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
   const direction = new THREE.Vector3().subVectors(end, start);
   const length = direction.length();

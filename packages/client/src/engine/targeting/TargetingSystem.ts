@@ -23,6 +23,8 @@ export class TargetingSystem {
   private groundTargetRange = 0;
   private groundTargetSkipLOS = false;
   private groundTargetPos = new THREE.Vector3();
+  private groundTargetNormal = new THREE.Vector3(0, 1, 0);
+  private _quatHelper?: THREE.Quaternion;
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private groundTargetTime = 0;
   private losRaycaster = new THREE.Raycaster();
@@ -128,7 +130,11 @@ export class TargetingSystem {
     // Animate ground targeting reticle
     if (this.groundTargetActive) {
       this.groundTargetTime += dt;
-      this.groundTargetCircle.rotation.y = this.groundTargetTime * 1.5;
+      // Align reticle to surface normal, then apply spin around that normal
+      const up = new THREE.Vector3(0, 1, 0);
+      const q = new THREE.Quaternion().setFromUnitVectors(up, this.groundTargetNormal);
+      const spin = new THREE.Quaternion().setFromAxisAngle(this.groundTargetNormal, this.groundTargetTime * 1.5);
+      this.groundTargetCircle.quaternion.copy(spin.multiply(q));
       const pulse = 0.8 + Math.sin(this.groundTargetTime * 4) * 0.2;
       const color = this.groundTargetBlocked ? 0xff4444 : 0x44ff44;
       for (const mat of this.groundTargetMats) {
@@ -305,15 +311,18 @@ export class TargetingSystem {
 
   /** Update canvas cursor based on whether mouse is hovering a targetable.
    *  @param alwaysScreenPos — mouse position that tracks even during pointer lock (for ground targeting reticle). */
-  updateHoverCursor(screenPos: { x: number; y: number } | null, alwaysScreenPos?: { x: number; y: number }): void {
+  updateHoverCursor(screenPos: { x: number; y: number } | null, rightMouseDown = false): void {
     if (this.groundTargetActive) {
-      // During ground targeting, update the reticle using the always-available position
-      // so the reticle follows the cursor even during right-click camera drag
-      const gtPos = alwaysScreenPos ?? screenPos;
-      if (gtPos) {
-        this.updateGroundTargetPosition(gtPos.x, gtPos.y);
+      // Hide during right-click camera drag. screenPos is null while pointer lock
+      // is active, so the reticle stays hidden until the lock fully exits.
+      if (!rightMouseDown && screenPos) {
+        this.updateGroundTargetPosition(screenPos.x, screenPos.y);
+        this.groundTargetCircle.visible = true;
+        this.canvas.style.cursor = 'crosshair';
+      } else {
+        this.groundTargetCircle.visible = false;
+        this.canvas.style.cursor = '';
       }
-      this.canvas.style.cursor = 'crosshair';
       return;
     }
     if (!screenPos) {
@@ -386,10 +395,17 @@ export class TargetingSystem {
 
     const sceneHits = this.raycaster.intersectObjects(this.scene.children, true);
     let foundSurface = false;
+    let surfaceNormal = new THREE.Vector3(0, 1, 0);
     for (const hit of sceneHits) {
       if (this.isWalkableSurface(hit)) {
         hitPoint.copy(hit.point);
         surfaceY = hit.point.y;
+        if (hit.face) {
+          surfaceNormal.copy(hit.face.normal);
+          // Transform normal from object-local to world space
+          hit.object.getWorldQuaternion(this._quatHelper ??= new THREE.Quaternion());
+          surfaceNormal.applyQuaternion(this._quatHelper);
+        }
         foundSurface = true;
         break;
       }
@@ -412,6 +428,7 @@ export class TargetingSystem {
       hitPoint.z = playerPos.z + dz * scale;
       // When clamped, revert to player Y since we moved off the original surface
       surfaceY = playerPos.y;
+      surfaceNormal.set(0, 1, 0);
     }
 
     // LOS check: raycast from player eye height to target surface height
@@ -439,6 +456,7 @@ export class TargetingSystem {
     }
 
     this.groundTargetPos.set(hitPoint.x, surfaceY, hitPoint.z);
+    this.groundTargetNormal.copy(surfaceNormal);
     this.groundTargetCircle.position.set(hitPoint.x, surfaceY + 0.04, hitPoint.z);
   }
 

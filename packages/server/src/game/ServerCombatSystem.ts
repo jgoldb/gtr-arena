@@ -214,7 +214,7 @@ export class ServerCombatSystem {
       if (!target) {
         return { success: false, error: 'no-target', errorMessage: 'No target' };
       }
-      if (ability.range) {
+      if (ability.range && attacker !== target) {
         const tx = targetPosOverride?.x ?? target.x;
         const tz = targetPosOverride?.z ?? target.z;
         if (!this.collision.hasLineOfSight(attacker.x, attacker.z, tx, tz, attacker.y, target!.y)) {
