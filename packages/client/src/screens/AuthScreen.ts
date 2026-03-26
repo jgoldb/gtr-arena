@@ -289,18 +289,22 @@ export class AuthScreen {
         { x: 950, y: stripCY + 20, rx: 75, ry: 55, rot: 0.15 },
         { x: 1180, y: stripCY - 50, rx: 65, ry: 45, rot: -0.3 },
       ]) {
-        p.save();
-        p.translate(w.x, w.y);
-        p.rotate(w.rot);
-        p.beginPath();
-        p.ellipse(0, 0, w.rx, w.ry, 0, 0, Math.PI * 2);
-        const g = p.createRadialGradient(0, 0, 0, 0, 0, w.rx);
-        g.addColorStop(0, '#1a7aaa');
-        g.addColorStop(0.5, '#0e5570');
-        g.addColorStop(1, '#0a3850');
-        p.fillStyle = g;
-        p.fill();
-        p.restore();
+        for (const ox of [-STRIP_W, 0, STRIP_W]) {
+          const wx = w.x + ox;
+          if (wx + w.rx < 0 || wx - w.rx > STRIP_W) continue;
+          p.save();
+          p.translate(wx, w.y);
+          p.rotate(w.rot);
+          p.beginPath();
+          p.ellipse(0, 0, w.rx, w.ry, 0, 0, Math.PI * 2);
+          const g = p.createRadialGradient(0, 0, 0, 0, 0, w.rx);
+          g.addColorStop(0, '#1a7aaa');
+          g.addColorStop(0.5, '#0e5570');
+          g.addColorStop(1, '#0a3850');
+          p.fillStyle = g;
+          p.fill();
+          p.restore();
+        }
       }
 
       // Forest continents
@@ -314,18 +318,23 @@ export class AuthScreen {
         { x: 1050, y: stripCY - 70, rx: 65, ry: 50, rot: 0.3 },
         { x: 1230, y: stripCY + 40, rx: 45, ry: 55, rot: -0.2 },
       ]) {
-        p.save();
-        p.translate(f.x, f.y);
-        p.rotate(f.rot);
-        p.beginPath();
-        p.ellipse(0, 0, f.rx, f.ry, 0, 0, Math.PI * 2);
-        const g = p.createRadialGradient(0, 0, 0, 0, 0, f.rx);
-        g.addColorStop(0, '#2d7a1e');
-        g.addColorStop(0.4, '#1a5515');
-        g.addColorStop(1, '#0a2808');
-        p.fillStyle = g;
-        p.fill();
-        p.restore();
+        const maxR = Math.max(f.rx, f.ry);
+        for (const ox of [-STRIP_W, 0, STRIP_W]) {
+          const fx = f.x + ox;
+          if (fx + maxR < 0 || fx - maxR > STRIP_W) continue;
+          p.save();
+          p.translate(fx, f.y);
+          p.rotate(f.rot);
+          p.beginPath();
+          p.ellipse(0, 0, f.rx, f.ry, 0, 0, Math.PI * 2);
+          const g = p.createRadialGradient(0, 0, 0, 0, 0, f.rx);
+          g.addColorStop(0, '#2d7a1e');
+          g.addColorStop(0.4, '#1a5515');
+          g.addColorStop(1, '#0a2808');
+          p.fillStyle = g;
+          p.fill();
+          p.restore();
+        }
       }
 
       // Lava rivers
@@ -337,51 +346,59 @@ export class AuthScreen {
         { x: 1100, y: stripCY + 30, rx: 55, ry: 3, rot: 0.9 },
         { x: 280, y: stripCY - 50, rx: 35, ry: 3, rot: -0.6 },
       ]) {
-        p.save();
-        p.translate(lv.x, lv.y);
-        p.rotate(lv.rot);
-        p.beginPath();
-        p.ellipse(0, 0, lv.rx, lv.ry + 6, 0, 0, Math.PI * 2);
-        p.fillStyle = 'rgba(255,60,0,0.12)';
-        p.fill();
-        p.beginPath();
-        p.ellipse(0, 0, lv.rx, lv.ry, 0, 0, Math.PI * 2);
-        const g = p.createLinearGradient(-lv.rx, 0, lv.rx, 0);
-        g.addColorStop(0, 'rgba(255,80,10,0.1)');
-        g.addColorStop(0.2, '#ff5500');
-        g.addColorStop(0.5, '#ff7700');
-        g.addColorStop(0.8, '#ff5500');
-        g.addColorStop(1, 'rgba(255,80,10,0.1)');
-        p.fillStyle = g;
-        p.fill();
-        p.restore();
+        for (const ox of [-STRIP_W, 0, STRIP_W]) {
+          const lvx = lv.x + ox;
+          if (lvx + lv.rx < 0 || lvx - lv.rx > STRIP_W) continue;
+          p.save();
+          p.translate(lvx, lv.y);
+          p.rotate(lv.rot);
+          p.beginPath();
+          p.ellipse(0, 0, lv.rx, lv.ry + 6, 0, 0, Math.PI * 2);
+          p.fillStyle = 'rgba(255,60,0,0.12)';
+          p.fill();
+          p.beginPath();
+          p.ellipse(0, 0, lv.rx, lv.ry, 0, 0, Math.PI * 2);
+          const g = p.createLinearGradient(-lv.rx, 0, lv.rx, 0);
+          g.addColorStop(0, 'rgba(255,80,10,0.1)');
+          g.addColorStop(0.2, '#ff5500');
+          g.addColorStop(0.5, '#ff7700');
+          g.addColorStop(0.8, '#ff5500');
+          g.addColorStop(1, 'rgba(255,80,10,0.1)');
+          p.fillStyle = g;
+          p.fill();
+          p.restore();
+        }
       }
 
       // Volcano craters
       for (const v of volcanoStripPos) {
-        p.beginPath();
-        p.arc(v.x, v.y, v.r * 1.4, 0, Math.PI * 2);
-        const cg = p.createRadialGradient(v.x, v.y, 0, v.x, v.y, v.r * 1.4);
-        cg.addColorStop(0, '#cc5500');
-        cg.addColorStop(0.5, '#5a2a0a');
-        cg.addColorStop(1, '#2a1505');
-        p.fillStyle = cg;
-        p.fill();
-        p.beginPath();
-        p.arc(v.x, v.y, v.r * 0.5, 0, Math.PI * 2);
-        const lg = p.createRadialGradient(v.x, v.y, 0, v.x, v.y, v.r * 0.5);
-        lg.addColorStop(0, '#ffdd00');
-        lg.addColorStop(0.5, '#ff8800');
-        lg.addColorStop(1, '#cc4400');
-        p.fillStyle = lg;
-        p.fill();
-        p.beginPath();
-        p.arc(v.x, v.y, v.r * 2.5, 0, Math.PI * 2);
-        const hg = p.createRadialGradient(v.x, v.y, 0, v.x, v.y, v.r * 2.5);
-        hg.addColorStop(0, 'rgba(255,120,0,0.12)');
-        hg.addColorStop(1, 'rgba(255,60,0,0)');
-        p.fillStyle = hg;
-        p.fill();
+        for (const ox of [-STRIP_W, 0, STRIP_W]) {
+          const vx = v.x + ox;
+          if (vx + v.r * 2.5 < 0 || vx - v.r * 2.5 > STRIP_W) continue;
+          p.beginPath();
+          p.arc(vx, v.y, v.r * 1.4, 0, Math.PI * 2);
+          const cg = p.createRadialGradient(vx, v.y, 0, vx, v.y, v.r * 1.4);
+          cg.addColorStop(0, '#cc5500');
+          cg.addColorStop(0.5, '#5a2a0a');
+          cg.addColorStop(1, '#2a1505');
+          p.fillStyle = cg;
+          p.fill();
+          p.beginPath();
+          p.arc(vx, v.y, v.r * 0.5, 0, Math.PI * 2);
+          const lg = p.createRadialGradient(vx, v.y, 0, vx, v.y, v.r * 0.5);
+          lg.addColorStop(0, '#ffdd00');
+          lg.addColorStop(0.5, '#ff8800');
+          lg.addColorStop(1, '#cc4400');
+          p.fillStyle = lg;
+          p.fill();
+          p.beginPath();
+          p.arc(vx, v.y, v.r * 2.5, 0, Math.PI * 2);
+          const hg = p.createRadialGradient(vx, v.y, 0, vx, v.y, v.r * 2.5);
+          hg.addColorStop(0, 'rgba(255,120,0,0.12)');
+          hg.addColorStop(1, 'rgba(255,60,0,0)');
+          p.fillStyle = hg;
+          p.fill();
+        }
       }
 
       // Storm cloud mass
@@ -438,6 +455,38 @@ export class AuthScreen {
     this.element.appendChild(astroEl);
     let astroReady = false;
     astroEl.onload = () => { astroReady = true; };
+
+    // ── Nick Sanders — fast flyby in a magical bubble ────────────
+    const nickBubbleEl = document.createElement('div');
+    nickBubbleEl.style.cssText = `
+      position: absolute; pointer-events: none; display: none; z-index: 0;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%,
+        rgba(200,230,255,0.1) 0%, rgba(140,180,255,0.18) 30%,
+        rgba(120,160,255,0.28) 60%, rgba(100,200,255,0.38) 80%,
+        rgba(150,220,255,0.06) 100%);
+      box-shadow: 0 0 25px rgba(120,180,255,0.5), 0 0 50px rgba(150,100,255,0.25),
+        inset 0 0 30px rgba(200,230,255,0.25);
+      overflow: hidden;
+    `;
+    const nickHighlight = document.createElement('div');
+    nickHighlight.style.cssText = `
+      position: absolute; bottom: 10%; right: 12%; width: 35%; height: 22%;
+      background: radial-gradient(ellipse, rgba(255,255,255,0.35) 0%, transparent 100%);
+      border-radius: 50%; transform: rotate(25deg); pointer-events: none; z-index: 2;
+    `;
+    nickBubbleEl.appendChild(nickHighlight);
+    const nickImg = document.createElement('img');
+    nickImg.src = '/nick_sanders.png';
+    let nickReady = false;
+    nickImg.onload = () => { nickReady = true; };
+    nickImg.style.cssText = `
+      position: absolute; top: 50%; left: 50%; width: 80%; height: 80%;
+      transform: translate(-50%, -50%); object-fit: contain;
+      border-radius: 50%; z-index: 1;
+    `;
+    nickBubbleEl.appendChild(nickImg);
+    this.element.appendChild(nickBubbleEl);
 
     // Thought bubble — bottom-left anchored to astronaut's top-right corner
     const bubbleWrap = document.createElement('div');
@@ -525,7 +574,19 @@ export class AuthScreen {
     };
     let astronaut: Astronaut | null = null;
     let astroSpawnTime = 0; // timestamp of next spawn
-    const ASTRO_INTERVAL = 10000; // 10 seconds
+    const ASTRO_INTERVAL = 3000; // 3 seconds
+    let nextIsNick = false; // alternates between astronaut and nick
+
+    type NickFlyby = {
+      startX: number; startY: number;
+      endX: number; endY: number;
+      t: number;
+      speed: number;
+      rotation: number;
+      rotSpeed: number;
+      size: number;
+    };
+    let nickFlyby: NickFlyby | null = null;
 
     const spawnAstronaut = (): Astronaut => {
       const w = canvas.width, h = canvas.height;
@@ -588,6 +649,31 @@ export class AuthScreen {
       return catmullRom(p0, p1, p2, p3, localT);
     };
 
+    const spawnNickFlyby = (): NickFlyby => {
+      const w = canvas.width, h = canvas.height;
+      const margin = 200;
+      const edge = Math.floor(Math.random() * 4);
+      let startX: number, startY: number;
+      if (edge === 0) { startX = -margin; startY = Math.random() * h; }
+      else if (edge === 1) { startX = w + margin; startY = Math.random() * h; }
+      else if (edge === 2) { startX = Math.random() * w; startY = -margin; }
+      else { startX = Math.random() * w; startY = h + margin; }
+      const exitEdge = edge ^ 1;
+      let endX: number, endY: number;
+      if (exitEdge === 0) { endX = -margin; endY = Math.random() * h; }
+      else if (exitEdge === 1) { endX = w + margin; endY = Math.random() * h; }
+      else if (exitEdge === 2) { endX = Math.random() * w; endY = -margin; }
+      else { endX = Math.random() * w; endY = h + margin; }
+      return {
+        startX, startY, endX, endY,
+        t: 0,
+        speed: 0.0015 + Math.random() * 0.001,
+        rotation: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() > 0.5 ? 1 : -1) * (0.012 + Math.random() * 0.01),
+        size: 280 + Math.random() * 60,
+      };
+    };
+
     // ── Single merged animation loop ─────────────────────────────
     // Astronaut DOM updates run every frame (smooth 60fps movement).
     // Canvas drawing is throttled to ~15fps (plenty for slow ambient motion).
@@ -600,21 +686,26 @@ export class AuthScreen {
       if (document.hidden) return;
 
       // ── Astronaut update (every frame for smooth DOM movement) ──
-      if (astroReady) {
+      if (astroReady || nickReady) {
         const dt = astroLastTime ? Math.min((now - astroLastTime) / (1000 / 60), 3) : 1;
         astroLastTime = now;
 
         if (astroSpawnTime === 0) astroSpawnTime = now + ASTRO_INTERVAL;
 
-        if (!astronaut && now >= astroSpawnTime) {
-          astronaut = spawnAstronaut();
-          astroEl.style.display = 'block';
-          bubble.textContent = nextThought();
-          bubbleVisible = false;
-          bubbleDone = false;
-          bubbleShowTime = 0;
-          bubbleScale = 0;
-          bubbleWrap.style.display = 'none';
+        if (!astronaut && !nickFlyby && now >= astroSpawnTime) {
+          if (nextIsNick && nickReady) {
+            nickFlyby = spawnNickFlyby();
+            nickBubbleEl.style.display = 'block';
+          } else if (astroReady) {
+            astronaut = spawnAstronaut();
+            astroEl.style.display = 'block';
+            bubble.textContent = nextThought();
+            bubbleVisible = false;
+            bubbleDone = false;
+            bubbleShowTime = 0;
+            bubbleScale = 0;
+            bubbleWrap.style.display = 'none';
+          }
         }
 
         if (astronaut) {
@@ -628,6 +719,7 @@ export class AuthScreen {
             bubbleWrap.style.display = 'none';
             bubbleVisible = false;
             bubbleScale = 0;
+            nextIsNick = true;
           } else {
             const pos = getAstroPos(astronaut);
             const s = astronaut.size;
@@ -669,6 +761,28 @@ export class AuthScreen {
               bubbleR *= 0.25;
               bubbleWrap.style.transform = `translate(-50%, -100%) rotate(${bubbleR}rad) scale(${bubbleScale})`;
             }
+          }
+        }
+
+        // ── Nick Sanders flyby update ──
+        if (nickFlyby) {
+          nickFlyby.t += nickFlyby.speed * dt;
+          nickFlyby.rotation += nickFlyby.rotSpeed * dt;
+
+          if (nickFlyby.t >= 1) {
+            nickFlyby = null;
+            astroSpawnTime = now + ASTRO_INTERVAL;
+            nickBubbleEl.style.display = 'none';
+            nextIsNick = false;
+          } else {
+            const nx = nickFlyby.startX + (nickFlyby.endX - nickFlyby.startX) * nickFlyby.t;
+            const ny = nickFlyby.startY + (nickFlyby.endY - nickFlyby.startY) * nickFlyby.t;
+            const s = nickFlyby.size;
+            nickBubbleEl.style.width = `${s}px`;
+            nickBubbleEl.style.height = `${s}px`;
+            nickBubbleEl.style.left = `${nx - s / 2}px`;
+            nickBubbleEl.style.top = `${ny - s / 2}px`;
+            nickBubbleEl.style.transform = `rotate(${nickFlyby.rotation}rad)`;
           }
         }
       }
