@@ -8,7 +8,7 @@ import { NetworkManager } from './network/NetworkManager';
 import { ClientEngine } from './network/ClientEngine';
 import { UnitFrame } from './ui/UnitFrame';
 import { TargetOfTargetFrame } from './ui/TargetOfTargetFrame';
-import { ActionBar } from './ui/ActionBar';
+import { ActionBar, type AbilityUsabilityStatus } from './ui/ActionBar';
 import { ErrorText } from './ui/ErrorText';
 import { FloatingCombatText } from './ui/FloatingCombatText';
 import { Nameplates } from './ui/Nameplates';
@@ -799,7 +799,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       return;
     }
     mpCancelGroundTargeting();
-    clientEngine!.predictAbility(ability.id, mpSelectedTargetId);
+    // Only predict locally if the ability looks usable client-side (prevents false GCD flicker)
+    if (mpGetAbilityStatus(ability) === 'usable') {
+      clientEngine!.predictAbility(ability.id, mpSelectedTargetId);
+    }
     clientEngine!.sendAbility(ability.id, mpSelectedTargetId);
   }
 
@@ -809,6 +812,39 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     if (!ability) return;
     mpFireAbility(ability);
   };
+
+  function mpGetAbilityStatus(ability: Ability): AbilityUsabilityStatus {
+    const effectiveManaCost = Math.round(ability.manaCost * clientEngine!.getManaCostMultiplier());
+    if (player.mana < effectiveManaCost) return 'not-enough-resource';
+    if (ability.requiresHostileTarget) {
+      if (!mpSelectedTargetId) return 'no-target';
+      const target = clientEngine!.getRemoteEntity(mpSelectedTargetId);
+      if (!target || target.dead || target.team === player.team) return 'no-target';
+      const pos = player.getPosition();
+      const dx = pos.x - target.mesh.position.x;
+      const dy = pos.y - target.mesh.position.y;
+      const dz = pos.z - target.mesh.position.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (ability.range && dist > ability.range) return 'out-of-range';
+    }
+    if (ability.requiresTarget && !ability.requiresHostileTarget) {
+      // Friendly-or-self targeted abilities (e.g. Chudmax channel)
+      // Auto self-cast if no target, but check range to non-self targets
+      const targetId = mpSelectedTargetId;
+      if (targetId && targetId !== clientEngine!.localId) {
+        const target = clientEngine!.getRemoteEntity(targetId);
+        if (!target || target.dead) return 'no-target';
+        if (ability.range) {
+          const pos = player.getPosition();
+          const dx = pos.x - target.mesh.position.x;
+          const dy = pos.y - target.mesh.position.y;
+          const dz = pos.z - target.mesh.position.z;
+          if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range) return 'out-of-range';
+        }
+      }
+    }
+    return 'usable';
+  }
 
   mpActionBar = new ActionBar({
     onActivate: (ability) => {
@@ -841,38 +877,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       clientEngine!.clearAbilityQueue();
       mpFireAbility(ability);
     },
-    getAbilityStatus: (ability) => {
-      const effectiveManaCost = Math.round(ability.manaCost * clientEngine!.getManaCostMultiplier());
-      if (player.mana < effectiveManaCost) return 'not-enough-resource';
-      if (ability.requiresHostileTarget) {
-        if (!mpSelectedTargetId) return 'no-target';
-        const target = clientEngine!.getRemoteEntity(mpSelectedTargetId);
-        if (!target || target.dead || target.team === player.team) return 'no-target';
-        const pos = player.getPosition();
-        const dx = pos.x - target.mesh.position.x;
-        const dy = pos.y - target.mesh.position.y;
-        const dz = pos.z - target.mesh.position.z;
-        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (ability.range && dist > ability.range) return 'out-of-range';
-      }
-      if (ability.requiresTarget && !ability.requiresHostileTarget) {
-        // Friendly-or-self targeted abilities (e.g. Chudmax channel)
-        // Auto self-cast if no target, but check range to non-self targets
-        const targetId = mpSelectedTargetId;
-        if (targetId && targetId !== clientEngine!.localId) {
-          const target = clientEngine!.getRemoteEntity(targetId);
-          if (!target || target.dead) return 'no-target';
-          if (ability.range) {
-            const pos = player.getPosition();
-            const dx = pos.x - target.mesh.position.x;
-            const dy = pos.y - target.mesh.position.y;
-            const dz = pos.z - target.mesh.position.z;
-            if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range) return 'out-of-range';
-          }
-        }
-      }
-      return 'usable';
-    },
+    getAbilityStatus: mpGetAbilityStatus,
     getCombatSystem: () => ({
       getCooldownRemaining: (id: string) => clientEngine!.getCooldownRemaining(id),
       getCooldownTotal: (id: string) => clientEngine!.getCooldownTotal(id),

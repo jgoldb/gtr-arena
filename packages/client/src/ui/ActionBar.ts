@@ -42,6 +42,8 @@ export class ActionBar {
   private dragSourceIndex: number | null = null;
   private unsubKeybinds: (() => void) | null = null;
   private currentCharacterId: string | null = null;
+  private pressedSlots: Set<number> = new Set();
+  private pressedTimers: Map<number, ReturnType<typeof setTimeout>> = new Map();
 
   constructor(callbacks: ActionBarCallbacks) {
     this.callbacks = callbacks;
@@ -172,12 +174,14 @@ export class ActionBar {
       const cdText = this.cooldownTexts[i];
       const statusOv = this.statusOverlays[i];
 
-      // Queued ability highlight — white glow border
+      // Queued or pressed ability highlight — white glow border
       const isQueued = slot.ability !== null && slot.ability.id === queuedId;
-      slotEl.style.borderColor = isQueued
+      const isPressed = this.pressedSlots.has(i);
+      const highlight = isQueued || isPressed;
+      slotEl.style.borderColor = highlight
         ? 'rgba(255, 255, 255, 0.9)'
         : 'rgba(255, 255, 255, 0.2)';
-      slotEl.style.boxShadow = isQueued
+      slotEl.style.boxShadow = highlight
         ? '0 0 8px rgba(255, 255, 255, 0.5), inset 0 0 4px rgba(255, 255, 255, 0.2)'
         : 'none';
 
@@ -346,6 +350,7 @@ export class ActionBar {
       const ab = this.slots[index].ability;
       if (!ab) return;
       if (this.callbacks.isDisabled?.() && !ab.usableWhileCCd) return;
+      this.flashSlot(index);
       this.callbacks.onActivate(ab);
     });
 
@@ -469,14 +474,26 @@ export class ActionBar {
 
   private onKeyDown = (e: KeyboardEvent): void => {
     const disabled = this.callbacks.isDisabled?.() ?? false;
-    for (const slot of this.slots) {
+    for (let i = 0; i < this.slots.length; i++) {
+      const slot = this.slots[i];
       if (matchesKeybindEvent(slot.keyCode, e) && slot.ability) {
         if (disabled && !slot.ability.usableWhileCCd) return;
+        this.flashSlot(i);
         this.callbacks.onActivate(slot.ability);
         break;
       }
     }
   };
+
+  private flashSlot(index: number): void {
+    this.pressedSlots.add(index);
+    const existing = this.pressedTimers.get(index);
+    if (existing) clearTimeout(existing);
+    this.pressedTimers.set(index, setTimeout(() => {
+      this.pressedSlots.delete(index);
+      this.pressedTimers.delete(index);
+    }, 150));
+  }
 
   private refreshKeybinds(): void {
     for (let i = 0; i < SLOT_ACTION_IDS.length; i++) {
@@ -491,6 +508,7 @@ export class ActionBar {
   dispose(): void {
     this.unsubKeybinds?.();
     window.removeEventListener('keydown', this.onKeyDown);
+    for (const timer of this.pressedTimers.values()) clearTimeout(timer);
     this.tooltipEl.remove();
     this.element.remove();
   }
