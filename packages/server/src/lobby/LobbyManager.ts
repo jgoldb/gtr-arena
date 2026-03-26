@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled, S2C_AdminUsersList, S2C_AdminResult, S2C_UserProfile, S2C_Leaderboard, S2C_ChangePasswordResult, UserProfileData } from '@gtr/shared';
 import type { LobbyUser, LobbyGameInfo } from '@gtr/shared';
+import { encodeMessage } from '@gtr/shared';
 import { GameLobby } from './GameLobby.js';
 import { GameSession } from '../game/GameSession.js';
 import type { RematchInfo } from '../game/GameSession.js';
@@ -914,7 +915,7 @@ export class LobbyManager {
 
   private send(socket: WebSocket, msg: ServerMessage): void {
     if (socket.readyState === socket.OPEN) {
-      socket.send(JSON.stringify(msg));
+      socket.send(encodeMessage(msg));
     }
   }
 }

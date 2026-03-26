@@ -1,4 +1,5 @@
 import type { ClientMessage, ServerMessage } from '@gtr/shared';
+import { encodeMessage, decodeMessage } from '@gtr/shared';
 
 export type ServerMessageHandler = (msg: ServerMessage) => void;
 export type ConnectionState =
@@ -56,6 +57,7 @@ export class NetworkManager {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${protocol}//${location.host}/ws`;
     this.ws = new WebSocket(url);
+    this.ws.binaryType = 'arraybuffer';
 
     this.ws.onopen = () => {
       const wasReconnect = this.reconnectAttempts > 0;
@@ -73,7 +75,9 @@ export class NetworkManager {
 
     this.ws.onmessage = (event) => {
       this.lastMessageTime = Date.now();
-      const msg = JSON.parse(event.data) as ServerMessage;
+      const msg = event.data instanceof ArrayBuffer
+        ? decodeMessage<ServerMessage>(event.data)
+        : JSON.parse(event.data) as ServerMessage;
       if (msg.type === 'pong') {
         if (msg.timestamp) this.rtt = Date.now() - msg.timestamp;
         return;
@@ -99,7 +103,7 @@ export class NetworkManager {
 
   send(msg: ClientMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
+      this.ws.send(encodeMessage(msg));
     } else if (
       !NetworkManager.EPHEMERAL_TYPES.has(msg.type) &&
       this.messageQueue.length < NetworkManager.MAX_QUEUE_SIZE

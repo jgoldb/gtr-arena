@@ -4,3 +4,4 @@ export * from './characters.js';
 export * from './maps.js';
 export * from './protocol.js';
 export * from './obstacles.js';
+export { encodeMessage, decodeMessage } from './codec.js';

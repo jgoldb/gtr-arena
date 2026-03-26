@@ -52,6 +52,9 @@ export interface C2S_PlayerState {
   z: number;
   rotationY: number;
   isMoving: boolean;
+  /** Horizontal velocity (world units/sec) — used for extrapolation & remote animation */
+  vx: number;
+  vz: number;
 }
 
 export interface C2S_UseAbility {
@@ -504,6 +507,9 @@ export interface EntityPositionData {
   z: number;
   rotationY: number;
   isMoving: boolean;
+  /** Horizontal velocity (world units/sec) — used for extrapolation & animation */
+  vx: number;
+  vz: number;
 }
 
 /** Partial entity state — only changed fields are present */

@@ -7,6 +7,7 @@ import { AuthManager } from './auth/AuthManager.js';
 import { LobbyManager } from './lobby/LobbyManager.js';
 import { GtrDatabase } from './db/Database.js';
 import type { ClientMessage } from '@gtr/shared';
+import { encodeMessage, decodeMessage } from '@gtr/shared';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
@@ -87,6 +88,11 @@ const heartbeatInterval = setInterval(() => {
 wss.on('close', () => clearInterval(heartbeatInterval));
 
 wss.on('connection', (ws: WebSocket) => {
+  // Disable Nagle's algorithm — send small WebSocket frames immediately
+  // instead of buffering up to 40ms. Critical for low-latency game state updates.
+  const rawSocket = (ws as any)._socket;
+  if (rawSocket?.setNoDelay) rawSocket.setNoDelay(true);
+
   aliveSockets.add(ws);
   ws.on('pong', () => aliveSockets.add(ws));
 
@@ -95,14 +101,20 @@ wss.on('connection', (ws: WebSocket) => {
   ws.on('message', (data) => {
     let msg: ClientMessage;
     try {
-      msg = JSON.parse(data.toString()) as ClientMessage;
+      // Support both binary (MessagePack) and text (JSON) for backwards compatibility
+      if (typeof data === 'string') {
+        msg = JSON.parse(data) as ClientMessage;
+      } else {
+        const buf = data instanceof ArrayBuffer ? data : (data as Buffer);
+        msg = decodeMessage<ClientMessage>(buf);
+      }
     } catch {
       return;
     }
 
     // Heartbeat — respond immediately regardless of auth state
     if (msg.type === 'ping') {
-      ws.send(JSON.stringify({ type: 'pong', timestamp: msg.timestamp }));
+      ws.send(encodeMessage({ type: 'pong', timestamp: msg.timestamp }));
       return;
     }
 
@@ -113,7 +125,7 @@ wss.on('connection', (ws: WebSocket) => {
         userId = result.userId;
         const displayUsername = result.username!;
         const dbId = auth.getDbId(result.userId)!;
-        ws.send(JSON.stringify({
+        ws.send(encodeMessage({
           type: 'auth_result',
           success: true,
           userId: result.userId,
@@ -123,7 +135,7 @@ wss.on('connection', (ws: WebSocket) => {
         }));
         lobby.addUser(result.userId, displayUsername, ws);
       } else {
-        ws.send(JSON.stringify({
+        ws.send(encodeMessage({
           type: 'auth_result',
           success: false,
           userId: '',
@@ -137,7 +149,7 @@ wss.on('connection', (ws: WebSocket) => {
 
     // All other messages require authentication
     if (!userId) {
-      ws.send(JSON.stringify({ type: 'error', message: 'Not authenticated' }));
+      ws.send(encodeMessage({ type: 'error', message: 'Not authenticated' }));
       return;
     }
 

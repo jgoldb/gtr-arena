@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
-import { MAPS, MAP_LIST, xpToLevel, calculateXpGain, getMaxPlayers } from '@gtr/shared';
+import { MAPS, MAP_LIST, xpToLevel, calculateXpGain, getMaxPlayers, encodeMessage } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
 import type { AuthManager } from '../auth/AuthManager.js';
@@ -278,7 +278,7 @@ export class GameSession {
 
     switch (msg.type) {
       case 'player_state':
-        this.engine.updateEntityPosition(entityId, msg.x, msg.y, msg.z, msg.rotationY, msg.isMoving);
+        this.engine.updateEntityPosition(entityId, msg.x, msg.y, msg.z, msg.rotationY, msg.isMoving, msg.vx, msg.vz);
         break;
       case 'use_ability':
         this.engine.requestAbility(
@@ -737,7 +737,7 @@ export class GameSession {
   }
 
   private broadcast(msg: ServerMessage): void {
-    const data = JSON.stringify(msg);
+    const data = encodeMessage(msg);
     for (const socket of this.sockets.values()) {
       if (socket.readyState === socket.OPEN) {
         socket.send(data);
@@ -755,7 +755,7 @@ export class GameSession {
   private sendToUser(userId: string, msg: ServerMessage): void {
     const socket = this.sockets.get(userId);
     if (socket && socket.readyState === socket.OPEN) {
-      socket.send(JSON.stringify(msg));
+      socket.send(encodeMessage(msg));
     }
   }
 }

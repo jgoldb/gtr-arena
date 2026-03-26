@@ -50,6 +50,8 @@ interface RemoteEntity {
   targetable: Targetable;
   targetEntityId: string | null;
   disconnected: boolean;
+  // Previous frame rotation for computing turn speed
+  prevRotationY: number;
 }
 
 export class ClientEngine {
@@ -80,6 +82,18 @@ export class ClientEngine {
   private static readonly SEND_RATE = 1000 / 20; // 20 Hz
   private sendAccumulator = 0;
   private lastSentPosition = { x: NaN, y: NaN, z: NaN, rotationY: NaN, isMoving: false };
+  private prevSendPosition = { x: 0, y: 0, z: 0 };
+  private prevSendTime = 0;
+
+  // ── Movement state change detection ────────────────────────────────
+  // Sends position updates immediately on start/stop/direction change
+  // instead of waiting for the next 20Hz tick, reducing perceived latency
+  // for other players by up to 50ms.
+  private lastImmediateSendTime = 0;
+  private prevMoving = false;
+  private prevMoveAngle = 0;
+  private static readonly IMMEDIATE_SEND_MIN_INTERVAL = 30; // ms — rate limit for immediate sends
+  private static readonly DIRECTION_CHANGE_THRESHOLD = 0.35; // radians (~20°)
 
   // Visual effects
   private gasClouds = new Map<string, GasCloudVisual & { elapsed: number; duration: number }>();
@@ -230,6 +244,7 @@ export class ClientEngine {
     this.snapshotBuffer.loadKeyframe(initialEntities, [], [], []);
     this.snapshotBuffer.pushPositions(0, Date.now(), initialEntities.map(e => ({
       id: e.id, x: e.x, y: e.y, z: e.z, rotationY: e.rotationY, isMoving: e.isMoving,
+      vx: 0, vz: 0,
     })));
 
     // Track tab visibility so we can fast-forward client-side timers on restore
@@ -272,6 +287,7 @@ export class ClientEngine {
       targetable: null!, // Set below
       targetEntityId: snap.targetEntityId,
       disconnected: snap.disconnected ?? false,
+      prevRotationY: snap.rotationY,
     };
 
     // Create a Targetable wrapper with live getters so it always reflects current state
@@ -403,6 +419,7 @@ export class ClientEngine {
     this.snapshotBuffer.loadKeyframe(msg.entities, msg.buffs, msg.gasClouds, msg.chemicalPools);
     this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.entities.map(e => ({
       id: e.id, x: e.x, y: e.y, z: e.z, rotationY: e.rotationY, isMoving: e.isMoving,
+      vx: 0, vz: 0, // keyframes don't carry velocity — entities re-acquire it on next delta
     })));
 
     // Apply full entity state
@@ -1246,10 +1263,51 @@ export class ClientEngine {
     this.thirdPersonCamera.update(dt);
     this.playerController.setOpacity(this.thirdPersonCamera.getPlayerModelOpacity());
 
-    // Send local position to server at tick rate
+    // ── Movement state change → immediate send ──
+    // Detect start/stop/direction changes and send position right away
+    // instead of waiting for the next 20Hz tick. This reduces perceived
+    // latency for remote players by up to 50ms per state change.
+    const isMovingNow = this.playerController.isMoving ?? false;
+    const now = performance.now();
+    let immediateNeeded = false;
+
+    // Compute current movement direction (before any send updates prevSendPosition)
+    let currentMoveAngle = this.prevMoveAngle;
+    if (isMovingNow) {
+      const pos = this.playerController.getPosition();
+      const dx = pos.x - this.prevSendPosition.x;
+      const dz = pos.z - this.prevSendPosition.z;
+      if (dx * dx + dz * dz > 0.001) {
+        currentMoveAngle = Math.atan2(dx, dz);
+      }
+    }
+
+    if (isMovingNow !== this.prevMoving) {
+      // Start or stop — always send immediately
+      immediateNeeded = true;
+    } else if (isMovingNow) {
+      // Still moving — check for significant direction change
+      let angleDelta = currentMoveAngle - this.prevMoveAngle;
+      while (angleDelta > Math.PI) angleDelta -= Math.PI * 2;
+      while (angleDelta < -Math.PI) angleDelta += Math.PI * 2;
+      if (Math.abs(angleDelta) > ClientEngine.DIRECTION_CHANGE_THRESHOLD) {
+        immediateNeeded = true;
+      }
+    }
+
+    if (immediateNeeded && (now - this.lastImmediateSendTime) >= ClientEngine.IMMEDIATE_SEND_MIN_INTERVAL) {
+      this.prevMoveAngle = currentMoveAngle;
+      this.sendPositionUpdate();
+      this.lastImmediateSendTime = now;
+      this.sendAccumulator = 0; // reset so the periodic tick stays evenly spaced
+    }
+    this.prevMoving = isMovingNow;
+
+    // Periodic 20Hz position updates — drift correction between state changes
     this.sendAccumulator += dt * 1000;
     if (this.sendAccumulator >= ClientEngine.SEND_RATE) {
       this.sendAccumulator -= ClientEngine.SEND_RATE;
+      this.prevMoveAngle = currentMoveAngle;
       this.sendPositionUpdate();
     }
 
@@ -1283,10 +1341,14 @@ export class ClientEngine {
     // (linear interpolation between two known server states, ~100ms behind real-time)
     for (const entity of this.remoteEntities.values()) {
       const interp = this.snapshotBuffer.getInterpolatedPosition(entity.id);
+      let interpVx = 0;
+      let interpVz = 0;
       if (interp) {
         entity.isMoving = interp.isMoving;
         entity.mesh.position.set(interp.x, interp.y, interp.z);
         entity.mesh.rotation.y = interp.rotationY;
+        interpVx = interp.vx;
+        interpVz = interp.vz;
       }
 
       // Update model animation state
@@ -1319,13 +1381,51 @@ export class ClientEngine {
         entity.model.resetDeath();
       }
 
+      // ── Derive animation params from interpolated velocity ──
+
+      // Speed multiplier: ratio of actual speed to base walk speed (5.6 units/sec)
+      const speed = Math.sqrt(interpVx * interpVx + interpVz * interpVz);
+      const speedMultiplier = entity.isMoving && speed > 0.1 ? speed / 5.6 : 1;
+
+      // Strafe direction: project velocity onto the entity's right vector.
+      // Uses a continuous [-1, 1] value so the animation blends smoothly
+      // between forward run and side-shuffle, including diagonal movement.
+      let strafeDirection = 0;
+      if (entity.isMoving && speed > 0.1) {
+        const facingSin = Math.sin(entity.mesh.rotation.y);
+        const facingCos = Math.cos(entity.mesh.rotation.y);
+        // Forward dot: positive = moving forward, negative = backpedaling
+        const forwardDot = facingSin * interpVx + facingCos * interpVz;
+        // Right dot: positive = moving right, negative = moving left
+        const rightDot = -facingCos * interpVx + facingSin * interpVz;
+        // Strafe amount = right component / speed, but only when not mostly moving forward/back
+        // atan2 gives us the angle between velocity and facing direction
+        const moveAngle = Math.atan2(rightDot, forwardDot);
+        // Map the angle to strafe: 0 = forward, ±π/2 = pure strafe, ±π = backward
+        // Use sin of the angle — peaks at ±π/2 (pure strafe), zero at forward/back
+        strafeDirection = Math.sin(moveAngle);
+        // Suppress very small values to avoid jitter in the animation blend
+        if (Math.abs(strafeDirection) < 0.15) strafeDirection = 0;
+      }
+
+      // Turn speed: angular velocity in rad/sec, computed from frame-to-frame rotation delta
+      let turnSpeed = 0;
+      if (dt > 0) {
+        let rotDiff = entity.mesh.rotation.y - entity.prevRotationY;
+        // Normalize to [-π, π]
+        while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
+        while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
+        turnSpeed = rotDiff / dt;
+      }
+      entity.prevRotationY = entity.mesh.rotation.y;
+
       entity.model.update(dt, {
         isMoving: entity.isMoving,
         isGrounded: true,
         velocityY: 0,
-        turnSpeed: 0,
-        speedMultiplier: 1,
-        strafeDirection: 0,
+        turnSpeed,
+        speedMultiplier,
+        strafeDirection,
       });
     }
 
@@ -1482,6 +1582,22 @@ export class ClientEngine {
       return;
     }
 
+    // Compute horizontal velocity from position delta between sends
+    const now = performance.now();
+    let vx = 0;
+    let vz = 0;
+    if (this.prevSendTime > 0) {
+      const dtSec = (now - this.prevSendTime) / 1000;
+      if (dtSec > 0) {
+        vx = (pos.x - this.prevSendPosition.x) / dtSec;
+        vz = (pos.z - this.prevSendPosition.z) / dtSec;
+      }
+    }
+    this.prevSendPosition.x = pos.x;
+    this.prevSendPosition.y = pos.y;
+    this.prevSendPosition.z = pos.z;
+    this.prevSendTime = now;
+
     prev.x = pos.x;
     prev.y = pos.y;
     prev.z = pos.z;
@@ -1495,6 +1611,8 @@ export class ClientEngine {
       z: pos.z,
       rotationY,
       isMoving,
+      vx,
+      vz,
     });
   }
 

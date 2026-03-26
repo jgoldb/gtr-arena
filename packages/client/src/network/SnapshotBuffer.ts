@@ -5,11 +5,15 @@ import type { EntityPositionData, EntityStateDelta } from '@gtr/shared';
  * Snapshot interpolation buffer for smooth remote entity rendering.
  *
  * Instead of lerping toward the latest server position (exponential chase),
- * this stores timestamped snapshots and linearly interpolates between two
- * known states. The client renders behind real-time so there are always
- * two snapshots to interpolate between.
+ * this stores timestamped snapshots and uses cubic Hermite spline interpolation
+ * between two known states. The client renders behind real-time so there are
+ * always two snapshots to interpolate between.
  *
  * Key improvements over a fixed-delay approach:
+ * - Cubic Hermite interpolation: uses server-provided velocity as tangents
+ *   at each snapshot, producing C1-continuous curves through knot points.
+ *   This eliminates the visible "kinks" at snapshot boundaries that linear
+ *   interpolation produces during turns and speed changes.
  * - Adaptive delay: adjusts based on measured network jitter so the buffer
  *   rarely runs dry, even at 100-200ms+ RTT.
  * - Position carry-forward: every snapshot contains positions for ALL known
@@ -32,6 +36,9 @@ export interface InterpolatedPosition {
   z: number;
   rotationY: number;
   isMoving: boolean;
+  /** Interpolated horizontal velocity (world units/sec) */
+  vx: number;
+  vz: number;
 }
 
 export class SnapshotBuffer {
@@ -92,8 +99,8 @@ export class SnapshotBuffer {
     if (this.snapshots.length > 0) {
       const prev = this.snapshots[this.snapshots.length - 1];
       for (const [id, p] of prev.positions) {
-        // Carry forward with isMoving = false (entity didn't send an update → stationary)
-        posMap.set(id, { ...p, isMoving: false });
+        // Carry forward with isMoving = false and zero velocity (entity didn't send an update → stationary)
+        posMap.set(id, { ...p, isMoving: false, vx: 0, vz: 0 });
       }
     }
 
@@ -202,7 +209,7 @@ export class SnapshotBuffer {
       // Not enough data — fall back to latest known position
       if (this.snapshots.length === 1) {
         const pos = this.snapshots[0].positions.get(entityId);
-        if (pos) return { x: pos.x, y: pos.y, z: pos.z, rotationY: pos.rotationY, isMoving: pos.isMoving };
+        if (pos) return { x: pos.x, y: pos.y, z: pos.z, rotationY: pos.rotationY, isMoving: pos.isMoving, vx: pos.vx, vz: pos.vz };
       }
       return null;
     }
@@ -225,74 +232,94 @@ export class SnapshotBuffer {
     if (!before || !after) {
       const len = this.snapshots.length;
       const latest = this.snapshots[len - 1];
-      const prev = this.snapshots[len - 2];
 
       const latestPos = latest.positions.get(entityId);
-      const prevPos = prev.positions.get(entityId);
 
       // No position data at all
       if (!latestPos) return null;
 
-      // Can't compute velocity → return latest position
-      if (!prevPos) {
-        return { x: latestPos.x, y: latestPos.y, z: latestPos.z, rotationY: latestPos.rotationY, isMoving: latestPos.isMoving };
-      }
-
-      // Linear extrapolation based on velocity between last two snapshots
-      const dt = latest.receiveTime - prev.receiveTime;
-      if (dt <= 0) {
-        return { x: latestPos.x, y: latestPos.y, z: latestPos.z, rotationY: latestPos.rotationY, isMoving: latestPos.isMoving };
+      // Only extrapolate if the entity was actually moving
+      if (!latestPos.isMoving) {
+        return { x: latestPos.x, y: latestPos.y, z: latestPos.z, rotationY: latestPos.rotationY, isMoving: false, vx: 0, vz: 0 };
       }
 
       const overshoot = renderTime - latest.receiveTime;
       // Cap extrapolation to prevent runaway drift
-      const extrapTime = Math.min(overshoot, SnapshotBuffer.MAX_EXTRAPOLATION_MS);
-
-      // Only extrapolate if the entity was actually moving
-      if (!latestPos.isMoving) {
-        return { x: latestPos.x, y: latestPos.y, z: latestPos.z, rotationY: latestPos.rotationY, isMoving: false };
-      }
-
-      const vx = (latestPos.x - prevPos.x) / dt;
-      const vy = (latestPos.y - prevPos.y) / dt;
-      const vz = (latestPos.z - prevPos.z) / dt;
+      const extrapTime = Math.min(overshoot, SnapshotBuffer.MAX_EXTRAPOLATION_MS) / 1000; // convert to seconds (velocity is units/sec)
 
       return {
-        x: latestPos.x + vx * extrapTime,
-        y: latestPos.y + vy * extrapTime,
-        z: latestPos.z + vz * extrapTime,
+        x: latestPos.x + latestPos.vx * extrapTime,
+        y: latestPos.y,
+        z: latestPos.z + latestPos.vz * extrapTime,
         rotationY: latestPos.rotationY, // don't extrapolate rotation
         isMoving: latestPos.isMoving,
+        vx: latestPos.vx,
+        vz: latestPos.vz,
       };
     }
 
-    // ── Normal interpolation between two bracketing snapshots ──
+    // ── Cubic Hermite interpolation between two bracketing snapshots ──
+    // Uses position + velocity at each knot to produce C1-continuous curves,
+    // eliminating velocity discontinuities at snapshot boundaries during turns.
     const beforePos = before.positions.get(entityId);
     const afterPos = after.positions.get(entityId);
 
     // With carry-forward, both should always exist, but handle edge cases
     if (!beforePos && !afterPos) return null;
-    if (!beforePos) return { x: afterPos!.x, y: afterPos!.y, z: afterPos!.z, rotationY: afterPos!.rotationY, isMoving: afterPos!.isMoving };
-    if (!afterPos) return { x: beforePos.x, y: beforePos.y, z: beforePos.z, rotationY: beforePos.rotationY, isMoving: beforePos.isMoving };
+    if (!beforePos) return { x: afterPos!.x, y: afterPos!.y, z: afterPos!.z, rotationY: afterPos!.rotationY, isMoving: afterPos!.isMoving, vx: afterPos!.vx, vz: afterPos!.vz };
+    if (!afterPos) return { x: beforePos.x, y: beforePos.y, z: beforePos.z, rotationY: beforePos.rotationY, isMoving: beforePos.isMoving, vx: beforePos.vx, vz: beforePos.vz };
 
-    // Linear interpolation factor
+    // Interpolation parameter t ∈ [0, 1]
     const totalTime = after.receiveTime - before.receiveTime;
     const elapsed = renderTime - before.receiveTime;
     const t = totalTime > 0 ? Math.max(0, Math.min(1, elapsed / totalTime)) : 1;
 
-    // Lerp position
-    const x = beforePos.x + (afterPos.x - beforePos.x) * t;
-    const y = beforePos.y + (afterPos.y - beforePos.y) * t;
-    const z = beforePos.z + (afterPos.z - beforePos.z) * t;
+    // Interval duration in seconds (velocity is in units/sec)
+    const dtSec = totalTime / 1000;
 
-    // Angle interpolation (shortest arc)
+    // Hermite tangents: velocity * interval = position change implied by tangent
+    // m0 = velocity_at_start * dt, m1 = velocity_at_end * dt
+    const m0x = beforePos.vx * dtSec;
+    const m0z = beforePos.vz * dtSec;
+    const m1x = afterPos.vx * dtSec;
+    const m1z = afterPos.vz * dtSec;
+
+    // Hermite basis functions
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = 2 * t3 - 3 * t2 + 1;   // position at start
+    const h10 = t3 - 2 * t2 + t;         // tangent at start
+    const h01 = -2 * t3 + 3 * t2;        // position at end
+    const h11 = t3 - t2;                  // tangent at end
+
+    const x = h00 * beforePos.x + h10 * m0x + h01 * afterPos.x + h11 * m1x;
+    const z = h00 * beforePos.z + h10 * m0z + h01 * afterPos.z + h11 * m1z;
+
+    // Y (vertical) stays linear — gravity/ground-clamping doesn't benefit from curves
+    const y = beforePos.y + (afterPos.y - beforePos.y) * t;
+
+    // Velocity from Hermite derivative: d/dt of the basis functions, divided by dtSec
+    // to convert from position-per-t back to units/sec
+    const dh00 = 6 * t2 - 6 * t;
+    const dh10 = 3 * t2 - 4 * t + 1;
+    const dh01 = -6 * t2 + 6 * t;
+    const dh11 = 3 * t2 - 2 * t;
+
+    const vx = dtSec > 0
+      ? (dh00 * beforePos.x + dh10 * m0x + dh01 * afterPos.x + dh11 * m1x) / dtSec
+      : afterPos.vx;
+    const vz = dtSec > 0
+      ? (dh00 * beforePos.z + dh10 * m0z + dh01 * afterPos.z + dh11 * m1z) / dtSec
+      : afterPos.vz;
+
+    // Angle interpolation (shortest arc) — stays linear, small deltas don't need curves
     let angleDiff = afterPos.rotationY - beforePos.rotationY;
     while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
     while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
     const rotationY = beforePos.rotationY + angleDiff * t;
 
     // isMoving: use the "after" snapshot's value (more recent)
-    return { x, y, z, rotationY, isMoving: afterPos.isMoving };
+    return { x, y, z, rotationY, isMoving: afterPos.isMoving, vx, vz };
   }
 
   /**

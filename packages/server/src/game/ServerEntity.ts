@@ -15,6 +15,9 @@ export class ServerEntity {
   y = 0;
   z = 0;
   rotationY = 0;
+  // Horizontal velocity (world units/sec) — relayed from client for interpolation & animation
+  vx = 0;
+  vz = 0;
 
   // Stats
   hp: number;

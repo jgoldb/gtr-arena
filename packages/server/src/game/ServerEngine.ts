@@ -137,7 +137,8 @@ export class ServerEngine {
 
   // Tick
   private tick = 0;
-  private intervalId: ReturnType<typeof setInterval> | null = null;
+  private tickTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private nextTickTarget = 0;
   private lastTickTime = 0;
   private static readonly TICK_RATE = 20;
   private static readonly TICK_MS = 1000 / ServerEngine.TICK_RATE;
@@ -164,6 +165,7 @@ export class ServerEngine {
   // Position tracking — only send when entity actually moved
   private lastBroadcastPosition = new Map<string, {
     x: number; y: number; z: number; rotationY: number; isMoving: boolean;
+    vx: number; vz: number;
   }>();
   private static readonly POSITION_EPSILON = 0.001;
   private static readonly ROTATION_EPSILON = 0.001;
@@ -442,7 +444,7 @@ export class ServerEngine {
     entity.disconnected = false;
   }
 
-  updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean): void {
+  updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean, vx: number, vz: number): void {
     const entity = this.getEntity(entityId);
     if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
     // During a sweep charge, the server is authoritative about position — ignore client updates
@@ -452,6 +454,8 @@ export class ServerEngine {
     entity.z = z;
     entity.rotationY = rotationY;
     entity.isMoving = isMoving;
+    entity.vx = vx;
+    entity.vz = vz;
     if (isMoving) this.cancelResting(entityId);
 
     // Fall damage detection: track peak Y while airborne
@@ -648,17 +652,29 @@ export class ServerEngine {
   }
 
   start(): void {
-    if (this.intervalId) return;
+    if (this.tickTimeoutId) return;
     this.lastTickTime = performance.now();
-    this.intervalId = setInterval(() => this.update(), ServerEngine.TICK_MS);
+    this.nextTickTarget = this.lastTickTime + ServerEngine.TICK_MS;
+    this.scheduleNextTick();
   }
 
   stop(): void {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
+    if (this.tickTimeoutId) {
+      clearTimeout(this.tickTimeoutId);
+      this.tickTimeoutId = null;
     }
     this.positionHistory.length = 0;
+  }
+
+  /** Self-correcting tick scheduler — compensates for drift each iteration instead of accumulating it. */
+  private scheduleNextTick(): void {
+    const now = performance.now();
+    const delay = Math.max(0, this.nextTickTarget - now);
+    this.tickTimeoutId = setTimeout(() => {
+      this.nextTickTarget += ServerEngine.TICK_MS;
+      this.update();
+      if (this.tickTimeoutId !== null) this.scheduleNextTick();
+    }, delay);
   }
 
   // ── Lag compensation: position history ────────────────────────────────
@@ -1654,10 +1670,12 @@ export class ServerEngine {
         positions.push({
           id: e.id, x: e.x, y: e.y, z: e.z,
           rotationY: e.rotationY, isMoving: e.isMoving,
+          vx: e.vx, vz: e.vz,
         });
         this.lastBroadcastPosition.set(e.id, {
           x: e.x, y: e.y, z: e.z,
           rotationY: e.rotationY, isMoving: e.isMoving,
+          vx: e.vx, vz: e.vz,
         });
       }
     }
@@ -1756,14 +1774,12 @@ export class ServerEngine {
     if (gasChanged) this.lastBroadcastGasCloudIds = gasIdSig;
     if (chemChanged) this.lastBroadcastChemPoolSig = chemSig;
 
-    // Skip broadcast entirely when nothing changed — avoids sending empty messages
+    // Always send at least a heartbeat so clients keep their interpolation
+    // buffer calibrated — skipping ticks causes jitter spikes in the adaptive delay.
     const hasPositions = positions.length > 0;
     const hasStates = states.length > 0;
     const hasBuffs = changedBuffs.length > 0;
     const hasEvents = this.pendingEvents.length > 0;
-    if (!hasPositions && !hasStates && !hasBuffs && !gasChanged && !chemChanged && !hasEvents) {
-      return;
-    }
 
     const msg: S2C_GameStateUpdate = {
       type: 'game_state_update',
