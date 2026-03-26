@@ -34,8 +34,11 @@ export {
   KaboomStun,
   Kaboom,
   Shank,
+  CrackRockSpeedBuff,
+  CrackRock,
   ArenaPreparationBuff,
   RestingBuff,
+  PvPTrinket,
 } from '@gtr/shared';
 
 export type { Ability, BuffDefinition, BuffEffect } from '@gtr/shared';

@@ -23,6 +23,7 @@ export interface ActionBarCallbacks {
 const SLOT_ACTION_IDS = [
   'action_1', 'action_2', 'action_3', 'action_4',
   'action_5', 'action_6', 'action_7', 'action_8',
+  'action_9',
 ];
 
 const LAYOUT_STORAGE_KEY = 'actionbar_layout';
@@ -113,14 +114,15 @@ export class ActionBar {
   }
 
   /** Load abilities into slots, restoring any saved layout for this character. */
-  loadAbilities(characterId: string, abilities: readonly Ability[]): void {
+  loadAbilities(characterId: string, abilities: readonly (Ability | null)[]): void {
     this.currentCharacterId = characterId;
     this.clearAllSlots();
 
+    const nonNullAbilities = abilities.filter((ab): ab is Ability => ab !== null);
     const savedOrder = this.getSavedLayout(characterId);
-    if (savedOrder && savedOrder.length === abilities.length) {
+    if (savedOrder && savedOrder.length === nonNullAbilities.length) {
       // Reorder abilities to match saved layout
-      const abilityMap = new Map(abilities.map(ab => [ab.id, ab]));
+      const abilityMap = new Map(nonNullAbilities.map(ab => [ab.id, ab]));
       // Verify all saved IDs still exist in the ability list
       const allValid = savedOrder.every(id => abilityMap.has(id));
       if (allValid) {
@@ -129,7 +131,7 @@ export class ActionBar {
       }
     }
 
-    // Default: use the natural order
+    // Default: use the natural order (nulls create gaps)
     abilities.forEach((ab, i) => this.setSlotAbility(i, ab));
   }
 
@@ -330,11 +332,10 @@ export class ActionBar {
     });
     container.addEventListener('click', (e) => {
       if (e.button !== 0 || didDrag) return;
-      if (this.callbacks.isDisabled?.()) return;
       const ab = this.slots[index].ability;
-      if (ab) {
-        this.callbacks.onActivate(ab);
-      }
+      if (!ab) return;
+      if (this.callbacks.isDisabled?.() && !ab.usableWhileCCd) return;
+      this.callbacks.onActivate(ab);
     });
 
     // --- Drag and drop ---
@@ -417,7 +418,7 @@ export class ActionBar {
         margin-bottom: 4px;
       ">
         <span style="color:#ffd100;font-size:14px;font-weight:bold;">${ability.name}</span>
-        <span style="color:#aaa;font-size:11px;margin-left:12px;">${ability.manaCost} Mana</span>
+        ${ability.manaCost ? `<span style="color:#aaa;font-size:11px;margin-left:12px;">${ability.manaCost} Mana</span>` : ''}
       </div>
 
       ${statsHtml}
@@ -456,9 +457,10 @@ export class ActionBar {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (this.callbacks.isDisabled?.()) return;
+    const disabled = this.callbacks.isDisabled?.() ?? false;
     for (const slot of this.slots) {
       if (matchesKeybindEvent(slot.keyCode, e) && slot.ability) {
+        if (disabled && !slot.ability.usableWhileCCd) return;
         this.callbacks.onActivate(slot.ability);
         break;
       }

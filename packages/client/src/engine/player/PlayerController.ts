@@ -117,7 +117,7 @@ export class PlayerController implements Targetable {
     return this.characterModel.dodgeChance;
   }
 
-  get abilities(): readonly Ability[] {
+  get abilities(): readonly (Ability | null)[] {
     return this.characterModel.abilities;
   }
 

@@ -36,6 +36,7 @@ const DEFAULT_BINDS: { id: string; label: string; category: string; code: string
   { id: 'action_6', label: 'Action Bar 6', category: 'Action Bar', code: 'Digit6' },
   { id: 'action_7', label: 'Action Bar 7', category: 'Action Bar', code: 'KeyQ' },
   { id: 'action_8', label: 'Action Bar 8', category: 'Action Bar', code: 'KeyE' },
+  { id: 'action_9', label: 'Action Bar 9', category: 'Action Bar', code: 'KeyV' },
   // Targeting
   { id: 'target_nearest_enemy', label: 'Target Nearest Enemy', category: 'Targeting', code: 'Tab' },
   { id: 'target_of_target', label: 'Assist Target', category: 'Targeting', code: 'KeyF' },

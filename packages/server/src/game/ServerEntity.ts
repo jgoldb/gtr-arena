@@ -37,7 +37,7 @@ export class ServerEntity {
   readonly autoAttackRange: number;
   readonly critChance: number;
   readonly dodgeChance: number;
-  readonly abilities: readonly Ability[];
+  readonly abilities: readonly (Ability | null)[];
 
   // Movement
   speed = 5.6;

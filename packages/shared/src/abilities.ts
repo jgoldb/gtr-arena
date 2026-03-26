@@ -84,6 +84,7 @@ export interface Ability {
   readonly aoeRadius?: number; // world units — radius of the AoE effect
   readonly suppressAutoTarget?: boolean; // if true, target does NOT auto-target the caster when hit
   readonly isMelee?: boolean; // melee attacks can be dodged; spells cannot
+  readonly usableWhileCCd?: boolean; // if true, ability can be used while stunned/slept/blinded/etc.
 }
 
 // ── Buff definitions ────────────────────────────────────────────────────
@@ -601,4 +602,41 @@ export const StickyFingers: Ability = {
   requiresHostileTarget: true,
   description:
     'Steals a buff from the target. If the target has no buffs, instead steals 150 mana. +15 Tweaking.',
+};
+
+export const CrackRockSpeedBuff: BuffDefinition = {
+  id: 'crack-rock-speed',
+  name: 'Crack Rock',
+  icon: '💎',
+  duration: 4,
+  type: 'buff',
+  description: 'Movement speed increased by 20%.',
+  effects: [{ type: 'movementSpeedPercent', value: 20 }],
+};
+
+export const CrackRock: Ability = {
+  id: 'crack-rock',
+  name: 'Crack Rock',
+  icon: '💎',
+  manaCost: 150,
+  cooldown: 30,
+  damage: 0,
+  healAmount: 400,
+  requiresHostileTarget: false,
+  description:
+    'Smokes a rock, instantly healing you for 400 health and grants 20% movement speed for 4 seconds. +25 Tweaking.',
+  appliesSelfBuff: CrackRockSpeedBuff,
+};
+
+export const PvPTrinket: Ability = {
+  id: 'pvp-trinket',
+  name: 'PvP Trinket',
+  icon: '🏆',
+  manaCost: 0,
+  cooldown: 90,
+  damage: 0,
+  requiresHostileTarget: false,
+  description:
+    'Removes all crowd control effects.',
+  usableWhileCCd: true,
 };

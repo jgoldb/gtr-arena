@@ -36,6 +36,10 @@ export class Crackhead extends CharacterModel {
   private stickyGlowMeshes: { mesh: THREE.Mesh; life: number }[] = [];
   private stickyGlowSpawned = false;
 
+  // Crack Rock green heal particles
+  private crackRockParticles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
+  private crackRockSpawned = false;
+
   // Stolen buff animation state
   private crashOutActive = false;
   private crashOutWeight = 0;
@@ -535,6 +539,23 @@ export class Crackhead extends CharacterModel {
       }
     }
 
+    // Update crack rock green heal particles
+    for (let i = this.crackRockParticles.length - 1; i >= 0; i--) {
+      const p = this.crackRockParticles[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        p.mesh.removeFromParent();
+        (p.mesh.material as THREE.Material).dispose();
+        this.crackRockParticles.splice(i, 1);
+        continue;
+      }
+      p.vel.y -= 0.5 * dt; // gentle gravity
+      p.mesh.position.addScaledVector(p.vel, dt);
+      const fade = Math.min(1, p.life / 0.25);
+      (p.mesh.material as THREE.MeshBasicMaterial).opacity = fade * 0.85;
+      p.mesh.scale.multiplyScalar(1 - dt * 0.8);
+    }
+
     // Sore pulsing
     for (let i = 0; i < this.soreMeshes.length; i++) {
       const pulse = 1.0 + Math.sin(this.idleTime * 3 + i * 1.5) * 0.15;
@@ -748,13 +769,17 @@ export class Crackhead extends CharacterModel {
     if (abilityId === 'shank') return 0.7;
     if (abilityId === 'pocket-sand') return 0.6;
     if (abilityId === 'sticky-fingers') return 0.6;
+    if (abilityId === 'crack-rock') return 0.8;
+    if (abilityId === 'pvp-trinket') return 0.5;
     return 0.6;
   }
 
   protected override animateAbilityUse(abilityId: string, t: number): void {
     if (abilityId === 'shank') this.animateShank(t);
-    if (abilityId === 'pocket-sand') this.animatePocketSand(t);
-    if (abilityId === 'sticky-fingers') this.animateStickyFingers(t);
+    else if (abilityId === 'pocket-sand') this.animatePocketSand(t);
+    else if (abilityId === 'sticky-fingers') this.animateStickyFingers(t);
+    else if (abilityId === 'crack-rock') this.animateCrackRock(t);
+    else if (abilityId === 'pvp-trinket') this.animatePvPTrinket(t);
   }
 
   private sandSpawned = false;
@@ -998,6 +1023,94 @@ export class Crackhead extends CharacterModel {
       this.retardStrengthActive = active;
     } else if (buffId === 'full-retard') {
       this.fullRetardActive = active;
+    }
+  }
+
+  // ── Crack Rock Ability Animation ─────────────────────────
+
+  private animateCrackRock(t: number): void {
+    // Right hand raises to mouth (smoking), green heal particles burst out
+
+    // Mouth position: arm raised to face height
+    const mouthX = 0.6;    // forward toward face
+    const mouthZ = -0.5;   // inward toward mouth
+
+    if (t < 0.15) {
+      // Phase 1: Raise hand to mouth
+      const p = t / 0.15;
+      const ease = p * p * (3 - 2 * p);
+      this.rightArmGroup.rotation.x += mouthX * ease;
+      this.rightArmGroup.rotation.z += mouthZ * ease;
+      this.headGroup.rotation.x += 0.1 * ease; // tilt head down toward hand
+      this.crackRockSpawned = false;
+    } else if (t < 0.45) {
+      // Phase 2: Hold at mouth — inhaling, spawn green particles
+      const p = (t - 0.15) / 0.30;
+      this.rightArmGroup.rotation.x += mouthX;
+      this.rightArmGroup.rotation.z += mouthZ;
+      this.headGroup.rotation.x += 0.1;
+      // Body leans back slightly as character inhales
+      this.bodyGroup.rotation.x -= 0.08 * p;
+
+      if (!this.crackRockSpawned && p > 0.3) {
+        this.spawnCrackRockParticles();
+        this.crackRockSpawned = true;
+      }
+    } else if (t < 0.60) {
+      // Phase 3: Head tilts back — exhale, body straightens
+      const p = (t - 0.45) / 0.15;
+      const ease = 1 - Math.pow(1 - p, 3);
+      this.rightArmGroup.rotation.x += mouthX * (1 - ease * 0.5);
+      this.rightArmGroup.rotation.z += mouthZ * (1 - ease * 0.5);
+      this.headGroup.rotation.x += 0.1 * (1 - ease) + (-0.15) * ease; // tilt back
+      this.bodyGroup.rotation.x -= 0.08 * (1 - ease);
+    } else {
+      // Phase 4: Recovery — arm drops back
+      const p = (t - 0.60) / 0.40;
+      const ease = p * p * (3 - 2 * p);
+      this.rightArmGroup.rotation.x += mouthX * 0.5 * (1 - ease);
+      this.rightArmGroup.rotation.z += mouthZ * 0.5 * (1 - ease);
+      this.headGroup.rotation.x += -0.15 * (1 - ease);
+    }
+  }
+
+  private spawnCrackRockParticles(): void {
+    const parent = this.group.parent;
+    if (!parent) return;
+    const scene = parent.parent;
+    if (!scene) return;
+
+    // Get body center position for the green heal burst
+    const bodyPos = new THREE.Vector3();
+    this.bodyGroup.getWorldPosition(bodyPos);
+
+    const count = 24;
+    const geo = new THREE.SphereGeometry(0.04, 6, 6);
+
+    for (let i = 0; i < count; i++) {
+      const greenColors = [0x33ff66, 0x22cc44, 0x44ff88, 0x11aa33, 0x55ffaa];
+      const color = greenColors[Math.floor(Math.random() * greenColors.length)];
+      const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 });
+      const mesh = new THREE.Mesh(geo, mat);
+
+      // Start around the body
+      mesh.position.copy(bodyPos);
+      mesh.position.x += (Math.random() - 0.5) * 0.4;
+      mesh.position.y += Math.random() * 0.6 - 0.1;
+      mesh.position.z += (Math.random() - 0.5) * 0.4;
+
+      const s = 0.5 + Math.random() * 1.2;
+      mesh.scale.setScalar(s);
+
+      // Velocity: float upward and outward
+      const vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 1.0,
+        0.8 + Math.random() * 1.2,
+        (Math.random() - 0.5) * 1.0,
+      );
+
+      scene.add(mesh);
+      this.crackRockParticles.push({ mesh, vel, life: 0.6 + Math.random() * 0.4 });
     }
   }
 

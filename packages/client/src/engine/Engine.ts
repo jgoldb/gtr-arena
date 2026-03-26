@@ -162,7 +162,7 @@ export class Engine {
   isAdmin = false;
   godMode = false;
   onRestError?: (message: string) => void;
-  onCharacterChange?: (abilities: readonly Ability[]) => void;
+  onCharacterChange?: (abilities: readonly (Ability | null)[]) => void;
   onAutoAttackError?: (message: string) => void;
   onGodModeToggle?: (active: boolean) => void;
   private animationFrameId: number | null = null;

@@ -580,6 +580,7 @@ export class TheJanitor extends CharacterModel {
     if (abilityId === 'sweep') return 1.0;
     if (abilityId === 'jimmy-legs') return 0.7;
     if (abilityId === 'janitors-helper') return 0.8;
+    if (abilityId === 'pvp-trinket') return 0.5;
     return 0.6; // bucket-splash default
   }
 
@@ -600,6 +601,8 @@ export class TheJanitor extends CharacterModel {
       this.animateJimmyLegs(t);
     } else if (abilityId === 'janitors-helper') {
       this.animateJanitorsHelper(t);
+    } else if (abilityId === 'pvp-trinket') {
+      this.animatePvPTrinket(t);
     }
   }
 

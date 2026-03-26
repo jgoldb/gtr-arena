@@ -482,11 +482,11 @@ export class ServerEngine {
     const entity = this.getEntity(entityId);
     if (!entity || this.frozenEntities.has(entityId)) return;
 
-    const ability = entity.abilities.find(a => a.id === abilityId);
+    const ability = entity.abilities.find(a => a !== null && a.id === abilityId);
     if (!ability) return;
 
-    // Block during GCD
-    if (!entity.godMode && this.combatSystem.getGcdRemaining(entityId) > 0) return;
+    // Block during GCD (CC-immune abilities bypass GCD)
+    if (!entity.godMode && !ability.usableWhileCCd && this.combatSystem.getGcdRemaining(entityId) > 0) return;
 
     // Cancel channel if starting new ability
     if (this.castingStates.has(entityId) && this.combatSystem.getCooldownRemaining(entityId, abilityId) <= 0) {
@@ -526,7 +526,7 @@ export class ServerEngine {
       const result = this.combatSystem.useAbility(ability, entity, target, targetPosOverride);
       if (result.success) {
         this.onAbilitySuccess(entity, ability);
-        this.triggerEntityGcd(entity);
+        if (!ability.usableWhileCCd) this.triggerEntityGcd(entity);
       } else if (result.errorMessage) {
         this.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
       }
@@ -1121,6 +1121,10 @@ export class ServerEngine {
     if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
       this.buffSystem.addStacks(entity, 'tweaking', 15);
     }
+    if (ability.id === 'crack-rock') {
+      this.combatSystem.applyHeal(entity, entity, 400);
+      this.buffSystem.addStacks(entity, 'tweaking', 25);
+    }
     if (ability.id === 'sticky-fingers') {
       const target = this.getTarget(entity.id);
       if (target) {
@@ -1138,6 +1142,9 @@ export class ServerEngine {
           abilityEvent.manaStolen = 150;
         }
       }
+    }
+    if (ability.id === 'pvp-trinket') {
+      this.buffSystem.removeAllCCEffects(entity);
     }
     if (ability.id === 'crotch-rot') {
       const target = this.getTarget(entity.id);

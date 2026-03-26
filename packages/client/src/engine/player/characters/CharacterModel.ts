@@ -15,7 +15,7 @@ export abstract class CharacterModel {
   readonly group: THREE.Group;
   readonly id: CharacterId;
   readonly displayName: string;
-  readonly abilities: readonly Ability[];
+  readonly abilities: readonly (Ability | null)[];
 
   // Skeleton bone groups (pivots for animation)
   protected bodyGroup = new THREE.Group();
@@ -84,6 +84,12 @@ export abstract class CharacterModel {
   // Flinch animation state (hit reaction)
   private static readonly FLINCH_DURATION = 0.25;
   protected flinchTime = -1; // -1 = not playing
+
+  // PvP Trinket burst particles + shockwave ring
+  private trinketParticles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number }[] = [];
+  private trinketRing: THREE.Mesh | null = null;
+  private trinketRingTime = -1;
+  private trinketBurstSpawned = false;
 
   // Death animation
   private static readonly DEATH_DURATION = 1.5;
@@ -181,6 +187,12 @@ export abstract class CharacterModel {
     this.abilityAnimTime = 0;
     this.abilityAnimId = abilityId;
     this.abilityTargetPos = targetWorldPos ?? null;
+    // PvP Trinket breaks free — immediately clear stun animation so the burst anim can play
+    if (abilityId === 'pvp-trinket') {
+      this.stunActive = false;
+      this.stunWeight = 0;
+      this.stunTime = 0;
+    }
   }
 
   triggerFlinch(): void {
@@ -400,6 +412,9 @@ export abstract class CharacterModel {
       verts.needsUpdate = true;
     }
 
+    // --- PvP Trinket burst particles ---
+    this.updateTrinketParticles(dt);
+
     // Character-specific animation
     this.onAnimate(dt, input);
   }
@@ -478,6 +493,160 @@ export abstract class CharacterModel {
   protected animateAttackSwing(_t: number, _alternateArm: boolean): void {}
   protected getAbilityAnimDuration(_abilityId: string): number { return 0.6; }
   protected animateAbilityUse(_abilityId: string, _t: number): void {}
+
+  /** Shared PvP Trinket animation — "break free" burst with particles + shockwave. */
+  protected animatePvPTrinket(t: number): void {
+    if (t < 0.15) {
+      // Wind-up: body tenses hard, arms pull inward, crouch
+      const p = t / 0.15;
+      const ease = p * p;
+      this.bodyGroup.position.y -= 0.18 * ease;
+      this.bodyGroup.rotation.x += 0.25 * ease;
+      this.leftArmGroup.rotation.x += 0.6 * ease;
+      this.rightArmGroup.rotation.x += 0.6 * ease;
+      this.leftArmGroup.rotation.z += 0.7 * ease;
+      this.rightArmGroup.rotation.z -= 0.7 * ease;
+      this.headGroup.rotation.x += 0.2 * ease;
+      this.trinketBurstSpawned = false;
+    } else if (t < 0.4) {
+      // Burst: arms explode outward, body springs up hard
+      const p = (t - 0.15) / 0.25;
+      const ease = 1 - (1 - p) * (1 - p);
+      this.bodyGroup.position.y -= 0.18 * (1 - ease) + (-0.08) * ease;
+      this.bodyGroup.rotation.x += 0.25 * (1 - ease) + (-0.3) * ease;
+      this.leftArmGroup.rotation.x += 0.6 * (1 - ease);
+      this.rightArmGroup.rotation.x += 0.6 * (1 - ease);
+      this.leftArmGroup.rotation.z += 0.7 * (1 - ease) + (-1.1) * ease;
+      this.rightArmGroup.rotation.z -= 0.7 * (1 - ease) + (-1.1) * ease;
+      this.headGroup.rotation.x += 0.2 * (1 - ease) + (-0.15) * ease;
+
+      // Spawn burst particles + shockwave at the moment of breaking free
+      if (!this.trinketBurstSpawned) {
+        this.trinketBurstSpawned = true;
+        this.spawnTrinketBurst();
+      }
+    } else {
+      // Recovery: return to idle
+      const p = (t - 0.4) / 0.6;
+      const ease = p * p * (3 - 2 * p);
+      const fade = 1 - ease;
+      this.bodyGroup.position.y -= 0.08 * fade;
+      this.bodyGroup.rotation.x -= 0.3 * fade;
+      this.leftArmGroup.rotation.z -= 1.1 * fade;
+      this.rightArmGroup.rotation.z += 1.1 * fade;
+      this.headGroup.rotation.x -= 0.15 * fade;
+    }
+  }
+
+  /** Spawn golden burst particles + expanding shockwave ring. */
+  private spawnTrinketBurst(): void {
+    const parent = this.group.parent;
+    if (!parent) return;
+    const scene = parent.parent;
+    if (!scene) return;
+
+    // Character world position
+    const worldPos = new THREE.Vector3();
+    parent.getWorldPosition(worldPos);
+    const burstOrigin = worldPos.clone();
+    burstOrigin.y += 1.0; // chest height
+
+    // --- Shockwave ring ---
+    const ringGeo = new THREE.RingGeometry(0.1, 0.3, 32);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xffd700,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.position.copy(burstOrigin);
+    ring.rotation.x = -Math.PI / 2; // horizontal
+    ring.renderOrder = 10;
+    scene.add(ring);
+    this.trinketRing = ring;
+    this.trinketRingTime = 0;
+
+    // --- Burst particles ---
+    const count = 28;
+    const particleGeo = new THREE.SphereGeometry(0.05, 6, 4);
+
+    for (let i = 0; i < count; i++) {
+      const colors = [0xffd700, 0xffec80, 0xffffff, 0xffa500, 0xffe066];
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      const mat = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 1.0,
+      });
+      const mesh = new THREE.Mesh(particleGeo, mat);
+      mesh.position.copy(burstOrigin);
+
+      // Random scale
+      const s = 0.4 + Math.random() * 1.2;
+      mesh.scale.setScalar(s);
+
+      // Explode outward in a sphere
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const speed = 3.0 + Math.random() * 4.0;
+      const vel = new THREE.Vector3(
+        Math.sin(phi) * Math.cos(theta) * speed,
+        Math.sin(phi) * Math.sin(theta) * speed * 0.6 + 1.5, // bias upward
+        Math.cos(phi) * speed,
+      );
+
+      const life = 0.4 + Math.random() * 0.5;
+      scene.add(mesh);
+      this.trinketParticles.push({ mesh, vel, life, maxLife: life });
+    }
+  }
+
+  /** Update trinket burst particles and shockwave ring. */
+  private updateTrinketParticles(dt: number): void {
+    // Particles
+    for (let i = this.trinketParticles.length - 1; i >= 0; i--) {
+      const p = this.trinketParticles[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        p.mesh.parent?.remove(p.mesh);
+        (p.mesh.material as THREE.Material).dispose();
+        this.trinketParticles.splice(i, 1);
+        continue;
+      }
+      // Gravity + drag
+      p.vel.y -= 6.0 * dt;
+      p.vel.multiplyScalar(1 - 2.0 * dt); // drag
+      p.mesh.position.addScaledVector(p.vel, dt);
+
+      // Fade out + shrink
+      const frac = p.life / p.maxLife;
+      (p.mesh.material as THREE.MeshBasicMaterial).opacity = frac;
+      p.mesh.scale.setScalar(p.mesh.scale.x * (1 - 1.5 * dt));
+    }
+
+    // Shockwave ring
+    if (this.trinketRing && this.trinketRingTime >= 0) {
+      this.trinketRingTime += dt;
+      const ringDur = 0.5;
+      const t = this.trinketRingTime / ringDur;
+
+      if (t >= 1) {
+        this.trinketRing.parent?.remove(this.trinketRing);
+        (this.trinketRing.material as THREE.Material).dispose();
+        this.trinketRing.geometry.dispose();
+        this.trinketRing = null;
+        this.trinketRingTime = -1;
+      } else {
+        // Expand outward
+        const scale = 1 + t * 12;
+        this.trinketRing.scale.setScalar(scale);
+        // Fade out
+        (this.trinketRing.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - t * t);
+      }
+    }
+  }
   protected animateCasting(_abilityId: string, _t: number): void {}
   protected animateChanneling(_abilityId: string, _t: number): void {}
 
@@ -618,6 +787,19 @@ export abstract class CharacterModel {
   }
 
   dispose(): void {
+    // Clean up trinket particles
+    for (const p of this.trinketParticles) {
+      p.mesh.parent?.remove(p.mesh);
+      (p.mesh.material as THREE.Material).dispose();
+    }
+    this.trinketParticles.length = 0;
+    if (this.trinketRing) {
+      this.trinketRing.parent?.remove(this.trinketRing);
+      (this.trinketRing.material as THREE.Material).dispose();
+      this.trinketRing.geometry.dispose();
+      this.trinketRing = null;
+    }
+
     this.group.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.geometry.dispose();

@@ -489,6 +489,12 @@ function startMultiplayer(msg: S2C_GameStart): void {
         mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
       }
     }
+    if (abilityId === 'crack-rock') {
+      const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawnText(mesh, '+25 Tweaking', '#3388ff', true);
+      }
+    }
   };
   clientEngine.onManaDrained = (amount) => {
     const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
@@ -582,6 +588,12 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
       const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
       if (mesh && mpCombatText) {
         mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
+      }
+    }
+    if (abilityId === 'crack-rock') {
+      const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
+      if (mesh && mpCombatText) {
+        mpCombatText.spawnText(mesh, '+25 Tweaking', '#3388ff', true);
       }
     }
   };
@@ -730,7 +742,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   document.body.appendChild(mpDeathFrame.element);
 
   // Action bar - abilities come from shared character data
-  const abilities: readonly Ability[] = localCharStats.abilities;
+  const abilities: readonly (Ability | null)[] = localCharStats.abilities;
 
   // Ground targeting state (MP)
   let mpPendingGroundAbility: Ability | null = null;
@@ -758,8 +770,8 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       if (castState?.isChannel && clientEngine!.getCooldownRemaining(ability.id) <= 0) {
         clientEngine!.sendCancelCast();
       }
-      // Block during GCD
-      if (clientEngine!.getGcdRemaining() > 0) return;
+      // Block during GCD (CC-immune abilities bypass GCD)
+      if (!ability.usableWhileCCd && clientEngine!.getGcdRemaining() > 0) return;
       // Ground-targeted abilities enter reticle mode
       if (ability.groundTargeted) {
         if (mpPendingGroundAbility?.id === ability.id) {
@@ -1065,7 +1077,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       }
       mpCastBarFill.style.width = `${progress * 100}%`;
       const remaining = Math.max(0, castState.totalTime - castState.elapsed);
-      const ab = abilities.find(a => a.id === castState.abilityId);
+      const ab = abilities.find(a => a !== null && a.id === castState.abilityId);
       mpCastBarHeader.innerHTML = `<span>${ab?.name ?? castState.abilityId}</span><span>${remaining.toFixed(1)}s</span>`;
     } else if (mpCastBarContainer) {
       mpCastBarContainer.style.display = 'none';
@@ -1951,6 +1963,10 @@ async function startPlayground(): Promise<void> {
     if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
     }
+    if (ability.id === 'crack-rock') {
+      engine.combatSystem.applyHeal(engine.playerController, 400);
+      engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
+    }
     if (ability.id === 'sticky-fingers') {
       const target = engine.targetingSystem.currentTarget;
       if (target) {
@@ -1987,8 +2003,8 @@ async function startPlayground(): Promise<void> {
     onActivate: (ability) => {
       if (engine.isResting()) engine.stopResting();
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
-      // Block during GCD (unless god mode)
-      if (!engine.godMode && engine.combatSystem.getGcdRemaining() > 0) return;
+      // Block during GCD (unless god mode or CC-immune ability)
+      if (!engine.godMode && !ability.usableWhileCCd && engine.combatSystem.getGcdRemaining() > 0) return;
       // Ground-targeted abilities enter reticle mode instead of executing immediately
       if (ability.groundTargeted) {
         if (pendingGroundAbility?.id === ability.id) {
@@ -2015,7 +2031,8 @@ async function startPlayground(): Promise<void> {
         const result = engine.combatSystem.useAbility(ability, engine.playerController, engine.playerController.mesh.rotation.y, target);
         if (result.success) {
           onAbilitySuccess(ability);
-          if (!engine.godMode) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+          if (!engine.godMode && !ability.usableWhileCCd) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+          if (ability.id === 'pvp-trinket') engine.buffSystem.removeAllCCEffects(engine.playerController);
         }
         else if (result.errorMessage) errorText.show(result.errorMessage);
       }
@@ -2369,6 +2386,10 @@ async function startUISetup(): Promise<void> {
     if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
     }
+    if (ability.id === 'crack-rock') {
+      engine.combatSystem.applyHeal(engine.playerController, 400);
+      engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
+    }
     if (ability.id === 'sticky-fingers') {
       const target = engine.targetingSystem.currentTarget;
       if (target) {
@@ -2403,7 +2424,7 @@ async function startUISetup(): Promise<void> {
     onActivate: (ability) => {
       if (engine.isResting()) engine.stopResting();
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
-      if (engine.combatSystem.getGcdRemaining() > 0) return;
+      if (!ability.usableWhileCCd && engine.combatSystem.getGcdRemaining() > 0) return;
       if (ability.groundTargeted) {
         if (pendingGroundAbility?.id === ability.id) {
           cancelGroundTargeting();
@@ -2428,7 +2449,8 @@ async function startUISetup(): Promise<void> {
         const result = engine.combatSystem.useAbility(ability, engine.playerController, engine.playerController.mesh.rotation.y, target);
         if (result.success) {
           onAbilitySuccess(ability);
-          engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+          if (!ability.usableWhileCCd) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+          if (ability.id === 'pvp-trinket') engine.buffSystem.removeAllCCEffects(engine.playerController);
         }
         else if (result.errorMessage) errorText.show(result.errorMessage);
       }

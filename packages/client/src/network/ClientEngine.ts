@@ -295,7 +295,7 @@ export class ClientEngine {
       get castingAbilityName() {
         if (!entity.castingAbilityId) return null;
         const stats = getCharacterStats(entity.characterId as CharacterId);
-        const ability = stats.abilities.find(a => a.id === entity.castingAbilityId);
+        const ability = stats.abilities.find(a => a !== null && a.id === entity.castingAbilityId);
         return ability?.name ?? entity.castingAbilityId;
       },
       set castingAbilityName(_v) { /* read-only */ },
@@ -674,6 +674,12 @@ export class ClientEngine {
         const buff = this.localBuffs.find(b => b.id === 'tweaking');
         if (buff && buff.stacks !== undefined) {
           buff.stacks = Math.min(buff.stacks + 15, buff.maxStacks ?? Infinity);
+        }
+      }
+      if (msg.abilityId === 'crack-rock') {
+        const buff = this.localBuffs.find(b => b.id === 'tweaking');
+        if (buff && buff.stacks !== undefined) {
+          buff.stacks = Math.min(buff.stacks + 25, buff.maxStacks ?? Infinity);
         }
       }
       // Start sweep charge for local player
@@ -1129,7 +1135,7 @@ export class ClientEngine {
     // Sync local casting state to PlayerController so the target frame cast bar works when targeting self
     if (this.localCastingAbilityId) {
       const stats = getCharacterStats(this.playerController.characterId as CharacterId);
-      const ability = stats.abilities.find(a => a.id === this.localCastingAbilityId);
+      const ability = stats.abilities.find(a => a !== null && a.id === this.localCastingAbilityId);
       this.playerController.castingAbilityName = ability?.name ?? this.localCastingAbilityId;
       this.playerController.castingElapsed = this.localCastingElapsed;
       this.playerController.castingTotalTime = this.localCastingTotalTime;

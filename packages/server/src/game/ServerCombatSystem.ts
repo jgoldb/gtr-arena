@@ -178,7 +178,7 @@ export class ServerCombatSystem {
     if (target?.dead && (ability.requiresHostileTarget || ability.requiresTarget)) {
       return { success: false, error: 'dead', errorMessage: 'Target is dead' };
     }
-    if (this.buffSystem.isStunned(attacker)) {
+    if (!ability.usableWhileCCd && this.buffSystem.isStunned(attacker)) {
       return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     }
     if (!attacker.godMode && this.getCooldownRemaining(attacker.id, ability.id) > 0) {

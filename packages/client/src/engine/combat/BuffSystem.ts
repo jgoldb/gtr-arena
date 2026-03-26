@@ -225,6 +225,24 @@ export class BuffSystem {
     if (buffs.length === 0) this.activeBuffs.delete(target);
   }
 
+  /** Remove all CC debuffs (stun, sleep, blind, discombobulate) and movement-impairing debuffs. DoTs and other debuffs are unaffected. */
+  removeAllCCEffects(target: Targetable): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const ccTypes: Set<string> = new Set(['stun', 'sleep', 'blind', 'discombobulate']);
+    for (let i = buffs.length - 1; i >= 0; i--) {
+      const def = buffs[i].definition;
+      if (def.type !== 'debuff') continue;
+      const hasCC = def.effects.some(e => ccTypes.has(e.type));
+      const hasSlow = def.effects.some(e => e.type === 'movementSpeedPercent' && e.value < 0);
+      if (hasCC || hasSlow) {
+        const removed = buffs.splice(i, 1)[0];
+        this.onBuffExpired?.(target, removed.definition);
+      }
+    }
+    if (buffs.length === 0) this.activeBuffs.delete(target);
+  }
+
   isBlinded(target: Targetable): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;

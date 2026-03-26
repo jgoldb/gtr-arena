@@ -2,7 +2,8 @@ import type { Ability, BuffDefinition } from './abilities.js';
 import {
   Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper,
   BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom,
-  Shank, PocketSand, StickyFingers,
+  Shank, PocketSand, StickyFingers, CrackRock,
+  PvPTrinket,
   TweakingBuff,
 } from './abilities.js';
 
@@ -21,7 +22,7 @@ export interface CharacterStats {
   dodgeChance: number;
   hpRegen: number;       // hp restored per regen tick
   manaRegen: number;     // mana restored per regen tick
-  abilities: readonly Ability[];
+  abilities: readonly (Ability | null)[];
   startingBuffs?: readonly BuffDefinition[];
   playgroundOnly?: boolean;
 }
@@ -46,7 +47,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.17,
     hpRegen: 32,
     manaRegen: 12,
-    abilities: [Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper],
+    abilities: [Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket],
   },
   'dr-retardo': {
     id: 'dr-retardo',
@@ -61,7 +62,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.05,
     hpRegen: 24,
     manaRegen: 48,
-    abilities: [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom],
+    abilities: [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket],
   },
   'crackhead': {
     id: 'crackhead',
@@ -76,9 +77,9 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.10,
     hpRegen: 28,
     manaRegen: 16,
-    abilities: [Shank, PocketSand, StickyFingers],
+    abilities: [Shank, PocketSand, StickyFingers, CrackRock, null, null, null, null, PvPTrinket],
     startingBuffs: [TweakingBuff],
-    playgroundOnly: true,
+    playgroundOnly: false,
   },
 };
 

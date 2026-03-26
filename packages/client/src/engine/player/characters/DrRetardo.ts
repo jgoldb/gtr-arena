@@ -897,6 +897,7 @@ export class DrRetardo extends CharacterModel {
     if (abilityId === 'discombobulate') return 0.6;
     if (abilityId === 'chemical-spill') return 0.9;
     if (abilityId === 'kaboom') return 0.7;
+    if (abilityId === 'pvp-trinket') return 0.5;
     return 0.6;
   }
 
@@ -909,6 +910,8 @@ export class DrRetardo extends CharacterModel {
       this.animateChemicalSpill(t);
     } else if (abilityId === 'kaboom') {
       this.animateKaboom(t);
+    } else if (abilityId === 'pvp-trinket') {
+      this.animatePvPTrinket(t);
     }
   }
 
