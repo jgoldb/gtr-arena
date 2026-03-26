@@ -520,7 +520,16 @@ export class AuthScreen {
       "Sure could use a sammich right about now",
       "I just shidded all over myself",
       "I'm Sketch MC Flex, I'm the best...",
-      "I haven't shit in 3 weeks"
+      "I haven't shit in 3 weeks",
+      "How do you talk to girls?",
+      "Yeah, I like to beat on women, so what?",
+      "Save the children",
+      "Look at my deaths, LOOK AT MY DEATHS!",
+      "Accoma-accom-commendations?",
+      "I'm chorgin' on em!",
+      "It's a goon angle",
+      "I don't care for the blacks",
+      "Tore open my dang scapuloid"
     ];
     let shuffledThoughts: string[] = [];
     let thoughtIndex = 0;

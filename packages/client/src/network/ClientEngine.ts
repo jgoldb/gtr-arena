@@ -200,7 +200,7 @@ export class ClientEngine {
     if (localSnap) {
       this.playerController.setCharacter(localSnap.characterId as CharacterId);
       (this.playerController as any).team = localSnap.team;
-      (this.playerController as any).name = localSnap.name;
+      this.playerController.name = localSnap.name;
       this.playerController.model.addTeamFlag(localSnap.team);
       this.playerController.mesh.position.set(localSnap.x, localSnap.y, localSnap.z);
       this.playerController.mesh.rotation.y = localSnap.rotationY;

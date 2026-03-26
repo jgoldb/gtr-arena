@@ -1752,6 +1752,8 @@ async function startPlayground(): Promise<void> {
 
   const engine = new Engine(canvas);
   engine.isAdmin = isAdmin;
+  const savedUsername = sessionStorage.getItem('gtr_username');
+  if (savedUsername) engine.playerController.name = savedUsername;
   pgEngine = engine;
 
   const mapContainer = document.getElementById('map-selector-container')!;
@@ -2191,6 +2193,8 @@ async function startUISetup(): Promise<void> {
   const { CharacterSelector } = await import('./ui/CharacterSelector');
 
   const engine = new Engine(canvas);
+  const savedUsername = sessionStorage.getItem('gtr_username');
+  if (savedUsername) engine.playerController.name = savedUsername;
   engine.loadMap('ui-setup');
   // Remove arena preparation — this is a free-roam UI setup room
   engine.buffSystem.remove(engine.playerController, 'arena-preparation');

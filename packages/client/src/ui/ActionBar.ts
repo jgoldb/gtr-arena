@@ -79,7 +79,7 @@ export class ActionBar {
     this.element = document.createElement('div');
     this.element.style.cssText = `
       position: fixed;
-      bottom: 20px;
+      bottom: 0px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 100;

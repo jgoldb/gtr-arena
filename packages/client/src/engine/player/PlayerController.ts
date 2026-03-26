@@ -10,7 +10,7 @@ import { keybindManager } from '../../ui/KeybindManager';
 
 export class PlayerController implements Targetable {
   readonly mesh: THREE.Group;
-  readonly name = 'Player';
+  name = 'Player';
   readonly team = 0;
   hp = 0;
   maxHp = 0;
