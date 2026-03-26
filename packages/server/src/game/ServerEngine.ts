@@ -230,6 +230,33 @@ export class ServerEngine {
       if (definition.id === 'crotch-rot') {
         this.buffSystem.apply(target, RottenCrotchStun);
       }
+      if (definition.id === 'dumpster-diving') {
+        // AoE damage on emerge: 150 damage to nearby enemies within 5 yards
+        const radius = yardsToUnits(5);
+        for (const entity of this.entities) {
+          if (entity === target || entity.dead || !entity.isHostileTo(target)) continue;
+          if (this.buffSystem.isUntargetable(entity)) continue;
+          const dx = target.x - entity.x;
+          const dz = target.z - entity.z;
+          if (dx * dx + dz * dz <= radius * radius) {
+            let dmg = 150;
+            const damageMult = this.buffSystem.getDamageDealtMultiplier(target);
+            dmg = Math.round(dmg * damageMult);
+            const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, dmg, target);
+            entity.hp = Math.max(0, entity.hp - actualDmg);
+            if (actualDmg > 0) {
+              this.combatSystem.onCombatText?.(target, entity, actualDmg, 'damage');
+              this.combatSystem.onFlinchDamage?.(entity);
+            }
+            this.combatSystem.enterCombat(target);
+            this.combatSystem.enterCombat(entity);
+            if (entity.hp <= 0 && !entity.dead) {
+              entity.die();
+              this.combatSystem.onEntityKilled?.(target, entity);
+            }
+          }
+        }
+      }
     };
 
     this.combatSystem.onDirectDamageDealt = (target) => {
@@ -977,7 +1004,8 @@ export class ServerEngine {
     const state = this.autoAttacks.get(entity.id);
     if (!state) return;
 
-    if (entity.dead || state.target.dead || !state.target.isHostileTo(entity)) {
+    if (entity.dead || state.target.dead || !state.target.isHostileTo(entity)
+      || this.buffSystem.isUntargetable(state.target) || this.buffSystem.isUntargetable(entity)) {
       this.stopAutoAttack(entity.id);
       return;
     }
@@ -1143,6 +1171,21 @@ export class ServerEngine {
         }
       }
     }
+    if (ability.id === 'dumpster-dive') {
+      // Stop auto-attack while in the dumpster
+      this.stopAutoAttack(entity.id);
+      // Force all enemies targeting this entity to lose their target
+      for (const [eid, targetId] of this.targets) {
+        if (targetId === entity.id) {
+          const other = this.getEntity(eid);
+          if (other && other.isHostileTo(entity)) {
+            this.targets.set(eid, null);
+            this.stopAutoAttack(eid);
+            this.onSendToPlayer?.(eid, { type: 'force_clear_target' });
+          }
+        }
+      }
+    }
     if (ability.id === 'pvp-trinket') {
       this.buffSystem.removeAllCCEffects(entity);
     }
@@ -1299,7 +1342,7 @@ export class ServerEngine {
 
       const inCloud = new Set<ServerEntity>();
       for (const entity of this.entities) {
-        if (entity.dead || !entity.isHostileTo(cloud.owner)) continue;
+        if (entity.dead || !entity.isHostileTo(cloud.owner) || this.buffSystem.isUntargetable(entity)) continue;
         const dx = entity.x - cloud.centerX;
         const dz = entity.z - cloud.centerZ;
         if (dx * dx + dz * dz <= cloud.radius * cloud.radius) {

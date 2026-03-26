@@ -782,6 +782,8 @@ export abstract class CharacterModel {
         if (mat.transparent !== wasTransparent) {
           mat.needsUpdate = true;
         }
+        // Hide shadow when fully invisible
+        child.castShadow = opacity > 0;
       }
     });
   }

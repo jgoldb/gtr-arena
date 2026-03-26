@@ -272,6 +272,10 @@ export interface S2C_EntityDied {
   killerEntityId: string | null;
 }
 
+export interface S2C_ForceClearTarget {
+  type: 'force_clear_target';
+}
+
 /** End-of-game result for a single player (identity + match stats). */
 export interface PlayerMatchResult {
   userId: string;
@@ -659,4 +663,5 @@ export type ServerMessage =
   | S2C_RejoinGame
   | S2C_PlayerDisconnected
   | S2C_PlayerReconnected
-  | S2C_EntityRemoved;
+  | S2C_EntityRemoved
+  | S2C_ForceClearTarget;

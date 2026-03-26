@@ -157,16 +157,32 @@ export class UnitFramePositioner {
     let top = e.clientY - this.dragOffset.y;
     let left = e.clientX - this.dragOffset.x;
 
-    // Snap to nearby grid lines (independently per axis)
+    const rect = this.dragging.wrapper.getBoundingClientRect();
+    const frameW = rect.width;
+    const frameH = rect.height;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // Snap to nearby grid lines or screen edges (independently per axis)
     const nearestGridY = Math.round(top / GRID_SIZE) * GRID_SIZE;
-    if (Math.abs(top - nearestGridY) < SNAP_THRESHOLD) top = nearestGridY;
+    const bottomEdgeSnap = vh - frameH;
+    if (Math.abs(top - nearestGridY) < SNAP_THRESHOLD) {
+      top = nearestGridY;
+    } else if (Math.abs(top - bottomEdgeSnap) < SNAP_THRESHOLD) {
+      top = bottomEdgeSnap;
+    }
 
     const nearestGridX = Math.round(left / GRID_SIZE) * GRID_SIZE;
-    if (Math.abs(left - nearestGridX) < SNAP_THRESHOLD) left = nearestGridX;
+    const rightEdgeSnap = vw - frameW;
+    if (Math.abs(left - nearestGridX) < SNAP_THRESHOLD) {
+      left = nearestGridX;
+    } else if (Math.abs(left - rightEdgeSnap) < SNAP_THRESHOLD) {
+      left = rightEdgeSnap;
+    }
 
     // Clamp to viewport
-    top = Math.max(0, Math.min(top, window.innerHeight - 20));
-    left = Math.max(0, Math.min(left, window.innerWidth - 20));
+    top = Math.max(0, Math.min(top, vh - 20));
+    left = Math.max(0, Math.min(left, vw - 20));
 
     this.dragging.wrapper.style.top = `${top}px`;
     this.dragging.wrapper.style.left = `${left}px`;
@@ -209,6 +225,8 @@ export class UnitFramePositioner {
         linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
         linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
       background-size: ${GRID_SIZE}px ${GRID_SIZE}px;
+      border: 1px solid rgba(255, 200, 50, 0.25);
+      box-sizing: border-box;
     `;
     document.body.appendChild(el);
     this.gridOverlay = el;

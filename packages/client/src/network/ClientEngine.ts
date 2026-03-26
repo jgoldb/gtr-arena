@@ -196,6 +196,10 @@ export class ClientEngine {
       this.camera, this.scene, canvas,
       () => this.playerController,
     );
+    this.targetingSystem.isUntargetable = (target) => {
+      const id = this.findEntityIdByTargetable(target);
+      return id ? this.isEntityInvisibleToLocal(id) : false;
+    };
 
     // Set the correct character and team for the local player
     if (localSnap) {
@@ -622,6 +626,7 @@ export class ClientEngine {
         this.playerController.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
         this.playerController.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
         this.playerController.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
+        this.playerController.setAbilityBuffActive('dumpster-diving', hasBuff('dumpster-diving'));
         this.playerController.setDiscombobulated(this.localBuffs.some(b => b.id === 'discombobulate'));
 
         // Blind: activate/deactivate effect, clear target on first application
@@ -642,6 +647,11 @@ export class ClientEngine {
         entity.model.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
         entity.model.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
         entity.model.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
+        const dumpsterDiving = hasBuff('dumpster-diving');
+        if ('dumpsterDiveHostile' in entity.model) {
+          (entity.model as any).dumpsterDiveHostile = dumpsterDiving && entity.team !== (this.playerController as any).team;
+        }
+        entity.model.setAbilityBuffActive('dumpster-diving', dumpsterDiving);
         entity.model.setResting(hasBuff('resting'));
       }
     }
@@ -759,6 +769,13 @@ export class ClientEngine {
     }
     const remote = this.remoteEntities.get(entityId);
     return remote?.team ?? null;
+  }
+
+  handleForceClearTarget(): void {
+    this.selectedTargetId = null;
+    this.localTargetEntityId = null;
+    this.targetingSystem.currentTarget = null;
+    this.onTargetChanged?.(null);
   }
 
   handleKnockback(msg: S2C_Knockback): void {
@@ -981,10 +998,21 @@ export class ClientEngine {
     this.network.send({ type: 'set_target', targetEntityId });
   }
 
+  /** Returns true if the entity is hostile and currently untargetable (e.g. dumpster-diving). */
+  isEntityInvisibleToLocal(entityId: string): boolean {
+    const entity = this.remoteEntities.get(entityId);
+    if (!entity) return false;
+    const localTeam = (this.playerController as any).team;
+    if (entity.team === localTeam) return false;
+    return entity.buffs.some(b => b.id === 'dumpster-diving');
+  }
+
   /** Programmatically select a target (e.g. from nameplate click). */
   selectTarget(target: Targetable | null): void {
-    this.targetingSystem.currentTarget = target;
     const newTargetId = this.findEntityIdByTargetable(target);
+    // Block targeting hostile entities that are currently untargetable
+    if (newTargetId && this.isEntityInvisibleToLocal(newTargetId)) return;
+    this.targetingSystem.currentTarget = target;
     if (newTargetId !== this.selectedTargetId) {
       this.selectedTargetId = newTargetId;
       this.sendSetTarget(newTargetId);
@@ -1353,7 +1381,7 @@ export class ClientEngine {
     // Tab targeting — nearest hostile in front within 30 yards (blocked while blinded)
     const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
     if (tabDown && !this.tabKeyWasDown && !this.blindEffect.isActive()) {
-      const hostiles = this.getAllRemoteEntities().map(e => e.targetable);
+      const hostiles = this.getAllRemoteEntities().filter(e => !this.isEntityInvisibleToLocal(e.id)).map(e => e.targetable);
       this.targetingSystem.selectNearestHostileInFront(hostiles, yardsToUnits(30));
       const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
       if (newTargetId !== this.selectedTargetId) {
@@ -1371,7 +1399,7 @@ export class ClientEngine {
       const totId = isSelf
         ? this.selectedTargetId
         : this.getRemoteEntity(this.selectedTargetId)?.targetEntityId ?? null;
-      if (totId && totId !== this.selectedTargetId) {
+      if (totId && totId !== this.selectedTargetId && !this.isEntityInvisibleToLocal(totId)) {
         const totTargetable = totId === this.localEntityId
           ? (this.playerController as unknown as Targetable)
           : this.getRemoteEntity(totId)?.targetable ?? null;

@@ -997,7 +997,8 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       let totTargetable: Targetable | null = null;
       if (mpSelectedTargetId && mpSelectedTargetId !== clientEngine.localId) {
         const totId = clientEngine.getRemoteEntity(mpSelectedTargetId)?.targetEntityId ?? null;
-        if (totId) totTargetable = makeTargetable(totId);
+        // Don't expose invisible enemies via ToT
+        if (totId && !clientEngine.isEntityInvisibleToLocal(totId)) totTargetable = makeTargetable(totId);
       }
       mpToTFrame.update(totTargetable);
     }
@@ -1017,7 +1018,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
           remaining: dr.remaining,
           total: dr.total,
         }));
-      });
+      }, (entityId) => clientEngine!.isEntityInvisibleToLocal(entityId));
     }
 
     // Party frames (friendly team members on left side)
@@ -1055,6 +1056,8 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       for (const e of remotes) {
         const t = e.targetable;
         if (t) {
+          // Hide nameplates for hostile entities that are invisible (dumpster-diving)
+          if (clientEngine.isEntityInvisibleToLocal(e.id)) continue;
           npcsTargetable.push(t);
           const debuffs = e.buffs.filter(b => b.type === 'debuff');
           if (debuffs.length > 0) {
@@ -1257,6 +1260,10 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'knockback':
       clientEngine?.handleKnockback(msg);
+      break;
+
+    case 'force_clear_target':
+      clientEngine?.handleForceClearTarget();
       break;
 
     case 'countdown_start':

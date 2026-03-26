@@ -13,7 +13,7 @@ export function yardsToUnits(yards: number): number {
 // ── Buff/debuff system types ────────────────────────────────────────────
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'blind' | 'damageDealtPercent' | 'manaCostPercent';
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'blind' | 'damageDealtPercent' | 'manaCostPercent' | 'untargetable';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
   readonly minStacks?: number; // effect only applies when buff has >= this many stacks
 }
@@ -604,6 +604,17 @@ export const StickyFingers: Ability = {
     'Steals a buff from the target. If the target has no buffs, instead steals 150 mana. +15 Tweaking.',
 };
 
+export const DumpsterDivingBuff: BuffDefinition = {
+  id: 'dumpster-diving',
+  name: 'Dumpster Diving',
+  icon: '🗑️',
+  duration: 4,
+  type: 'buff',
+  description: 'Untargetable and invisible.',
+  effects: [{ type: 'untargetable', value: 0 }],
+  unremovable: true,
+};
+
 export const CrackRockSpeedBuff: BuffDefinition = {
   id: 'crack-rock-speed',
   name: 'Crack Rock',
@@ -626,6 +637,19 @@ export const CrackRock: Ability = {
   description:
     'Smokes a rock, instantly healing you for 400 health and grants 20% movement speed for 4 seconds. +25 Tweaking.',
   appliesSelfBuff: CrackRockSpeedBuff,
+};
+
+export const DumpsterDive: Ability = {
+  id: 'dumpster-dive',
+  name: 'Dumpster Dive',
+  icon: '🗑️',
+  manaCost: 80,
+  cooldown: 30,
+  damage: 0,
+  requiresHostileTarget: false,
+  description:
+    'Dives into a dumpster, becoming untargetable and invisible for 4 seconds. When emerging, deals 150 damage to nearby enemies.',
+  appliesSelfBuff: DumpsterDivingBuff,
 };
 
 export const PvPTrinket: Ability = {

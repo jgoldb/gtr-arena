@@ -40,6 +40,12 @@ interface ArenaFrameEntry {
   targetable: Targetable | null;
   combatTextEl: HTMLElement;
   combatTextTimer: number;
+  // Snapshot values frozen when entity goes invisible
+  invisible: boolean;
+  frozenHp: number;
+  frozenMaxHp: number;
+  frozenMana: number;
+  frozenMaxMana: number;
 }
 
 export class ArenaFrames {
@@ -311,6 +317,11 @@ export class ArenaFrames {
       targetable: null,
       combatTextEl,
       combatTextTimer: -1,
+      invisible: false,
+      frozenHp: 0,
+      frozenMaxHp: 0,
+      frozenMana: 0,
+      frozenMaxMana: 0,
     };
   }
 
@@ -422,7 +433,7 @@ export class ArenaFrames {
 
   showCombatText(entityId: string, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune'): void {
     const frame = this.frames.find(f => f.entityId === entityId);
-    if (!frame) return;
+    if (!frame || frame.invisible) return;
 
     switch (type) {
       case 'heal':
@@ -553,10 +564,29 @@ export class ArenaFrames {
   update(
     dt: number,
     getDRTimers?: (entityId: string) => readonly DRTimerDisplay[],
+    isEntityInvisible?: (entityId: string) => boolean,
   ): void {
     for (const frame of this.frames) {
       const t = frame.targetable;
       if (!t) continue;
+
+      frame.wrapper.style.display = '';
+
+      // Invisibility: freeze HP/mana on transition, show frame as disabled
+      const nowInvisible = isEntityInvisible?.(frame.entityId) ?? false;
+      if (nowInvisible && !frame.invisible) {
+        // Just went invisible — snapshot current values
+        frame.invisible = true;
+        frame.frozenHp = t.hp;
+        frame.frozenMaxHp = t.maxHp;
+        frame.frozenMana = t.mana;
+        frame.frozenMaxMana = t.maxMana;
+      } else if (!nowInvisible && frame.invisible) {
+        frame.invisible = false;
+      }
+
+      const isInvis = frame.invisible;
+      const disabled = this._disabled || isInvis;
 
       // Portrait
       if (t.modelName !== frame.lastModelName) {
@@ -573,40 +603,44 @@ export class ArenaFrames {
       const isDisconnected = t.disconnected ?? false;
 
       // Dead / disconnect overlays
-      frame.skullOverlay.style.display = t.dead ? 'flex' : 'none';
-      frame.disconnectOverlay.style.display = isDisconnected && !t.dead ? 'block' : 'none';
+      frame.skullOverlay.style.display = t.dead && !isInvis ? 'flex' : 'none';
+      frame.disconnectOverlay.style.display = isDisconnected && !t.dead && !isInvis ? 'block' : 'none';
 
       // Name
       frame.nameEl.textContent = t.name;
       frame.nameEl.style.color = isDisconnected ? '#888' : t.dead ? '#888' : '#ff4444';
       frame.modelEl.textContent = t.modelName;
 
-      // HP
-      const hpPct = t.maxHp > 0 ? (t.hp / t.maxHp) * 100 : 0;
+      // HP — use frozen values while invisible
+      const hp = isInvis ? frame.frozenHp : t.hp;
+      const maxHp = isInvis ? frame.frozenMaxHp : t.maxHp;
+      const hpPct = maxHp > 0 ? (hp / maxHp) * 100 : 0;
       frame.hpFill.style.width = `${hpPct}%`;
       frame.hpFill.style.background = isDisconnected ? '#666' : '#cc2222';
       frame.hpBar.style.background = isDisconnected ? '#333' : '#3a0a0a';
-      frame.hpText.textContent = `${Math.round(t.hp)} / ${t.maxHp}`;
+      frame.hpText.textContent = `${Math.round(hp)} / ${maxHp}`;
 
-      // Mana
-      const manaPct = t.maxMana > 0 ? (t.mana / t.maxMana) * 100 : 0;
+      // Mana — use frozen values while invisible
+      const mana = isInvis ? frame.frozenMana : t.mana;
+      const maxMana = isInvis ? frame.frozenMaxMana : t.maxMana;
+      const manaPct = maxMana > 0 ? (mana / maxMana) * 100 : 0;
       frame.manaFill.style.width = `${manaPct}%`;
       frame.manaFill.style.background = isDisconnected ? '#666' : '#2255cc';
       frame.manaBar.style.background = isDisconnected ? '#333' : '#0a1a3a';
-      frame.manaText.textContent = `${Math.round(t.mana)} / ${t.maxMana}`;
+      frame.manaText.textContent = `${Math.round(mana)} / ${maxMana}`;
 
-      // Disabled state (during arena prep)
-      frame.element.style.opacity = this._disabled ? '0.75' : '1';
-      frame.element.style.cursor = this._disabled ? 'default' : 'pointer';
-      frame.element.style.pointerEvents = this._disabled ? 'none' : 'auto';
+      // Disabled state (during arena prep or invisible)
+      frame.element.style.opacity = disabled ? '0.75' : '1';
+      frame.element.style.cursor = disabled ? 'default' : 'pointer';
+      frame.element.style.pointerEvents = disabled ? 'none' : 'auto';
 
       // Selection highlight
       const isSelected = frame.entityId === this.selectedEntityId;
       frame.element.style.borderColor = isSelected ? '#ff4444' : 'rgba(255, 255, 255, 0.15)';
       frame.element.style.borderWidth = isSelected ? '2px' : '1px';
 
-      // Cast bar (hidden during arena prep)
-      if (!this._disabled && t.castingAbilityName && t.castingTotalTime > 0) {
+      // Cast bar (hidden during arena prep or invisibility)
+      if (!disabled && t.castingAbilityName && t.castingTotalTime > 0) {
         frame.castBarContainer.style.display = 'block';
         let progress: number;
         if (t.castingIsChannel) {

@@ -859,6 +859,23 @@ export class Engine {
     if (definition.id === 'crotch-rot') {
       this.buffSystem.apply(target, RottenCrotchStun);
     }
+    if (definition.id === 'dumpster-diving' && target === this.playerController) {
+      // AoE damage on emerge: 150 damage to nearby enemies within 5 yards
+      const radius = yardsToUnits(5);
+      for (const npc of this.npcs) {
+        if (npc.dead || !npc.isHostileTo(this.playerController)) continue;
+        const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
+        const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
+        if (dx * dx + dz * dz <= radius * radius) {
+          const dmg = this.godMode ? 0 : this.combatSystem.processDamageAbsorb(npc, 150, this.playerController);
+          npc.hp = Math.max(0, npc.hp - dmg);
+          if (dmg > 0) this.combatSystem.onCombatText?.(npc, dmg, 'damage');
+          this.combatSystem.enterCombat(this.playerController);
+          this.combatSystem.enterCombat(npc);
+          if (npc.hp <= 0 && !npc.dead) npc.die();
+        }
+      }
+    }
   }
 
   spawnDot(target: Targetable, debuff: BuffDefinition, totalDuration: number, tickInterval: number, totalDamage: number, owner: Targetable): void {
@@ -1421,7 +1438,8 @@ export class Engine {
     const target = this.targetingSystem.currentTarget;
 
     // Stop conditions
-    if (player.dead || !target || target.dead || !target.isHostileTo(player) || target !== this.autoAttackTarget) {
+    if (player.dead || !target || target.dead || !target.isHostileTo(player) || target !== this.autoAttackTarget
+      || this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(player)) {
       this.stopAutoAttack();
       return;
     }
@@ -1508,6 +1526,7 @@ export class Engine {
     this.playerController.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(this.playerController, 'crash-out'));
     this.playerController.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(this.playerController, 'retard-strength'));
     this.playerController.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(this.playerController, 'full-retard'));
+    this.playerController.setAbilityBuffActive('dumpster-diving', this.buffSystem.hasBuff(this.playerController, 'dumpster-diving'));
 
     // Resting toggle
     const rKeyDown = this.input.isBindDown(keybindManager.getCode('rest'));

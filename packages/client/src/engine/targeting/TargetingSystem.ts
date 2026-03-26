@@ -3,6 +3,8 @@ import type { Targetable } from '../types';
 
 export class TargetingSystem {
   currentTarget: Targetable | null = null;
+  /** Optional filter — return true for targets that should be skipped by raycasts. */
+  isUntargetable?: (target: Targetable) => boolean;
 
   private camera: THREE.PerspectiveCamera;
   private scene: THREE.Scene;
@@ -234,6 +236,7 @@ export class TargetingSystem {
       const targetable = this.findTargetable(hit.object);
       if (targetable) {
         if (targetable === this.getLocalPlayer()) continue;
+        if (this.isUntargetable?.(targetable)) continue;
         if (targetable.dead) {
           if (!deadFallback) deadFallback = targetable;
           continue;

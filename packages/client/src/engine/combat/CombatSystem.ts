@@ -212,6 +212,9 @@ export class CombatSystem {
     if (target?.dead && (ability.requiresHostileTarget || ability.requiresTarget)) {
       return { success: false, error: 'dead', errorMessage: 'Target is dead' };
     }
+    if (target && this.buffSystem.isUntargetable(target) && (ability.requiresHostileTarget || ability.requiresTarget)) {
+      return { success: false, error: 'no-target', errorMessage: 'Target is untargetable' };
+    }
     if (!ability.usableWhileCCd && this.buffSystem.isStunned(attacker)) {
       return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     }
@@ -543,6 +546,7 @@ export class CombatSystem {
 
   applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {
     if (attacker.dead || target.dead) return;
+    if (this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(attacker)) return;
 
     this.onHostileAction?.(attacker, target);
     const outcome = this.rollOutcome(attacker, target);

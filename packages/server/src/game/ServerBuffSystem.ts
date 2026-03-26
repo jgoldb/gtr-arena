@@ -229,6 +229,12 @@ export class ServerBuffSystem {
     return buffs.some(b => b.definition.effects.some(e => e.type === 'blind' && this.isEffectActive(b, e)));
   }
 
+  isUntargetable(target: ServerEntity): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'untargetable' && this.isEffectActive(b, e)));
+  }
+
   isDiscombobulated(target: ServerEntity): boolean {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return false;

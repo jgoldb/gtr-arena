@@ -40,6 +40,19 @@ export class Crackhead extends CharacterModel {
   private crackRockParticles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }[] = [];
   private crackRockSpawned = false;
 
+  // Dumpster Dive buff state
+  private dumpsterDiveActive = false;
+  private dumpsterDiveElapsed = 0;
+  private dumpsterDiveDuration = 4; // matches buff duration; tune here if needed
+  private dumpsterGroup: THREE.Group | null = null;
+  private dumpsterLidPivot: THREE.Group | null = null;
+  /** When true, the character model stays fully invisible for the entire buff (enemy POV). */
+  dumpsterDiveHostile = false;
+  /** XZ position where the dumpster was spawned (dive-in location). */
+  private dumpsterDiveOrigin = new THREE.Vector3();
+  /** Whether the emerge position has been snapped to current character pos. */
+  private dumpsterEmergeSnapped = false;
+
   // Stolen buff animation state
   private crashOutActive = false;
   private crashOutWeight = 0;
@@ -505,6 +518,9 @@ export class Crackhead extends CharacterModel {
   // to add our lunatic flair on top of the base run cycle
 
   protected override onAnimate(dt: number, input: AnimationInput): void {
+    // Update dumpster dive buff visual
+    this.updateDumpsterDive(dt);
+
     // Update sand particles
     for (let i = this.sandParticles.length - 1; i >= 0; i--) {
       const p = this.sandParticles[i];
@@ -770,6 +786,7 @@ export class Crackhead extends CharacterModel {
     if (abilityId === 'pocket-sand') return 0.6;
     if (abilityId === 'sticky-fingers') return 0.6;
     if (abilityId === 'crack-rock') return 0.8;
+    if (abilityId === 'dumpster-dive') return 0.3; // brief crouch at start; main visual is buff-driven
     if (abilityId === 'pvp-trinket') return 0.5;
     return 0.6;
   }
@@ -779,6 +796,7 @@ export class Crackhead extends CharacterModel {
     else if (abilityId === 'pocket-sand') this.animatePocketSand(t);
     else if (abilityId === 'sticky-fingers') this.animateStickyFingers(t);
     else if (abilityId === 'crack-rock') this.animateCrackRock(t);
+    else if (abilityId === 'dumpster-dive') this.animateDumpsterDiveStart(t);
     else if (abilityId === 'pvp-trinket') this.animatePvPTrinket(t);
   }
 
@@ -1023,6 +1041,15 @@ export class Crackhead extends CharacterModel {
       this.retardStrengthActive = active;
     } else if (buffId === 'full-retard') {
       this.fullRetardActive = active;
+    } else if (buffId === 'dumpster-diving') {
+      if (active && !this.dumpsterDiveActive) {
+        this.dumpsterDiveActive = true;
+        this.dumpsterDiveElapsed = 0;
+      } else if (!active && this.dumpsterDiveActive) {
+        this.dumpsterDiveActive = false;
+        this.cleanupDumpster();
+        this.setOpacity(1);
+      }
     }
   }
 
@@ -1111,6 +1138,258 @@ export class Crackhead extends CharacterModel {
 
       scene.add(mesh);
       this.crackRockParticles.push({ mesh, vel, life: 0.6 + Math.random() * 0.4 });
+    }
+  }
+
+  // ── Dumpster Dive Animation (brief ability start) ──────────────────────
+
+  private animateDumpsterDiveStart(t: number): void {
+    // Quick crouch: body drops and arms pull in
+    const crouch = t < 0.5 ? t / 0.5 : 1;
+    const ease = crouch * crouch * (3 - 2 * crouch);
+    this.bodyGroup.rotation.x += 0.4 * ease;
+    this.bodyGroup.position.y -= 0.15 * ease;
+    this.leftArmGroup.rotation.x += 0.6 * ease;
+    this.leftArmGroup.rotation.z += 0.3 * ease;
+    this.rightArmGroup.rotation.x += 0.6 * ease;
+    this.rightArmGroup.rotation.z -= 0.3 * ease;
+    this.headGroup.rotation.x += 0.2 * ease;
+  }
+
+  // ── Dumpster Dive Buff Visual (2.5s sequence) ─────────────────────────
+
+  private createDumpster(): THREE.Group {
+    const dumpster = new THREE.Group();
+
+    const DUMPSTER_GREEN = 0x2a6e2a;
+    const DUMPSTER_DARK = 0x1e4e1e;
+    const DUMPSTER_METAL = 0x555555;
+
+    // Main body — rectangular bin
+    const bodyGeo = new THREE.BoxGeometry(1.0, 0.7, 0.7);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: DUMPSTER_GREEN, roughness: 0.8 });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.position.y = 0.35;
+    dumpster.add(body);
+
+    // Dark stripe along the bottom
+    const stripeGeo = new THREE.BoxGeometry(1.02, 0.15, 0.72);
+    const stripeMat = new THREE.MeshStandardMaterial({ color: DUMPSTER_DARK, roughness: 0.9 });
+    const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+    stripe.position.y = 0.08;
+    dumpster.add(stripe);
+
+    // Lid — pivot attached at the back edge of the dumpster top
+    this.dumpsterLidPivot = new THREE.Group();
+    this.dumpsterLidPivot.position.set(0, 0.7, 0.35); // top-back edge
+    const lidGeo = new THREE.BoxGeometry(1.02, 0.06, 0.72);
+    const lidMat = new THREE.MeshStandardMaterial({ color: DUMPSTER_DARK, roughness: 0.7 });
+    const lid = new THREE.Mesh(lidGeo, lidMat);
+    lid.position.set(0, 0.03, -0.36); // centered on pivot so it swings correctly
+    this.dumpsterLidPivot.add(lid);
+    dumpster.add(this.dumpsterLidPivot);
+
+    // Side handles
+    const handleGeo = new THREE.BoxGeometry(0.08, 0.06, 0.06);
+    const handleMat = new THREE.MeshStandardMaterial({ color: DUMPSTER_METAL, roughness: 0.5 });
+    for (const side of [-1, 1]) {
+      const handle = new THREE.Mesh(handleGeo, handleMat);
+      handle.position.set(side * 0.54, 0.5, 0);
+      dumpster.add(handle);
+    }
+
+    return dumpster;
+  }
+
+  private cleanupDumpster(): void {
+    if (this.dumpsterGroup) {
+      this.dumpsterGroup.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          (child.material as THREE.Material).dispose();
+        }
+      });
+      this.dumpsterGroup.removeFromParent();
+      this.dumpsterGroup = null;
+      this.dumpsterLidPivot = null;
+    }
+  }
+
+  private updateDumpsterDive(dt: number): void {
+    if (!this.dumpsterDiveActive) return;
+
+    this.dumpsterDiveElapsed += dt;
+    const dur = this.dumpsterDiveDuration;
+    const t = Math.min(1, this.dumpsterDiveElapsed / dur);
+
+    const parent = this.group.parent;
+    if (!parent) return;
+    const scene = parent.parent;
+    if (!scene) return;
+
+    // Spawn dumpster on first frame
+    if (!this.dumpsterGroup) {
+      this.dumpsterGroup = this.createDumpster();
+      // Save dive-in origin position
+      const spawnPos = new THREE.Vector3();
+      parent.getWorldPosition(spawnPos);
+      this.dumpsterDiveOrigin.set(spawnPos.x, 0, spawnPos.z);
+      this.dumpsterEmergeSnapped = false;
+      this.dumpsterGroup.position.set(spawnPos.x, 0, spawnPos.z);
+      // Match character facing
+      this.dumpsterGroup.rotation.y = parent.rotation.y;
+      scene.add(this.dumpsterGroup);
+    }
+
+    // ── Animation phases (all normalized 0-1 within total duration) ──
+    // The dumpster stays at the dive-in origin for the initial sequence,
+    // then snaps to the character's current position for the emerge sequence.
+
+    const dumpster = this.dumpsterGroup;
+    const lidPivot = this.dumpsterLidPivot;
+
+    const hostile = this.dumpsterDiveHostile;
+    // Submerge depth — must be deep enough to fully hide the dumpster (body top at ~0.76)
+    const SUBMERGE = -1.0;
+
+    // Determine which XZ position to use:
+    // - Dive-in phases use the origin (where Crackhead activated the ability)
+    // - Emerge phases snap to Crackhead's current position
+    const emergePhaseStart = hostile ? 0.70 : 0.55;
+    const currentPos = new THREE.Vector3();
+    parent.getWorldPosition(currentPos);
+
+    // For enemies during fade-out: pin the character model at the dive origin
+    // so movement doesn't reveal direction. Offset the group in parent-local space.
+    if (hostile && t < 0.15) {
+      const localOrigin = parent.worldToLocal(
+        new THREE.Vector3(this.dumpsterDiveOrigin.x, currentPos.y, this.dumpsterDiveOrigin.z)
+      );
+      this.group.position.x = localOrigin.x;
+      this.group.position.z = localOrigin.z;
+    } else if (this.group.position.x !== 0 || this.group.position.z !== 0) {
+      this.group.position.x = 0;
+      this.group.position.z = 0;
+    }
+
+    if (t >= emergePhaseStart && !this.dumpsterEmergeSnapped) {
+      this.dumpsterEmergeSnapped = true;
+      this.dumpsterDiveOrigin.set(currentPos.x, 0, currentPos.z);
+      dumpster.rotation.y = parent.rotation.y;
+    }
+
+    const ox = this.dumpsterDiveOrigin.x;
+    const oz = this.dumpsterDiveOrigin.z;
+
+    if (hostile) {
+      // ── Enemy POV: fade out → dumpster dive → underground → dumpster emerge → fade in ──
+      if (t < 0.15) {
+        // Phase 1: Fade out character, open dumpster rises
+        const p = t / 0.15;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(1 - ease);
+        dumpster.position.set(ox, SUBMERGE + -SUBMERGE * ease, oz);
+        if (lidPivot) lidPivot.rotation.x = -1.75;
+      } else if (t < 0.25) {
+        // Phase 2: Lid swings shut
+        const p = (t - 0.15) / 0.10;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(0);
+        dumpster.position.set(ox, 0, oz);
+        if (lidPivot) lidPivot.rotation.x = -1.75 * (1 - ease);
+      } else if (t < 0.40) {
+        // Phase 3: Closed dumpster descends fully underground
+        const p = (t - 0.25) / 0.15;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(0);
+        dumpster.position.set(ox, SUBMERGE * ease, oz);
+        if (lidPivot) lidPivot.rotation.x = 0;
+      } else if (t < 0.70) {
+        // Phase 4-5: Underground — dumpster fully hidden, character invisible
+        this.setOpacity(0);
+        dumpster.position.set(ox, SUBMERGE, oz);
+        if (lidPivot) lidPivot.rotation.x = 0;
+      } else if (t < 0.95) {
+        // Phase 6-8: Emerge sequence — dumpster rises, lid opens, character fades in
+        // all run in parallel over 0.70-0.95
+        const span = 0.25;
+        const p = (t - 0.70) / span;
+        const ease = p * p * (3 - 2 * p);
+
+        // Character fades in over the full emerge window
+        this.setOpacity(ease);
+
+        // Dumpster rises (0.70-0.80), then stays at ground level
+        const riseP = Math.min(1, (t - 0.70) / 0.10);
+        const riseEase = riseP * riseP * (3 - 2 * riseP);
+        const dumpsterY = riseP < 1
+          ? SUBMERGE + -SUBMERGE * riseEase
+          : SUBMERGE * Math.max(0, (t - 0.85) / 0.10); // descend in last portion
+        dumpster.position.set(ox, dumpsterY, oz);
+
+        // Lid opens (0.77-0.85)
+        const lidP = Math.max(0, Math.min(1, (t - 0.77) / 0.08));
+        const lidEase = lidP * lidP * (3 - 2 * lidP);
+        if (lidPivot) lidPivot.rotation.x = -1.75 * lidEase;
+      } else {
+        // Phase 9: Settle — character fully visible, dumpster underground
+        this.setOpacity(1);
+        dumpster.position.set(ox, SUBMERGE, oz);
+      }
+    } else {
+      // ── Self / teammate POV: full dumpster animation (appears twice) ──
+      if (t < 0.15) {
+        // Phase 1: Fade out character, open dumpster rises
+        const p = t / 0.15;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(1 - ease);
+        dumpster.position.set(ox, SUBMERGE + -SUBMERGE * ease, oz);
+        if (lidPivot) lidPivot.rotation.x = -1.75;
+      } else if (t < 0.25) {
+        // Phase 2: Lid swings shut
+        const p = (t - 0.15) / 0.10;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(0);
+        dumpster.position.set(ox, 0, oz);
+        if (lidPivot) lidPivot.rotation.x = -1.75 * (1 - ease);
+      } else if (t < 0.40) {
+        // Phase 3: Closed dumpster descends fully underground
+        const p = (t - 0.25) / 0.15;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(0);
+        dumpster.position.set(ox, SUBMERGE * ease, oz);
+        if (lidPivot) lidPivot.rotation.x = 0;
+      } else if (t < 0.55) {
+        // Phase 4: Underground pause
+        this.setOpacity(0);
+        dumpster.position.set(ox, SUBMERGE, oz);
+        if (lidPivot) lidPivot.rotation.x = 0;
+      } else if (t < 0.70) {
+        // Phase 5: Closed dumpster rises at current position (snapped)
+        const p = (t - 0.55) / 0.15;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(0);
+        dumpster.position.set(ox, SUBMERGE + -SUBMERGE * ease, oz);
+        if (lidPivot) lidPivot.rotation.x = 0;
+      } else if (t < 0.80) {
+        // Phase 6: Lid swings open
+        const p = (t - 0.70) / 0.10;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(0);
+        dumpster.position.set(ox, 0, oz);
+        if (lidPivot) lidPivot.rotation.x = -1.75 * ease;
+      } else if (t < 0.95) {
+        // Phase 7: Open dumpster descends, character fades in
+        const p = (t - 0.80) / 0.15;
+        const ease = p * p * (3 - 2 * p);
+        this.setOpacity(ease);
+        dumpster.position.set(ox, SUBMERGE * ease, oz);
+        if (lidPivot) lidPivot.rotation.x = -1.75;
+      } else {
+        // Phase 8: Settle — character fully visible
+        this.setOpacity(1);
+        dumpster.position.set(ox, SUBMERGE, oz);
+      }
     }
   }
 
