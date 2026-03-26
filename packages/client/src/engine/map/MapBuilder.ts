@@ -64,7 +64,7 @@ export class MapBuilder {
     const hemiLight = new THREE.HemisphereLight(
       new THREE.Color(config.skyColor),
       new THREE.Color(config.groundColor),
-      0.3
+      0.5
     );
     hemiLight.name = 'hemisphereLight';
     group.add(hemiLight);

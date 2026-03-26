@@ -12,8 +12,8 @@ export const THE_CAGE: MapConfig = {
   fogNear: 40,
   fogFar: 100,
   sunDirection: { x: 0, y: 15, z: 0 },
-  sunIntensity: 1.5,
-  ambientIntensity: 0.15,
+  sunIntensity: 2.2,
+  ambientIntensity: 0.4,
   obstacles: [
     // ── Cage outer walls (collision-only, invisible — bars provide the visual) ─
     { type: 'wall', position: { x: 0, y: 10, z: -30.5 }, scale: { x: 41, y: 20, z: 0.3 }, color: '#1a1a1e', visible: false },

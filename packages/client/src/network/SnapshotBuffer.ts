@@ -43,20 +43,26 @@ export interface InterpolatedPosition {
 
 export class SnapshotBuffer {
   private snapshots: BufferedSnapshot[] = [];
-  private static readonly MAX_BUFFER_SIZE = 30; // ~1.5s at 20Hz
+  private static readonly MAX_BUFFER_SIZE = 45; // ~1.5s at 30Hz
 
   // ── Adaptive delay ──────────────────────────────────────────────────
   // Instead of a fixed 100ms, we measure inter-packet arrival jitter and
   // set the delay to cover ~95th percentile (mean + 2*stddev), clamped
   // to a reasonable range. This keeps the buffer fed on real connections
   // while staying responsive on LAN.
+  //
+  // Asymmetric adaptation for WiFi: jitter spikes are absorbed fast
+  // (high alpha) so the buffer doesn't underrun, while jitter decreases
+  // decay slowly (low alpha) to avoid oscillation after a burst.
   private static readonly MIN_DELAY_MS = 50;   // floor (LAN)
   private static readonly MAX_DELAY_MS = 300;  // ceiling (bad connection)
-  private static readonly JITTER_ALPHA = 0.05; // EWMA smoothing factor
+  private static readonly JITTER_ALPHA_UP = 0.3;   // fast react to spikes
+  private static readonly JITTER_ALPHA_DOWN = 0.05; // slow decay when stable
   private interpDelayMs = 100; // initial guess, adapts quickly
   private lastReceiveTime = 0;
   private avgInterval = 50;    // EWMA of inter-packet interval
   private avgJitter = 0;       // EWMA of absolute deviation from avgInterval
+  private jitterHighWater = 0; // peak jitter tracker, decays slowly
 
   // ── Extrapolation ───────────────────────────────────────────────────
   private static readonly MAX_EXTRAPOLATION_MS = 200; // don't extrapolate beyond this
@@ -79,12 +85,28 @@ export class SnapshotBuffer {
     if (this.lastReceiveTime > 0) {
       const interval = now - this.lastReceiveTime;
       const jitter = Math.abs(interval - this.avgInterval);
-      const a = SnapshotBuffer.JITTER_ALPHA;
-      this.avgInterval = this.avgInterval * (1 - a) + interval * a;
-      this.avgJitter = this.avgJitter * (1 - a) + jitter * a;
 
-      // Target delay = average interval + 2x jitter (covers ~95th percentile)
-      const target = this.avgInterval + this.avgJitter * 2;
+      // Asymmetric EWMA: fast alpha when jitter increases, slow when it decreases.
+      // This absorbs WiFi spikes in 1-2 packets but takes ~1s to relax back down.
+      const aInterval = interval > this.avgInterval
+        ? SnapshotBuffer.JITTER_ALPHA_UP : SnapshotBuffer.JITTER_ALPHA_DOWN;
+      this.avgInterval = this.avgInterval * (1 - aInterval) + interval * aInterval;
+
+      const aJitter = jitter > this.avgJitter
+        ? SnapshotBuffer.JITTER_ALPHA_UP : SnapshotBuffer.JITTER_ALPHA_DOWN;
+      this.avgJitter = this.avgJitter * (1 - aJitter) + jitter * aJitter;
+
+      // High-water mark: jumps instantly to peak jitter, decays slowly.
+      // Prevents the delay from collapsing between WiFi burst clusters.
+      if (jitter > this.jitterHighWater) {
+        this.jitterHighWater = jitter;
+      } else {
+        this.jitterHighWater *= (1 - SnapshotBuffer.JITTER_ALPHA_DOWN);
+      }
+
+      // Target delay uses the larger of EWMA jitter and decaying high-water mark
+      const effectiveJitter = Math.max(this.avgJitter, this.jitterHighWater * 0.5);
+      const target = this.avgInterval + effectiveJitter * 2;
       this.interpDelayMs = Math.max(
         SnapshotBuffer.MIN_DELAY_MS,
         Math.min(SnapshotBuffer.MAX_DELAY_MS, target),
@@ -359,8 +381,22 @@ export class SnapshotBuffer {
    * This is the server time the client is "seeing" right now, accounting
    * for interpolation delay. Used for lag compensation — the client sends
    * this with ability requests so the server can rewind to the right moment.
+   *
+   * When a clock offset is provided (from ClockSync), we compute this directly:
+   *   renderServerTime = estimatedServerNow - interpDelay
+   * This is more accurate than interpolation-based estimation, especially during
+   * packet loss or jitter spikes where snapshot arrival times don't reflect true
+   * server timing.
+   *
+   * @param clockOffset - If provided, Date.now() + clockOffset ≈ server's Date.now().
    */
-  getCurrentRenderServerTimestamp(): number | null {
+  getCurrentRenderServerTimestamp(clockOffset?: number): number | null {
+    // Clock-sync path: derive directly from synced clocks
+    if (clockOffset !== undefined) {
+      return Date.now() + clockOffset - this.interpDelayMs;
+    }
+
+    // Fallback: interpolate between received server timestamps
     if (this.snapshots.length < 2) return null;
 
     const renderTime = performance.now() - this.interpDelayMs;

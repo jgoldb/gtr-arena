@@ -1,4 +1,5 @@
 import type { WebSocket } from 'ws';
+import type { DataChannel } from 'node-datachannel';
 import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
 import { MAPS, MAP_LIST, xpToLevel, calculateXpGain, getMaxPlayers, encodeMessage } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
@@ -56,6 +57,9 @@ export class GameSession {
 
   // Players who left/disconnected before the game ended — they get a loss but no XP
   private removedBeforeEnd = new Set<string>();
+
+  /** Callback to look up active DataChannels by userId — injected by LobbyManager/index. */
+  getDataChannel: ((userId: string) => DataChannel | undefined) | null = null;
 
   // Rematch state
   private rematchRequester: string | null = null;
@@ -129,6 +133,9 @@ export class GameSession {
     };
     this.engine.onSendToPlayer = (entityId, msg) => this.sendToEntity(entityId, msg);
     this.engine.onPositionRelay = (senderEntityId, msg) => this.broadcastExcept(senderEntityId, msg);
+    // Unreliable broadcasts — positions and relays via WebRTC DataChannel
+    this.engine.onBroadcastUnreliable = (msg) => this.broadcastUnreliable(msg);
+    this.engine.onPositionRelayUnreliable = (senderEntityId, msg) => this.broadcastUnreliableExcept(senderEntityId, msg);
     this.engine.onGameOver = (winningTeam) => this.handleGameOver(winningTeam);
 
     // Wire match stat tracking
@@ -279,7 +286,7 @@ export class GameSession {
 
     switch (msg.type) {
       case 'player_state':
-        this.engine.updateEntityPosition(entityId, msg.x, msg.y, msg.z, msg.rotationY, msg.isMoving, msg.vx, msg.vz);
+        this.engine.updateEntityPosition(entityId, msg.x, msg.y, msg.z, msg.rotationY, msg.isMoving, msg.vx, msg.vz, msg.moveFlags, msg.moveSpeed, msg.vy, msg.turnSpeed);
         break;
       case 'use_ability':
         this.engine.requestAbility(
@@ -753,6 +760,39 @@ export class GameSession {
     for (const [userId, socket] of this.sockets) {
       if (userId !== senderUserId && socket.readyState === socket.OPEN) {
         socket.send(data);
+      }
+    }
+  }
+
+  /** Broadcast via unreliable DataChannel. Users without a DC get the data via the
+   *  reliable game_state_update fallback (positions included when DC is unavailable). */
+  private broadcastUnreliable(msg: ServerMessage): void {
+    const data = encodeMessage(msg);
+    const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    for (const userId of this.sockets.keys()) {
+      const dc = this.getDataChannel?.(userId);
+      if (dc && dc.isOpen()) {
+        try { dc.sendMessageBinary(buf); } catch { /* DC closed mid-send */ }
+      }
+    }
+  }
+
+  /** Broadcast unreliable to all except the entity's owner. */
+  private broadcastUnreliableExcept(entityId: string, msg: ServerMessage): void {
+    const senderUserId = this.userIdByEntityId.get(entityId);
+    const data = encodeMessage(msg);
+    const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    for (const userId of this.sockets.keys()) {
+      if (userId === senderUserId) continue;
+      const dc = this.getDataChannel?.(userId);
+      if (dc && dc.isOpen()) {
+        try { dc.sendMessageBinary(buf); } catch { /* DC closed mid-send */ }
+      } else {
+        // Fallback: send position relay via reliable WebSocket
+        const socket = this.sockets.get(userId);
+        if (socket && socket.readyState === socket.OPEN) {
+          socket.send(data);
+        }
       }
     }
   }

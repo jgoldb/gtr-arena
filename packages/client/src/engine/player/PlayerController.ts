@@ -7,6 +7,7 @@ import type { Ability } from '../combat/Ability';
 import type { Targetable } from '../types';
 import { createTargetingHitArea } from '../targeting/targetingHitArea';
 import { keybindManager } from '../../ui/KeybindManager';
+import { MoveFlags } from '@gtr/shared';
 
 export class PlayerController implements Targetable {
   readonly mesh: THREE.Group;
@@ -35,7 +36,7 @@ export class PlayerController implements Targetable {
   private cameraElevationGetter: () => number;
   private targetRotation = 0;
   private movementAzimuth = 0;
-  private velocityY = 0;
+  velocityY = 0;
   private grounded = true;
   private fallPeakY = 0;
   private inWater = false;
@@ -167,6 +168,9 @@ export class PlayerController implements Targetable {
   charging = false;
   discombobulated = false;
   isMoving = false;
+  moveFlags = 0;
+  currentMoveSpeed = 0;
+  turnSpeed = 0;
   godMode = false;
   onFallDamage?: (fallDistance: number) => void;
   private keyScramble = new Map<string, string>();
@@ -370,9 +374,14 @@ export class PlayerController implements Targetable {
 
     const isMoving = moveDir.lengthSq() > 0 && this.movementSpeedModifier > 0;
     this.isMoving = isMoving;
+    this.moveFlags = (wDown ? MoveFlags.FORWARD : 0)
+      | (sDown ? MoveFlags.BACKWARD : 0)
+      | (aDown ? MoveFlags.STRAFE_LEFT : 0)
+      | (dDown ? MoveFlags.STRAFE_RIGHT : 0);
     const isBackpedaling = sDown && !wDown;
     const speedMultiplier = isBackpedaling ? this.backpedalMultiplier : 1;
     const effectiveSpeed = (this.inWater ? this.speed * this.waterSpeedMultiplier : this.speed) * speedMultiplier * this.movementSpeedModifier;
+    this.currentMoveSpeed = effectiveSpeed;
 
     if (this.grounded || this.godMode) {
       // On ground (or flying in god mode): full movement control
@@ -400,7 +409,7 @@ export class PlayerController implements Targetable {
     while (diff < -Math.PI) diff += Math.PI * 2;
     const rotApplied = diff * Math.min(1, 12 * deltaTime);
     this.mesh.rotation.y += rotApplied;
-    const turnSpeed = deltaTime > 0 ? rotApplied / deltaTime : 0;
+    this.turnSpeed = deltaTime > 0 ? rotApplied / deltaTime : 0;
 
     // Jump / fly
     const spaceDown = this.input.isBindDown(keybindManager.getCode('jump'));
@@ -493,7 +502,7 @@ export class PlayerController implements Targetable {
       isMoving,
       isGrounded: this.grounded,
       velocityY: this.velocityY,
-      turnSpeed,
+      turnSpeed: this.turnSpeed,
       speedMultiplier,
       strafeDirection,
     });

@@ -12,8 +12,8 @@ export const CELESTIAL_BALLROOM: MapConfig = {
   fogNear: 60,
   fogFar: 150,
   sunDirection: { x: 5, y: 20, z: 3 },
-  sunIntensity: 1.6,
-  ambientIntensity: 0.4,
+  sunIntensity: 2.2,
+  ambientIntensity: 0.7,
   obstacles: [
     // ── Outer safety boundary (invisible) ─────────────────────────────────
     { type: 'wall', position: { x: 0, y: 5, z: -65 }, scale: { x: 160, y: 10, z: 0.5 }, color: '#000000', visible: false },

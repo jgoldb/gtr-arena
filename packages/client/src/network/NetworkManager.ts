@@ -1,5 +1,6 @@
 import type { ClientMessage, ServerMessage } from '@gtr/shared';
 import { encodeMessage, decodeMessage } from '@gtr/shared';
+import { ClockSync } from './ClockSync';
 
 export type ServerMessageHandler = (msg: ServerMessage) => void;
 export type ConnectionState =
@@ -8,6 +9,11 @@ export type ConnectionState =
   | { status: 'reconnected' }
   | { status: 'failed' };
 export type ConnectionStateHandler = (state: ConnectionState) => void;
+
+/** Message types routed through the unreliable DataChannel when available. */
+const UNRELIABLE_SEND_TYPES: ReadonlySet<string> = new Set([
+  'player_state',
+]);
 
 export class NetworkManager {
   private ws: WebSocket | null = null;
@@ -24,6 +30,15 @@ export class NetworkManager {
 
   /** Latest round-trip time in milliseconds. */
   rtt = 0;
+
+  /** NTP-style clock synchronization with the server. */
+  readonly clockSync = new ClockSync();
+
+  // ── WebRTC DataChannel (unreliable) ──────────────────────────────────
+  private pc: RTCPeerConnection | null = null;
+  private dc: RTCDataChannel | null = null;
+  /** True when the unreliable DataChannel is open and usable. */
+  private dcOpen = false;
 
   private static readonly PING_INTERVAL = 3_000;
   private static readonly STALE_TIMEOUT = 20_000;
@@ -79,7 +94,19 @@ export class NetworkManager {
         ? decodeMessage<ServerMessage>(event.data)
         : JSON.parse(event.data) as ServerMessage;
       if (msg.type === 'pong') {
-        if (msg.timestamp) this.rtt = Date.now() - msg.timestamp;
+        if (msg.timestamp) {
+          this.clockSync.processPong(msg.timestamp, msg.serverTime);
+          this.rtt = this.clockSync.rtt;
+        }
+        return;
+      }
+      // WebRTC signaling — handle before dispatching to game handlers
+      if (msg.type === 'rtc_offer') {
+        this.handleRtcOffer(msg.sdp);
+        return;
+      }
+      if (msg.type === 'rtc_candidate') {
+        this.handleRtcCandidate(msg.candidate, msg.mid);
         return;
       }
       for (const handler of this.handlers) {
@@ -89,6 +116,7 @@ export class NetworkManager {
 
     this.ws.onclose = () => {
       this.ws = null;
+      this.teardownWebRTC();
       this.stopHeartbeat();
       if (this.reconnectAttempts === 0) {
         this.connectionStateHandler?.({ status: 'disconnected' });
@@ -102,6 +130,17 @@ export class NetworkManager {
   }
 
   send(msg: ClientMessage): void {
+    // Route unreliable messages through DataChannel when available
+    if (UNRELIABLE_SEND_TYPES.has(msg.type) && this.dcOpen && this.dc) {
+      try {
+        const data = encodeMessage(msg);
+        this.dc.send(data);
+        return;
+      } catch {
+        // DC failed — fall through to WebSocket
+      }
+    }
+
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(encodeMessage(msg));
     } else if (
@@ -115,6 +154,7 @@ export class NetworkManager {
   disconnect(): void {
     this.messageQueue.length = 0;
     this.stopHeartbeat();
+    this.teardownWebRTC();
     if (this.reconnectTimer !== null) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -129,6 +169,103 @@ export class NetworkManager {
   get connected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
+
+  /** Whether the unreliable DataChannel is currently active. */
+  get unreliableConnected(): boolean {
+    return this.dcOpen;
+  }
+
+  // ── WebRTC signaling ──────────────────────────────────────────────────
+
+  private async handleRtcOffer(sdp: string): Promise<void> {
+    try {
+      // Clean up any previous connection (reconnect scenario)
+      this.teardownWebRTC();
+
+      this.pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
+
+      // Server creates the DataChannel — we receive it here
+      this.pc.ondatachannel = (event) => {
+        this.dc = event.channel;
+        this.dc.binaryType = 'arraybuffer';
+
+        this.dc.onopen = () => {
+          this.dcOpen = true;
+        };
+
+        this.dc.onclose = () => {
+          this.dcOpen = false;
+        };
+
+        this.dc.onerror = () => {
+          this.dcOpen = false;
+        };
+
+        this.dc.onmessage = (evt) => {
+          // Incoming unreliable message from server (position_update, position_relay)
+          try {
+            const msg = decodeMessage<ServerMessage>(evt.data as ArrayBuffer);
+            for (const handler of this.handlers) {
+              handler(msg);
+            }
+          } catch { /* ignore malformed */ }
+        };
+      };
+
+      // Trickle ICE candidates to server via WebSocket
+      this.pc.onicecandidate = (event) => {
+        if (event.candidate && this.ws?.readyState === WebSocket.OPEN) {
+          this.ws.send(encodeMessage({
+            type: 'rtc_candidate',
+            candidate: event.candidate.candidate,
+            mid: event.candidate.sdpMid ?? '',
+          }));
+        }
+      };
+
+      // Set the server's offer and send our answer
+      await this.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+      const answer = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(answer);
+
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(encodeMessage({
+          type: 'rtc_answer',
+          sdp: answer.sdp!,
+        }));
+      }
+    } catch {
+      // WebRTC failed — no problem, everything still works over WebSocket
+      this.teardownWebRTC();
+    }
+  }
+
+  private async handleRtcCandidate(candidate: string, mid: string): Promise<void> {
+    try {
+      await this.pc?.addIceCandidate(new RTCIceCandidate({
+        candidate,
+        sdpMid: mid,
+      }));
+    } catch {
+      // Non-fatal — ICE negotiation may still succeed with other candidates
+    }
+  }
+
+  private teardownWebRTC(): void {
+    this.dcOpen = false;
+    if (this.dc) {
+      try { this.dc.close(); } catch { /* ignore */ }
+      this.dc = null;
+    }
+    if (this.pc) {
+      try { this.pc.close(); } catch { /* ignore */ }
+      this.pc = null;
+    }
+  }
+
+  // ── Internals ─────────────────────────────────────────────────────────
 
   private flushQueue(): void {
     const queued = this.messageQueue.splice(0);

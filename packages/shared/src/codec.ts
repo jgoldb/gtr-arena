@@ -5,7 +5,7 @@ import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpa
  *
  * Replaces JSON.stringify/parse for WebSocket messages. MessagePack produces
  * smaller payloads (no repeated field name strings) and is faster to
- * encode/decode, reducing both bandwidth and CPU on the hot path (20 Hz
+ * encode/decode, reducing both bandwidth and CPU on the hot path (30 Hz
  * game state broadcasts).
  *
  * Both sides must agree on the format: WebSocket binary frames containing

@@ -1,4 +1,5 @@
 import type { WebSocket } from 'ws';
+import type { DataChannel } from 'node-datachannel';
 import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled, S2C_AdminUsersList, S2C_AdminResult, S2C_UserProfile, S2C_Leaderboard, S2C_ChangePasswordResult, UserProfileData } from '@gtr/shared';
 import type { LobbyUser, LobbyGameInfo } from '@gtr/shared';
 import { encodeMessage } from '@gtr/shared';
@@ -25,10 +26,17 @@ export class LobbyManager {
   private gameSessions = new Map<string, GameSession>();
   private pendingRejoins = new Map<string, string>(); // userId -> gameSessionId
   private nextGameId = 1;
+  /** Reference to the global DataChannel map for unreliable game traffic. */
+  private dataChannelMap: Map<string, DataChannel> | null = null;
 
   constructor(auth: AuthManager, db: GtrDatabase) {
     this.auth = auth;
     this.db = db;
+  }
+
+  /** Set the global DataChannel map for unreliable game traffic (called once at startup). */
+  setDataChannelMap(map: Map<string, DataChannel>): void {
+    this.dataChannelMap = map;
   }
 
   /** Prefix a username with <GM> if the user is an admin. */
@@ -508,6 +516,11 @@ export class LobbyManager {
       (_gameId: string) => {},
     );
 
+    // Wire unreliable DataChannel lookup for position broadcasts
+    if (this.dataChannelMap) {
+      const dcMap = this.dataChannelMap;
+      session.getDataChannel = (userId) => dcMap.get(userId);
+    }
     session.onRematch = (oldGameId, info) => this.handleRematch(oldGameId, info);
     session.onGracePeriodExpired = (userId) => {
       this.pendingRejoins.delete(userId);

@@ -1312,6 +1312,10 @@ function handleServerMessage(msg: ServerMessage): void {
       clientEngine?.handlePositionRelay(msg);
       break;
 
+    case 'position_update':
+      clientEngine?.handlePositionUpdate(msg);
+      break;
+
     case 'countdown_start':
       // Server confirmed all clients are ready — reset the arena timer so
       // everyone's countdown is synchronized regardless of load time.

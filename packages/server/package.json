@@ -12,6 +12,7 @@
     "@gtr/shared": "*",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.8.0",
+    "node-datachannel": "^0.32.1",
     "tsx": "^4.19.0",
     "ws": "^8.18.0"
   },

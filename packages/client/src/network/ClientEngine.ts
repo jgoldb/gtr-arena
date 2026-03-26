@@ -4,7 +4,7 @@ import type {
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
   S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing, S2C_Knockback,
-  S2C_EntityDied, S2C_PositionRelay,
+  S2C_EntityDied, S2C_PositionRelay, S2C_PositionUpdate,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
 import { yardsToUnits, getCharacterStats, Sweep, GLOBAL_COOLDOWN } from '@gtr/shared';
@@ -89,10 +89,11 @@ export class ClientEngine {
 
   // ── Movement state change detection ────────────────────────────────
   // Sends position updates immediately on start/stop/direction change
-  // instead of waiting for the next 20Hz tick, reducing perceived latency
-  // for other players by up to 50ms.
+  // instead of waiting for the next 30Hz tick, reducing perceived latency
+  // for other players by up to 33ms.
   private lastImmediateSendTime = 0;
   private prevMoving = false;
+  private prevMoveFlags = 0;
   private prevMoveAngle = 0;
   private static readonly IMMEDIATE_SEND_MIN_INTERVAL = 30; // ms — rate limit for immediate sends
   private static readonly DIRECTION_CHANGE_THRESHOLD = 0.2; // radians (~11°) — detect turns faster for smoother dead reckoning
@@ -426,6 +427,20 @@ export class ClientEngine {
   handlePositionRelay(msg: S2C_PositionRelay): void {
     if (msg.id === this.localEntityId) return; // should never happen, but guard
     this.deadReckoning.updateEntity(msg.id, msg);
+  }
+
+  /** Handle unreliable position update from WebRTC DataChannel.
+   *  Arrives faster than the reliable game_state_update since it bypasses TCP. */
+  handlePositionUpdate(msg: S2C_PositionUpdate): void {
+    // Feed snapshot buffer for lag compensation timestamp tracking
+    this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.positions);
+
+    // Feed dead reckoning for remote entities
+    for (const pos of msg.positions) {
+      if (pos.id !== this.localEntityId) {
+        this.deadReckoning.updateEntity(pos.id, pos);
+      }
+    }
   }
 
   /** Dispatch a bundled event from the tick update. */
@@ -1199,7 +1214,8 @@ export class ClientEngine {
   // ── Network commands ──────────────────────────────────────────────────
 
   sendAbility(abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
-    const serverTimestamp = this.snapshotBuffer.getCurrentRenderServerTimestamp();
+    const clockOffset = this.network.clockSync.synced ? this.network.clockSync.offset : undefined;
+    const serverTimestamp = this.snapshotBuffer.getCurrentRenderServerTimestamp(clockOffset);
     this.network.send({
       type: 'use_ability',
       abilityId,
@@ -1391,7 +1407,7 @@ export class ClientEngine {
     this.playerController.update(dt);
 
     // Locally advance casting elapsed so animations run at render framerate (60fps)
-    // instead of server tickrate (20fps). Server corrections (pushback, interrupt)
+    // instead of server tickrate (30fps). Server corrections (pushback, interrupt)
     // override via applyEntityStateDeltas / applyLocalEntityState.
     if (this.localCastingAbilityId) {
       this.localCastingElapsed += dt;
@@ -1487,9 +1503,10 @@ export class ClientEngine {
 
     // ── Movement state change → immediate send ──
     // Detect start/stop/direction changes and send position right away
-    // instead of waiting for the next 20Hz tick. This reduces perceived
-    // latency for remote players by up to 50ms per state change.
+    // instead of waiting for the next 30Hz tick. This reduces perceived
+    // latency for remote players by up to 33ms per state change.
     const isMovingNow = this.playerController.isMoving ?? false;
+    const currentMoveFlags = this.playerController.moveFlags;
     const now = performance.now();
     let immediateNeeded = false;
 
@@ -1504,8 +1521,8 @@ export class ClientEngine {
       }
     }
 
-    if (isMovingNow !== this.prevMoving) {
-      // Start or stop — always send immediately
+    if (isMovingNow !== this.prevMoving || currentMoveFlags !== this.prevMoveFlags) {
+      // Start, stop, or flag change (e.g. W→W+A) — always send immediately
       immediateNeeded = true;
     } else if (isMovingNow) {
       // Still moving — check for significant direction change
@@ -1524,6 +1541,7 @@ export class ClientEngine {
       this.sendAccumulator = 0; // reset so the periodic tick stays evenly spaced
     }
     this.prevMoving = isMovingNow;
+    this.prevMoveFlags = currentMoveFlags;
 
     // Periodic 30Hz position updates — drift correction between state changes
     this.sendAccumulator += dt * 1000;
@@ -1655,8 +1673,8 @@ export class ClientEngine {
 
       entity.model.update(dt, {
         isMoving: entity.isMoving,
-        isGrounded: true,
-        velocityY: 0,
+        isGrounded: (dr?.vy ?? 0) === 0,
+        velocityY: dr?.vy ?? 0,
         turnSpeed,
         speedMultiplier,
         strafeDirection,
@@ -1847,6 +1865,10 @@ export class ClientEngine {
       isMoving,
       vx,
       vz,
+      moveFlags: this.playerController.moveFlags,
+      moveSpeed: this.playerController.currentMoveSpeed,
+      vy: this.playerController.velocityY,
+      turnSpeed: this.playerController.turnSpeed,
     });
   }
 

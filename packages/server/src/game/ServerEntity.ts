@@ -18,6 +18,11 @@ export class ServerEntity {
   // Horizontal velocity (world units/sec) — relayed from client for interpolation & animation
   vx = 0;
   vz = 0;
+  // Movement intent flags (bitfield) and speed — for flag-based dead reckoning
+  moveFlags = 0;
+  moveSpeed = 0;
+  vy = 0;
+  turnSpeed = 0;
 
   // Stats
   hp: number;

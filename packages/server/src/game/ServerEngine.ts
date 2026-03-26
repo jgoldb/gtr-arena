@@ -4,6 +4,7 @@ import type {
   S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_Knockback, S2C_EntityDied,
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
+  S2C_PositionUpdate,
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
@@ -140,11 +141,11 @@ export class ServerEngine {
   private tickTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private nextTickTarget = 0;
   private lastTickTime = 0;
-  private static readonly TICK_RATE = 20;
+  private static readonly TICK_RATE = 30;
   private static readonly TICK_MS = 1000 / ServerEngine.TICK_RATE;
   private static readonly CAST_PUSHBACK = 0.5;
   private static readonly INTERRUPT_COOLDOWN = 1;
-  private static readonly KEYFRAME_INTERVAL = 100; // full snapshot every 5 seconds
+  private static readonly KEYFRAME_INTERVAL = 150; // full snapshot every 5 seconds
   private static readonly BOTTLE_CHUCK_IMPACT_DELAY = 0.825; // animation wind-up + flight time
   // Range tolerance for residual latency (sub-tick timing, interpolation granularity).
   // Reduced from 2 yards now that server-side position rewind handles the bulk of lag compensation.
@@ -156,12 +157,12 @@ export class ServerEngine {
     positions: Map<string, { x: number; z: number; rotationY: number }>;
   }> = [];
   private static readonly MAX_REWIND_MS = 400;
-  // ~10 ticks at 20Hz (400ms / 50ms = 8, +2 margin)
+  // ~14 ticks at 30Hz (400ms / 33ms = 12, +2 margin)
   private static readonly MAX_HISTORY_TICKS = Math.ceil(400 / ServerEngine.TICK_MS) + 2;
 
   // Ability queue — holds one pending ability per entity when request arrives slightly
   // before GCD/cast expires. Processed on the tick where GCD/cast clears.
-  private static readonly ABILITY_QUEUE_TOLERANCE = 0.1; // 100ms — accept abilities arriving up to 2 ticks before GCD expires
+  private static readonly ABILITY_QUEUE_TOLERANCE = 0.1; // 100ms — accept abilities arriving up to 3 ticks before GCD expires
   private static readonly ABILITY_QUEUE_MAX_AGE = 0.5;   // expire stale queued abilities after 500ms
   private abilityQueue = new Map<string, {
     abilityId: string; targetEntityId: string | null;
@@ -196,9 +197,13 @@ export class ServerEngine {
   private lastBroadcastChemPoolSig = '';
 
   onBroadcast?: (msg: ServerMessage) => void;
+  /** Broadcast via unreliable DataChannel (positions). Falls back to reliable if not wired. */
+  onBroadcastUnreliable?: (msg: ServerMessage) => void;
   onSendToPlayer?: (entityId: string, msg: ServerMessage) => void;
   /** Relay a position update to all clients EXCEPT the sender — called immediately on receipt for low-latency dead reckoning. */
   onPositionRelay?: (senderEntityId: string, msg: ServerMessage) => void;
+  /** Relay via unreliable DataChannel. Falls back to onPositionRelay if not wired. */
+  onPositionRelayUnreliable?: (senderEntityId: string, msg: ServerMessage) => void;
   onGameOver?: (winningTeam: number) => void;
   /** Fired whenever damage is dealt (sourceEntityId, targetEntityId, amount). */
   onStatDamage?: (sourceEntityId: string, targetEntityId: string, amount: number) => void;
@@ -467,7 +472,7 @@ export class ServerEngine {
   // skip distance validation (handles reconnects, knockbacks, etc.).
   private static readonly VALIDATION_GAP_THRESHOLD = 0.5; // 500ms
 
-  updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean, vx: number, vz: number): void {
+  updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean, vx: number, vz: number, moveFlags?: number, moveSpeed?: number, vy?: number, turnSpeed?: number): void {
     const entity = this.getEntity(entityId);
     if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
     // During a sweep charge, the server is authoritative about position — ignore client updates
@@ -518,13 +523,24 @@ export class ServerEngine {
     entity.isMoving = isMoving;
     entity.vx = vx;
     entity.vz = vz;
+    if (moveFlags !== undefined) entity.moveFlags = moveFlags;
+    if (moveSpeed !== undefined) entity.moveSpeed = moveSpeed;
+    if (vy !== undefined) entity.vy = vy;
+    if (turnSpeed !== undefined) entity.turnSpeed = turnSpeed;
     if (isMoving) this.cancelResting(entityId);
 
-    // Immediately relay to other clients for low-latency dead reckoning
-    this.onPositionRelay?.(entityId, {
+    // Immediately relay to other clients for low-latency dead reckoning.
+    // Prefer unreliable DataChannel — avoids TCP head-of-line blocking.
+    const relayMsg: ServerMessage = {
       type: 'position_relay',
       id: entityId, x, y, z, rotationY, isMoving, vx, vz,
-    });
+      moveFlags, moveSpeed, vy, turnSpeed,
+    };
+    if (this.onPositionRelayUnreliable) {
+      this.onPositionRelayUnreliable(entityId, relayMsg);
+    } else {
+      this.onPositionRelay?.(entityId, relayMsg);
+    }
 
     // Fall damage detection: track peak Y while airborne
     const resolved = this.collision.resolve(x, z, y, entity.collisionRadius);
@@ -1771,6 +1787,7 @@ export class ServerEngine {
           id: e.id, x: e.x, y: e.y, z: e.z,
           rotationY: e.rotationY, isMoving: e.isMoving,
           vx: e.vx, vz: e.vz,
+          moveFlags: e.moveFlags, moveSpeed: e.moveSpeed, vy: e.vy, turnSpeed: e.turnSpeed,
         });
         this.lastBroadcastPosition.set(e.id, {
           x: e.x, y: e.y, z: e.z,
@@ -1881,6 +1898,24 @@ export class ServerEngine {
     const hasBuffs = changedBuffs.length > 0;
     const hasEvents = this.pendingEvents.length > 0;
 
+    // ── Unreliable channel: positions only ──
+    // Sent via WebRTC DataChannel to bypass TCP head-of-line blocking.
+    // If unreliable callback isn't wired, positions are included in the reliable msg below.
+    const hasUnreliable = !!this.onBroadcastUnreliable;
+    if (hasUnreliable) {
+      const posMsg: S2C_PositionUpdate = {
+        type: 'position_update',
+        tick: this.tick,
+        timestamp: serverTimestamp,
+        positions,
+      };
+      this.onBroadcastUnreliable!(posMsg);
+    }
+
+    // ── Reliable channel: state deltas, buffs, events ──
+    // Positions are always included for clients without a DataChannel (fallback)
+    // and for the snapshot buffer's tick/timestamp calibration. Clients with a DC
+    // get positions twice — unreliable arrives first, reliable is a harmless no-op.
     const msg: S2C_GameStateUpdate = {
       type: 'game_state_update',
       tick: this.tick,

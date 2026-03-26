@@ -43,6 +43,18 @@ export interface C2S_StartGame {
   type: 'start_game';
 }
 
+// ── Movement Flags ──────────────────────────────────────────────────────
+// Bitfield encoding which movement keys are held. Remote clients reconstruct
+// the exact movement direction from flags + rotationY instead of relying on
+// noisy velocity deltas, eliminating overshoot on turns and direction changes.
+
+export const MoveFlags = {
+  FORWARD:      0x01,
+  BACKWARD:     0x02,
+  STRAFE_LEFT:  0x04,
+  STRAFE_RIGHT: 0x08,
+} as const;
+
 // ── In-Game Client -> Server ────────────────────────────────────────────
 
 export interface C2S_PlayerState {
@@ -55,6 +67,14 @@ export interface C2S_PlayerState {
   /** Horizontal velocity (world units/sec) — used for extrapolation & remote animation */
   vx: number;
   vz: number;
+  /** Bitfield of active movement keys (MoveFlags). Enables flag-based dead reckoning. */
+  moveFlags?: number;
+  /** Current effective movement speed (units/sec), including buff/water/backpedal modifiers. */
+  moveSpeed?: number;
+  /** Vertical velocity (units/sec) — enables smooth Y extrapolation during jumps. */
+  vy?: number;
+  /** Angular velocity (rad/sec) — enables arc-based dead reckoning during turns. */
+  turnSpeed?: number;
 }
 
 export interface C2S_UseAbility {
@@ -365,7 +385,7 @@ export interface S2C_PositionCorrection {
 }
 
 /** Immediate position relay — sent to other clients as soon as a position update is received,
- *  bypassing the 20Hz tick broadcast for lower-latency dead reckoning corrections. */
+ *  bypassing the 30Hz tick broadcast for lower-latency dead reckoning corrections. */
 export interface S2C_PositionRelay {
   type: 'position_relay';
   id: string;
@@ -376,6 +396,11 @@ export interface S2C_PositionRelay {
   isMoving: boolean;
   vx: number;
   vz: number;
+  moveFlags?: number;
+  moveSpeed?: number;
+  vy?: number;
+  /** Angular velocity (rad/sec) — enables arc-based dead reckoning during turns. */
+  turnSpeed?: number;
 }
 
 export interface S2C_CountdownStart {
@@ -396,6 +421,8 @@ export interface S2C_Kicked {
 export interface S2C_Pong {
   type: 'pong';
   timestamp: number;
+  /** Server's Date.now() when it processed the ping — used for NTP-style clock sync. */
+  serverTime: number;
 }
 
 export interface S2C_RejoinGame {
@@ -533,6 +560,14 @@ export interface EntityPositionData {
   /** Horizontal velocity (world units/sec) — used for extrapolation & animation */
   vx: number;
   vz: number;
+  /** Bitfield of active movement keys (MoveFlags). Enables flag-based dead reckoning. */
+  moveFlags?: number;
+  /** Current effective movement speed (units/sec), including buff/water/backpedal modifiers. */
+  moveSpeed?: number;
+  /** Vertical velocity (units/sec) — enables smooth Y extrapolation during jumps. */
+  vy?: number;
+  /** Angular velocity (rad/sec) — enables arc-based dead reckoning during turns. */
+  turnSpeed?: number;
 }
 
 /** Partial entity state — only changed fields are present */
@@ -615,6 +650,48 @@ export interface S2C_GodModeUpdate {
   active: boolean;
 }
 
+// ── WebRTC Signaling ────────────────────────────────────────────────────
+
+/** Server sends SDP offer to initiate WebRTC DataChannel for unreliable game traffic. */
+export interface S2C_RtcOffer {
+  type: 'rtc_offer';
+  sdp: string;
+}
+
+/** Server sends ICE candidate for WebRTC connection establishment. */
+export interface S2C_RtcCandidate {
+  type: 'rtc_candidate';
+  candidate: string;
+  mid: string;
+}
+
+/** Client sends SDP answer in response to server's WebRTC offer. */
+export interface C2S_RtcAnswer {
+  type: 'rtc_answer';
+  sdp: string;
+}
+
+/** Client sends ICE candidate for WebRTC connection establishment. */
+export interface C2S_RtcCandidate {
+  type: 'rtc_candidate';
+  candidate: string;
+  mid: string;
+}
+
+// ── Unreliable Position Messages ────────────────────────────────────────
+
+/**
+ * Position-only update sent via unreliable WebRTC DataChannel.
+ * Separated from game_state_update so positions bypass TCP head-of-line blocking
+ * while state deltas, buffs, and events remain on the reliable WebSocket.
+ */
+export interface S2C_PositionUpdate {
+  type: 'position_update';
+  tick: number;
+  timestamp: number;
+  positions: EntityPositionData[];
+}
+
 // ── Union types ─────────────────────────────────────────────────────────
 
 export type ClientMessage =
@@ -653,7 +730,9 @@ export type ClientMessage =
   | C2S_AdminSetXp
   | C2S_ChangePassword
   | C2S_Ping
-  | C2S_DebugAddXp;
+  | C2S_DebugAddXp
+  | C2S_RtcAnswer
+  | C2S_RtcCandidate;
 
 export type ServerMessage =
   | S2C_AuthResult
@@ -695,4 +774,7 @@ export type ServerMessage =
   | S2C_EntityRemoved
   | S2C_ForceClearTarget
   | S2C_PositionCorrection
-  | S2C_PositionRelay;
+  | S2C_PositionRelay
+  | S2C_RtcOffer
+  | S2C_RtcCandidate
+  | S2C_PositionUpdate;

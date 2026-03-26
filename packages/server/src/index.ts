@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
+import ndc from 'node-datachannel';
+import type { DataChannel as NDCDataChannel, PeerConnection as NDCPeerConnection } from 'node-datachannel';
 import { AuthManager } from './auth/AuthManager.js';
 import { LobbyManager } from './lobby/LobbyManager.js';
 import { GtrDatabase } from './db/Database.js';
@@ -69,9 +71,90 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
   }
 });
+// ── WebRTC DataChannels for unreliable game traffic ──────────────────────
+// Position updates and relays bypass TCP head-of-line blocking via unordered,
+// unreliable SCTP DataChannels. Falls back to WebSocket if WebRTC fails.
+
+/** Active DataChannels keyed by userId — used by GameSession for unreliable sends. */
+const dataChannels = new Map<string, NDCDataChannel>();
+
+const peerConnections = new Map<string, NDCPeerConnection>();
+
 const db = new GtrDatabase();
 const auth = new AuthManager(db);
 const lobby = new LobbyManager(auth, db);
+lobby.setDataChannelMap(dataChannels);
+
+function setupWebRTC(userId: string, ws: WebSocket): void {
+  // Clean up any existing connection for this user (e.g. reconnect)
+  teardownWebRTC(userId);
+
+  const pc = new ndc.PeerConnection(userId, {
+    iceServers: ['stun:stun.l.google.com:19302'],
+  });
+
+  peerConnections.set(userId, pc);
+
+  // Create unreliable, unordered DataChannel — the whole point of this work.
+  // Lost packets are simply skipped (dead reckoning covers the gap).
+  const dc = pc.createDataChannel('game-unreliable', {
+    unordered: true,
+    maxRetransmits: 0,
+  });
+
+  dc.onOpen(() => {
+    dataChannels.set(userId, dc);
+  });
+
+  dc.onClosed(() => {
+    dataChannels.delete(userId);
+  });
+
+  dc.onError((err) => {
+    console.warn(`[WebRTC] DataChannel error for ${userId}:`, err);
+    dataChannels.delete(userId);
+  });
+
+  dc.onMessage((msg) => {
+    // Incoming unreliable message from client (player_state)
+    try {
+      const buf = typeof msg === 'string' ? Buffer.from(msg) : Buffer.from(msg);
+      const decoded = decodeMessage<ClientMessage>(buf);
+      if (decoded.type === 'player_state') {
+        lobby.handleMessage(userId, decoded);
+      }
+    } catch { /* ignore malformed */ }
+  });
+
+  // Signaling: server generates offer, sends to client via WebSocket
+  pc.onLocalDescription((sdp, type) => {
+    if (type === 'offer' && ws.readyState === ws.OPEN) {
+      ws.send(encodeMessage({ type: 'rtc_offer', sdp }));
+    }
+  });
+
+  pc.onLocalCandidate((candidate, mid) => {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(encodeMessage({ type: 'rtc_candidate', candidate, mid }));
+    }
+  });
+
+  // Trigger the offer generation
+  pc.setLocalDescription();
+}
+
+function teardownWebRTC(userId: string): void {
+  const dc = dataChannels.get(userId);
+  if (dc) {
+    try { dc.close(); } catch { /* ignore */ }
+    dataChannels.delete(userId);
+  }
+  const pc = peerConnections.get(userId);
+  if (pc) {
+    try { pc.close(); } catch { /* ignore */ }
+    peerConnections.delete(userId);
+  }
+}
 
 // ── Server-side heartbeat: detect dead clients via protocol-level ping/pong ──
 const aliveSockets = new Set<WebSocket>();
@@ -114,7 +197,7 @@ wss.on('connection', (ws: WebSocket) => {
 
     // Heartbeat — respond immediately regardless of auth state
     if (msg.type === 'ping') {
-      ws.send(encodeMessage({ type: 'pong', timestamp: msg.timestamp }));
+      ws.send(encodeMessage({ type: 'pong', timestamp: msg.timestamp, serverTime: Date.now() }));
       return;
     }
 
@@ -134,6 +217,8 @@ wss.on('connection', (ws: WebSocket) => {
           xp: db.getUserXp(dbId),
         }));
         lobby.addUser(result.userId, displayUsername, ws);
+        // Initiate WebRTC DataChannel for unreliable game traffic
+        setupWebRTC(result.userId, ws);
       } else {
         ws.send(encodeMessage({
           type: 'auth_result',
@@ -153,11 +238,24 @@ wss.on('connection', (ws: WebSocket) => {
       return;
     }
 
+    // WebRTC signaling — handle before lobby routing
+    if (msg.type === 'rtc_answer') {
+      const pc = peerConnections.get(userId);
+      if (pc) pc.setRemoteDescription(msg.sdp, 'answer');
+      return;
+    }
+    if (msg.type === 'rtc_candidate') {
+      const pc = peerConnections.get(userId);
+      if (pc) pc.addRemoteCandidate(msg.candidate, msg.mid);
+      return;
+    }
+
     lobby.handleMessage(userId, msg);
   });
 
   ws.on('close', () => {
     if (userId) {
+      teardownWebRTC(userId);
       lobby.removeUser(userId);
       auth.disconnect(userId);
     }
@@ -165,6 +263,7 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('error', () => {
     if (userId) {
+      teardownWebRTC(userId);
       lobby.removeUser(userId);
       auth.disconnect(userId);
     }
