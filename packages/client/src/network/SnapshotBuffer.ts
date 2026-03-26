@@ -269,11 +269,16 @@ export class SnapshotBuffer {
       // Cap extrapolation to prevent runaway drift
       const extrapTime = Math.min(overshoot, SnapshotBuffer.MAX_EXTRAPOLATION_MS) / 1000; // convert to seconds (velocity is units/sec)
 
+      // Extrapolate rotation using turnSpeed if available — prevents entities
+      // from sliding sideways during packet loss when they're actively turning.
+      const turnSpeed = (latestPos as any).turnSpeed ?? 0;
+      const extrapolatedRotation = latestPos.rotationY + turnSpeed * extrapTime;
+
       return {
         x: latestPos.x + latestPos.vx * extrapTime,
         y: latestPos.y,
         z: latestPos.z + latestPos.vz * extrapTime,
-        rotationY: latestPos.rotationY, // don't extrapolate rotation
+        rotationY: extrapolatedRotation,
         isMoving: latestPos.isMoving,
         vx: latestPos.vx,
         vz: latestPos.vz,

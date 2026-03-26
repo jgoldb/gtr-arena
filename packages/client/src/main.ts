@@ -1305,6 +1305,10 @@ function handleServerMessage(msg: ServerMessage): void {
       clientEngine?.handleKnockback(msg);
       break;
 
+    case 'entity_died':
+      clientEngine?.handleEntityDied(msg);
+      break;
+
     case 'force_clear_target':
       clientEngine?.handleForceClearTarget();
       break;

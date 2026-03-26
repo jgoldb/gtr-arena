@@ -837,7 +837,7 @@ export class ClientEngine {
     });
   }
 
-  private handleEntityDied(msg: S2C_EntityDied): void {
+  handleEntityDied(msg: S2C_EntityDied): void {
     const killerTeam = this.getEntityTeam(msg.killerEntityId);
     const victimTeam = this.getEntityTeam(msg.entityId);
     if (killerTeam !== null && victimTeam !== null) {
@@ -1392,6 +1392,9 @@ export class ClientEngine {
   }
 
   private update(dt: number): void {
+    // Feed latest RTT to dead reckoning for one-way latency compensation
+    this.deadReckoning.setRtt(this.network.rtt);
+
     // Compute movement speed modifier from local buffs + god mode
     let moveMult = 1;
     for (const b of this.localBuffs) {

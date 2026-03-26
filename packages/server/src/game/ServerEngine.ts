@@ -8,7 +8,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { GLOBAL_COOLDOWN, yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, Sweep, getBuffDescription, getCharacterStats } from '@gtr/shared';
+import { GLOBAL_COOLDOWN, yardsToUnits, MoveFlags, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, Sweep, getBuffDescription, getCharacterStats } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -139,10 +139,15 @@ export class ServerEngine {
   // Tick
   private tick = 0;
   private tickTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private midTickTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private nextTickTarget = 0;
   private lastTickTime = 0;
   private static readonly TICK_RATE = 30;
   private static readonly TICK_MS = 1000 / ServerEngine.TICK_RATE;
+  // Mid-tick position broadcasts at 60Hz — halves dead reckoning distance
+  // by sending position-only updates between full 30Hz ticks.
+  private static readonly MID_TICK_MS = ServerEngine.TICK_MS / 2;
+  private midTickCounter = 0; // separate counter for mid-tick broadcasts
   private static readonly CAST_PUSHBACK = 0.5;
   private static readonly INTERRUPT_COOLDOWN = 1;
   private static readonly KEYFRAME_INTERVAL = 150; // full snapshot every 5 seconds
@@ -170,8 +175,23 @@ export class ServerEngine {
     age: number;
   }>();
 
-  // Event queue (flushed each tick)
+  // Event queue (flushed each tick in the delta update for clients without immediate delivery)
   private pendingEvents: ServerMessage[] = [];
+
+  // ── Immediate event types ────────────────────────────────────────────
+  // Combat events that are time-sensitive get broadcast immediately when they
+  // happen, rather than waiting up to 33ms for the next tick bundle. This
+  // removes a full half-tick of average latency from combat feedback.
+  // These events are ALSO included in the tick-bundled update for reliability
+  // (the client deduplicates or simply processes them idempotently).
+  private static readonly IMMEDIATE_EVENT_TYPES: ReadonlySet<string> = new Set([
+    'ability_effect',
+    'combat_event',
+    'auto_attack_swing',
+    'knockback',
+    'entity_died',
+    'flinch',
+  ]);
 
   // Position tracking — only send when entity actually moved
   private lastBroadcastPosition = new Map<string, {
@@ -223,7 +243,7 @@ export class ServerEngine {
     this.combatSystem = new ServerCombatSystem(this.regenSystem, this.buffSystem, this.collision);
 
     this.combatSystem.onCombatText = (source, target, amount, type, ability) => {
-      this.pendingEvents.push({
+      this.emitEvent({
         type: 'combat_event',
         sourceEntityId: source.id,
         targetEntityId: target.id,
@@ -242,7 +262,7 @@ export class ServerEngine {
     };
 
     this.combatSystem.onFlinchDamage = (target) => {
-      this.pendingEvents.push({ type: 'flinch', entityId: target.id } as S2C_Flinch);
+      this.emitEvent({ type: 'flinch', entityId: target.id } as S2C_Flinch);
     };
 
     this.buffSystem.onBuffExpired = (target, definition) => {
@@ -331,7 +351,7 @@ export class ServerEngine {
   /** Record a kill: fire stats callback + broadcast entity_died event. */
   private recordKill(killerEntityId: string, victimEntityId: string): void {
     this.onStatKill?.(killerEntityId, victimEntityId);
-    this.pendingEvents.push({
+    this.emitEvent({
       type: 'entity_died',
       entityId: victimEntityId,
       killerEntityId,
@@ -347,7 +367,7 @@ export class ServerEngine {
     const damage = Math.round(entity.maxHp * pct);
     if (damage <= 0) return;
     entity.hp = Math.max(0, entity.hp - damage);
-    this.pendingEvents.push({
+    this.emitEvent({
       type: 'combat_event',
       sourceEntityId: entity.id,
       targetEntityId: entity.id,
@@ -773,6 +793,10 @@ export class ServerEngine {
       clearTimeout(this.tickTimeoutId);
       this.tickTimeoutId = null;
     }
+    if (this.midTickTimeoutId) {
+      clearTimeout(this.midTickTimeoutId);
+      this.midTickTimeoutId = null;
+    }
     this.positionHistory.length = 0;
   }
 
@@ -783,8 +807,55 @@ export class ServerEngine {
     this.tickTimeoutId = setTimeout(() => {
       this.nextTickTarget += ServerEngine.TICK_MS;
       this.update();
-      if (this.tickTimeoutId !== null) this.scheduleNextTick();
+      if (this.tickTimeoutId !== null) {
+        // Schedule mid-tick position broadcast halfway to the next full tick.
+        // Only fires if unreliable channel is available (no point over TCP).
+        if (this.onBroadcastUnreliable) {
+          this.scheduleMidTick();
+        }
+        this.scheduleNextTick();
+      }
     }, delay);
+  }
+
+  /**
+   * Mid-tick position-only broadcast at 60Hz via unreliable DataChannel.
+   * Halves the time between position updates, reducing dead reckoning distance
+   * and making turns/stops feel crisper. Only sends over the unreliable channel
+   * to avoid doubling TCP bandwidth — clients without DataChannel still get
+   * 30Hz positions from the full tick.
+   */
+  private scheduleMidTick(): void {
+    this.midTickTimeoutId = setTimeout(() => {
+      this.midTickTimeoutId = null;
+      this.broadcastMidTickPositions();
+    }, ServerEngine.MID_TICK_MS);
+  }
+
+  private broadcastMidTickPositions(): void {
+    if (!this.onBroadcastUnreliable) return;
+
+    this.midTickCounter++;
+    const positions: EntityPositionData[] = [];
+    for (const e of this.entities) {
+      if (!e.isMoving && e.turnSpeed === 0) continue; // skip stationary entities
+      positions.push({
+        id: e.id, x: e.x, y: e.y, z: e.z,
+        rotationY: e.rotationY, isMoving: e.isMoving,
+        vx: e.vx, vz: e.vz,
+        moveFlags: e.moveFlags, moveSpeed: e.moveSpeed, vy: e.vy, turnSpeed: e.turnSpeed,
+      });
+    }
+
+    if (positions.length === 0) return;
+
+    const posMsg: S2C_PositionUpdate = {
+      type: 'position_update',
+      tick: this.tick, // same tick number — client uses receiveTime for interpolation
+      timestamp: Date.now(),
+      positions,
+    };
+    this.onBroadcastUnreliable(posMsg);
   }
 
   // ── Lag compensation: position history ────────────────────────────────
@@ -910,6 +981,13 @@ export class ServerEngine {
     // Process queued abilities — fire any that are no longer blocked after GCD/cast updates
     this.processAbilityQueue(dt);
 
+    // Server-side movement simulation: extrapolate moving entities forward
+    // using their last known movement flags/velocity. This provides smoother
+    // position data in the broadcast when a client's update is delayed (TCP
+    // stall, Wi-Fi spike). The server predicts where the player IS based on
+    // their movement intent, rather than relaying a stale position.
+    this.simulateMovement(dt);
+
     // Build and broadcast state (events are bundled into delta updates)
     this.broadcastGameState();
 
@@ -922,6 +1000,65 @@ export class ServerEngine {
 
     // Check win condition
     this.checkWinCondition();
+  }
+
+  // ── Server-side movement simulation ─────────────────────────────────
+  // Extrapolate moving entities forward by dt using their movement intent.
+  // This keeps broadcast positions fresh when a client's position update
+  // is delayed by network jitter. Only applies to entities whose last
+  // client update is stale (>1 tick old). The next client update will
+  // overwrite this predicted position with the ground truth.
+
+  private simulateMovement(dt: number): void {
+    const now = performance.now();
+    const staleThreshold = ServerEngine.TICK_MS * 1.5; // consider stale after 1.5 ticks
+
+    for (const entity of this.entities) {
+      if (!entity.isMoving || entity.dead || entity.stunned || entity.charging) continue;
+      if (this.frozenEntities.has(entity.id)) continue;
+      if (this.sweepCharges.has(entity.id)) continue;
+
+      // Only simulate if the client's last position update is stale
+      if (entity.lastPositionUpdateTime > 0 &&
+          (now - entity.lastPositionUpdateTime) < staleThreshold) continue;
+
+      // Reconstruct velocity from moveFlags + rotation (same as client dead reckoning)
+      let vx = entity.vx;
+      let vz = entity.vz;
+
+      if (entity.moveFlags !== 0 && entity.moveSpeed > 0) {
+        const sinR = Math.sin(entity.rotationY);
+        const cosR = Math.cos(entity.rotationY);
+        let dx = 0;
+        let dz = 0;
+        if (entity.moveFlags & MoveFlags.FORWARD)      { dx += sinR; dz += cosR; }
+        if (entity.moveFlags & MoveFlags.BACKWARD)     { dx -= sinR; dz -= cosR; }
+        if (entity.moveFlags & MoveFlags.STRAFE_RIGHT) { dx -= cosR; dz += sinR; }
+        if (entity.moveFlags & MoveFlags.STRAFE_LEFT)  { dx += cosR; dz -= sinR; }
+        const len = Math.sqrt(dx * dx + dz * dz);
+        if (len > 0.001) {
+          const scale = entity.moveSpeed / len;
+          vx = dx * scale;
+          vz = dz * scale;
+        }
+      }
+
+      // Apply simulated movement
+      const newX = entity.x + vx * dt;
+      const newZ = entity.z + vz * dt;
+
+      // Resolve against collision (prevent walking through walls)
+      const resolved = this.collision.resolve(newX, newZ, entity.y, entity.collisionRadius);
+      entity.x = resolved.x;
+      entity.z = resolved.z;
+      entity.vx = vx;
+      entity.vz = vz;
+
+      // Extrapolate rotation if turning
+      if (entity.turnSpeed !== 0) {
+        entity.rotationY += entity.turnSpeed * dt;
+      }
+    }
   }
 
   // ── Casting ──────────────────────────────────────────────────────────
@@ -971,7 +1108,7 @@ export class ServerEngine {
         this.combatSystem.enterCombat(entity);
         this.combatSystem.enterCombat(target);
         if (this.combatSystem.rollMiss()) {
-          this.pendingEvents.push({
+          this.emitEvent({
             type: 'combat_event',
             sourceEntityId: entity.id,
             targetEntityId: target.id,
@@ -981,7 +1118,7 @@ export class ServerEngine {
           return;
         }
         // Hostile channel start — notify for auto-targeting
-        this.pendingEvents.push({
+        this.emitEvent({
           type: 'combat_event',
           sourceEntityId: entity.id,
           targetEntityId: target.id,
@@ -1170,7 +1307,7 @@ export class ServerEngine {
       state.timer = 0;
       this.combatSystem.applyAutoAttackDamage(entity, state.target, entity.rollAutoAttackDamage());
       // Notify clients to play swing animation
-      this.pendingEvents.push({
+      this.emitEvent({
         type: 'auto_attack_swing',
         entityId: entity.id,
         targetEntityId: state.target.id,
@@ -1252,7 +1389,7 @@ export class ServerEngine {
       abilityId: ability.id,
       ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetZ: groundTarget.z } : {}),
     };
-    this.pendingEvents.push(abilityEvent);
+    this.emitEvent(abilityEvent);
 
     // Send cooldown update to the entity's player (skip in god mode)
     if (ability.cooldown > 0 && !entity.godMode) {
@@ -1407,7 +1544,7 @@ export class ServerEngine {
         elapsed: 0,
       });
 
-      this.pendingEvents.push({
+      this.emitEvent({
         type: 'knockback',
         entityId: other.id,
         dirX: toTargetX,
@@ -1502,7 +1639,7 @@ export class ServerEngine {
           const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, cloud.damagePerTick, cloud.owner);
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
-            this.pendingEvents.push({
+            this.emitEvent({
               type: 'combat_event', sourceEntityId: cloud.owner.id, targetEntityId: entity.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
             this.onStatDamage?.(cloud.owner.id, entity.id, actualDmg);
@@ -1574,7 +1711,7 @@ export class ServerEngine {
           const actualDmg = entity.godMode ? 0 : this.combatSystem.processDamageAbsorb(entity, rolledDmg, pool.owner);
           entity.hp = Math.max(0, entity.hp - actualDmg);
           if (actualDmg > 0) {
-            this.pendingEvents.push({
+            this.emitEvent({
               type: 'combat_event', sourceEntityId: pool.owner.id, targetEntityId: entity.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
             this.onStatDamage?.(pool.owner.id, entity.id, actualDmg);
@@ -1615,7 +1752,7 @@ export class ServerEngine {
           const actualDmg = dot.target.godMode ? 0 : this.combatSystem.processDamageAbsorb(dot.target, dot.damagePerTick, dot.owner);
           dot.target.hp = Math.max(0, dot.target.hp - actualDmg);
           if (actualDmg > 0) {
-            this.pendingEvents.push({
+            this.emitEvent({
               type: 'combat_event', sourceEntityId: dot.owner.id, targetEntityId: dot.target.id, amount: actualDmg, combatType: 'damage',
             } as S2C_CombatEvent);
             this.onStatDamage?.(dot.owner.id, dot.target.id, actualDmg);
@@ -1663,7 +1800,7 @@ export class ServerEngine {
             const dmg = this.combatSystem.processDamageAbsorb(other, 200, aura.entity);
             other.hp = Math.max(0, other.hp - dmg);
             if (dmg > 0) {
-              this.pendingEvents.push({
+              this.emitEvent({
                 type: 'combat_event', sourceEntityId: aura.entity.id, targetEntityId: other.id, amount: dmg, combatType: 'damage',
               } as S2C_CombatEvent);
               this.onStatDamage?.(aura.entity.id, other.id, dmg);
@@ -1691,6 +1828,26 @@ export class ServerEngine {
         aura.nextTickAt += 1;
       }
     }
+  }
+
+  // ── Immediate event emission ──────────────────────────────────────────
+  // Time-sensitive combat events are broadcast immediately when generated,
+  // removing up to 33ms (one tick) of latency from combat feedback.
+
+  /**
+   * Push a game event. Time-sensitive events are broadcast immediately
+   * AND included in the tick update for reliability.
+   */
+  private emitEvent(event: ServerMessage): void {
+    // Time-sensitive combat events are broadcast immediately rather than
+    // waiting for the tick bundle — removes up to 33ms of latency.
+    if (ServerEngine.IMMEDIATE_EVENT_TYPES.has(event.type)) {
+      this.onBroadcast?.(event);
+      // Don't add to pendingEvents — already sent, avoids client duplicates
+      return;
+    }
+    // Non-immediate events get bundled into the tick update as before
+    this.pendingEvents[this.pendingEvents.length] = event;
   }
 
   // ── State broadcast ─────────────────────────────────────────────────
