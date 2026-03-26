@@ -161,6 +161,7 @@ export class ClientEngine {
   onBuffExpired?: (entityId: string, buff: { name: string; type: 'buff' | 'debuff' }) => void;
   onAbilitySuccess?: (abilityId: string) => void;
   onManaDrained?: (amount: number) => void;
+  onAbilityEffect?: (entityId: string, abilityId: string) => void;
 
   constructor(canvas: HTMLCanvasElement, network: NetworkManager, mapId: string, localEntityId: string, initialEntities: EntitySnapshot[]) {
     this.network = network;
@@ -659,6 +660,8 @@ export class ClientEngine {
   }
 
   handleAbilityEffect(msg: S2C_AbilityEffect): void {
+    this.onAbilityEffect?.(msg.entityId, msg.abilityId);
+
     // Ground-targeted abilities use the ground position for the projectile animation
     const groundPos = msg.groundTargetX !== undefined && msg.groundTargetZ !== undefined
       ? new THREE.Vector3(msg.groundTargetX, 0, msg.groundTargetZ)

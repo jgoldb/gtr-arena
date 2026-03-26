@@ -7,7 +7,7 @@ import {
   TweakingBuff,
 } from './abilities.js';
 
-export type CharacterId = 'janitor' | 'dr-retardo' | 'crackhead';
+export type CharacterId = 'janitor' | 'dr-retardo' | 'crackhead' | 'rabbi-zehnwirth';
 
 export interface CharacterStats {
   id: CharacterId;
@@ -80,6 +80,22 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     abilities: [Shank, PocketSand, StickyFingers, CrackRock, null, null, null, null, PvPTrinket],
     startingBuffs: [TweakingBuff],
     playgroundOnly: false,
+  },
+  'rabbi-zehnwirth': {
+    id: 'rabbi-zehnwirth',
+    displayName: 'Rabbi Zehnwirth',
+    baseMaxHp: 2800,
+    baseMaxMana: 1800,
+    autoAttackDamageMin: 140,
+    autoAttackDamageMax: 190,
+    autoAttackSpeed: 2.5,
+    autoAttackRange: 2.2,
+    critChance: 0.12,
+    dodgeChance: 0.15,
+    hpRegen: 30,
+    manaRegen: 20,
+    abilities: [null, null, null, null, null, null, null, null, PvPTrinket],
+    playgroundOnly: true,
   },
 };
 

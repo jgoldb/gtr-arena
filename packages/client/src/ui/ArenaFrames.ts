@@ -15,7 +15,7 @@ export interface ArenaFramesOptions {
 
 interface ArenaFrameEntry {
   entityId: string;
-  wrapper: HTMLElement;   // Outer wrapper (DR tray + frame body)
+  wrapper: HTMLElement;   // Outer wrapper (DR tray + trinket + frame body)
   element: HTMLElement;    // Clickable frame body
   portraitImg: HTMLImageElement;
   skullOverlay: HTMLElement;
@@ -33,6 +33,9 @@ interface ArenaFrameEntry {
   castBarLabel: HTMLElement;
   drTray: HTMLElement;
   drIcons: HTMLElement[];
+  trinketIcon: HTMLElement;
+  trinketCooldown: number;
+  trinketCooldownTotal: number;
   lastModelName: string;
   targetable: Targetable | null;
   combatTextEl: HTMLElement;
@@ -103,27 +106,45 @@ export class ArenaFrames {
   }
 
   private createFrame(entityId: string): ArenaFrameEntry {
-    // Outer wrapper: DR tray (left) + frame body (right)
+    // Outer wrapper: side panel (absolutely positioned left) + frame body
     const wrapper = document.createElement('div');
     wrapper.style.cssText = `
       position: relative;
       pointer-events: none;
     `;
 
-    // DR tray — positioned absolutely to the left of the frame
-    const drTray = document.createElement('div');
-    drTray.style.cssText = `
+    // Side panel — holds DR tray + trinket icon, to the left of the frame body
+    const sidePanel = document.createElement('div');
+    sidePanel.style.cssText = `
       position: absolute;
       right: 100%;
       top: 0;
+      bottom: 0;
       display: flex;
-      flex-direction: column;
-      gap: 2px;
-      align-items: center;
+      flex-direction: row;
+      align-items: stretch;
+      gap: 3px;
       margin-right: 3px;
       pointer-events: none;
     `;
-    wrapper.appendChild(drTray);
+    wrapper.appendChild(sidePanel);
+
+    // DR tray — wraps into columns (2 rows per column)
+    const drTray = document.createElement('div');
+    drTray.style.cssText = `
+      display: flex;
+      flex-direction: column;
+      flex-wrap: wrap;
+      gap: 2px;
+      align-items: center;
+      align-content: flex-end;
+      pointer-events: none;
+    `;
+    sidePanel.appendChild(drTray);
+
+    // PvP Trinket cooldown icon — matches frame height
+    const trinketIcon = this.createTrinketIcon();
+    sidePanel.appendChild(trinketIcon);
 
     const el = document.createElement('div');
     el.style.cssText = `
@@ -283,6 +304,9 @@ export class ArenaFrames {
       castBarLabel,
       drTray,
       drIcons: [],
+      trinketIcon,
+      trinketCooldown: 0,
+      trinketCooldownTotal: 0,
       lastModelName: '',
       targetable: null,
       combatTextEl,
@@ -317,6 +341,83 @@ export class ArenaFrames {
     bar.appendChild(fill);
     bar.appendChild(text);
     return { bar, fill, text };
+  }
+
+  private createTrinketIcon(): HTMLElement {
+    // children[0] = emoji, [1] = sweep, [2] = timer
+    const icon = document.createElement('div');
+    icon.style.cssText = `
+      height: 100%;
+      aspect-ratio: 1;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+      background: rgba(60, 60, 80, 0.8);
+      border: 2px solid #4a4;
+      border-radius: 4px;
+      overflow: hidden;
+      pointer-events: none;
+      flex-shrink: 0;
+    `;
+
+    const emoji = document.createElement('span');
+    emoji.textContent = '\uD83C\uDFC6';
+    emoji.style.cssText = 'font-size: 26px; line-height: 1; z-index: 1; position: relative;';
+    icon.appendChild(emoji);
+
+    const sweep = document.createElement('div');
+    sweep.style.cssText = `
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      border-radius: 4px; pointer-events: none;
+    `;
+    icon.appendChild(sweep);
+
+    const timer = document.createElement('span');
+    timer.style.cssText = `
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 16px; font-weight: bold; color: #fff;
+      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 4px rgba(0,0,0,0.8);
+      z-index: 2;
+      pointer-events: none;
+    `;
+    icon.appendChild(timer);
+
+    return icon;
+  }
+
+  notifyTrinketUsed(entityId: string, cooldown: number = 90, total?: number): void {
+    const frame = this.frames.find(f => f.entityId === entityId);
+    if (!frame) return;
+    frame.trinketCooldown = cooldown;
+    frame.trinketCooldownTotal = total ?? cooldown;
+  }
+
+  private updateTrinketIcon(frame: ArenaFrameEntry): void {
+    const icon = frame.trinketIcon;
+    const remaining = frame.trinketCooldown;
+    const total = frame.trinketCooldownTotal;
+
+    if (remaining > 0) {
+      // On cooldown
+      icon.style.borderColor = '#666';
+      (icon.children[0] as HTMLElement).style.opacity = '0.4';
+
+      const elapsed = total - remaining;
+      const degrees = total > 0 ? (elapsed / total) * 360 : 0;
+      const sweepEl = icon.children[1] as HTMLElement;
+      sweepEl.style.background = degrees > 0
+        ? `conic-gradient(from 0deg, rgba(0, 0, 0, 0.7) ${degrees}deg, transparent ${degrees}deg)`
+        : 'transparent';
+
+      (icon.children[2] as HTMLElement).textContent = Math.ceil(remaining).toString();
+    } else {
+      // Available
+      icon.style.borderColor = '#4a4';
+      (icon.children[0] as HTMLElement).style.opacity = '1';
+      (icon.children[1] as HTMLElement).style.background = 'transparent';
+      (icon.children[2] as HTMLElement).textContent = '';
+    }
   }
 
   showCombatText(entityId: string, amount: number, type: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune'): void {
@@ -363,22 +464,22 @@ export class ArenaFrames {
     // children[0] = emoji, [1] = sweep, [2] = timer, [3] = DR level label
     const icon = document.createElement('div');
     icon.style.cssText = `
-      width: 40px; height: 40px;
+      width: 30px; height: 30px;
       display: flex; align-items: center; justify-content: center;
       position: relative;
       background: rgba(60, 60, 80, 0.8);
-      border: 1.5px solid #888;
-      border-radius: 3px;
+      border: 1px solid #888;
+      border-radius: 2px;
       overflow: hidden;
     `;
     const emoji = document.createElement('span');
-    emoji.style.cssText = 'font-size: 20px; line-height: 1; z-index: 1; position: relative; opacity: 0.85;';
+    emoji.style.cssText = 'font-size: 14px; line-height: 1; z-index: 1; position: relative; opacity: 0.85;';
     icon.appendChild(emoji);
 
     const sweep = document.createElement('div');
     sweep.style.cssText = `
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      border-radius: 3px; pointer-events: none;
+      border-radius: 2px; pointer-events: none;
     `;
     icon.appendChild(sweep);
 
@@ -387,7 +488,7 @@ export class ArenaFrames {
       position: absolute;
       top: 50%; left: 50%;
       transform: translate(-50%, -50%);
-      font-size: 13px; font-weight: bold; color: #fff;
+      font-size: 10px; font-weight: bold; color: #fff;
       text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 4px rgba(0,0,0,0.8);
       z-index: 2;
       pointer-events: none;
@@ -397,8 +498,8 @@ export class ArenaFrames {
     const drLevel = document.createElement('span');
     drLevel.style.cssText = `
       position: absolute;
-      bottom: 1px; left: 1px;
-      font-size: 9px; font-weight: bold;
+      bottom: 0px; left: 1px;
+      font-size: 8px; font-weight: bold;
       text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
       z-index: 3;
       pointer-events: none;
@@ -524,6 +625,12 @@ export class ArenaFrames {
 
       // DR timers
       this.updateDRTray(frame, getDRTimers?.(frame.entityId) ?? []);
+
+      // Trinket cooldown
+      if (frame.trinketCooldown > 0) {
+        frame.trinketCooldown = Math.max(0, frame.trinketCooldown - dt);
+      }
+      this.updateTrinketIcon(frame);
 
       // Combat text animation
       this.updateCombatText(frame, dt);

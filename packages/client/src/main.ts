@@ -502,6 +502,11 @@ function startMultiplayer(msg: S2C_GameStart): void {
       mpCombatText.spawnText(mesh, `+${amount} Mana`, '#3388ff', true);
     }
   };
+  clientEngine.onAbilityEffect = (entityId, abilityId) => {
+    if (abilityId === 'pvp-trinket') {
+      mpArenaFrames?.notifyTrinketUsed(entityId);
+    }
+  };
 
   // Create UI elements for MP game
   setupMultiplayerUI(msg);
@@ -603,6 +608,11 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
       mpCombatText.spawnText(mesh, `+${amount} Mana`, '#3388ff', true);
     }
   };
+  clientEngine.onAbilityEffect = (entityId, abilityId) => {
+    if (abilityId === 'pvp-trinket') {
+      mpArenaFrames?.notifyTrinketUsed(entityId);
+    }
+  };
 
   setupMultiplayerUI(msg);
 
@@ -616,6 +626,18 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
     gasClouds: msg.gasClouds,
     chemicalPools: msg.chemicalPools,
   });
+
+  // Sync cooldown state from server
+  for (const cd of msg.cooldowns) {
+    if (cd.entityId === msg.localEntityId) {
+      // Local player cooldowns → action bar
+      clientEngine.handleCooldownUpdate({ type: 'cooldown_update', abilityId: cd.abilityId, remaining: cd.remaining, total: cd.total });
+    }
+    if (cd.abilityId === 'pvp-trinket') {
+      // Enemy trinket cooldowns → arena frames
+      mpArenaFrames?.notifyTrinketUsed(cd.entityId, cd.remaining, cd.total);
+    }
+  }
 
   for (const entityId of msg.disconnectedEntityIds) {
     clientEngine.handlePlayerDisconnected(entityId);

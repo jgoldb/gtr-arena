@@ -39,7 +39,8 @@
       "Bash(find /c/Users/Joey/Repos/gtr/packages/client/src -type f -name *[Ii]nput* -o -name *[Tt]arget* -o -name *[Pp]layer*)",
       "Bash(find C:UsersJoeyReposgtrpackagesserversrc -name *BuffSystem* -o -name *buff*)",
       "Bash(find packages/server/src -name *xp* -o -name *level* -o -name *reward*)",
-      "Bash(echo \"EXIT: $?\")"
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(find /c/Users/Joey/Repos/gtr/packages -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\) ! -path */node_modules/*)"
     ]
   }
 }

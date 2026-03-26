@@ -145,6 +145,21 @@ export class ServerCombatSystem {
     this.gcds.delete(entityId);
   }
 
+  /** Returns all active cooldowns across all entities (for rejoin sync). */
+  getAllCooldowns(): { entityId: string; abilityId: string; remaining: number; total: number }[] {
+    const result: { entityId: string; abilityId: string; remaining: number; total: number }[] = [];
+    for (const [entityId, cds] of this.cooldowns) {
+      for (const [abilityId, cd] of cds) {
+        result.push({ entityId, abilityId, remaining: cd.remaining, total: cd.total });
+      }
+    }
+    // Include GCDs as well (using special '__gcd__' key)
+    for (const [entityId, gcd] of this.gcds) {
+      result.push({ entityId, abilityId: '__gcd__', remaining: gcd.remaining, total: gcd.total });
+    }
+    return result;
+  }
+
   triggerGcd(entityId: string, duration: number): void {
     this.gcds.set(entityId, { remaining: duration, total: duration });
   }

@@ -448,6 +448,7 @@ export class GameSession {
       buffs: fullState.buffs,
       gasClouds: fullState.gasClouds,
       chemicalPools: fullState.chemicalPools,
+      cooldowns: fullState.cooldowns,
       disconnectedEntityIds,
       ...(this.gameOver ? { gameOver: { winningTeam: this.getWinningTeam(), playerResults: this.buildPlayerResults(this.getWinningTeam()) } } : {}),
       ...(arenaTimeRemaining !== undefined ? { arenaTimeRemaining } : {}),

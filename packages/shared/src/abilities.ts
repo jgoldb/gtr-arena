@@ -1,5 +1,5 @@
 // ── Global cooldown ─────────────────────────────────────────────────────
-export const GLOBAL_COOLDOWN = 1; // seconds — triggered on every ability use
+export const GLOBAL_COOLDOWN = 0.5; // seconds — triggered on every ability use
 
 // ── Distance conversion ─────────────────────────────────────────────────
 // 1 yard = 0.6 world units.

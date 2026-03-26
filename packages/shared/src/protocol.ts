@@ -225,6 +225,13 @@ export interface S2C_CooldownUpdate {
   total: number;
 }
 
+export interface CooldownSnapshot {
+  entityId: string;
+  abilityId: string;
+  remaining: number;
+  total: number;
+}
+
 export interface S2C_GasCloudSpawn {
   type: 'gas_cloud_spawn';
   id: string;
@@ -370,6 +377,7 @@ export interface S2C_RejoinGame {
   buffs: EntityBuffSnapshot[];
   gasClouds: GasCloudSnapshot[];
   chemicalPools: ChemicalPoolSnapshot[];
+  cooldowns: CooldownSnapshot[];
   disconnectedEntityIds: string[];
   gameOver?: { winningTeam: number; playerResults: PlayerMatchResult[] };
   /** Seconds remaining until arena doors open. Undefined/0 = already open. */

@@ -1,5 +1,5 @@
 import type { Ability, BuffDefinition } from '@gtr/shared';
-import type { EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot } from '@gtr/shared';
+import type { EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot, CooldownSnapshot } from '@gtr/shared';
 import type {
   S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_Knockback, S2C_EntityDied,
@@ -1780,11 +1780,12 @@ export class ServerEngine {
   }
 
   /** Returns full current state for a rejoining player. */
-  getFullState(): { buffs: EntityBuffSnapshot[]; gasClouds: GasCloudSnapshot[]; chemicalPools: ChemicalPoolSnapshot[] } {
+  getFullState(): { buffs: EntityBuffSnapshot[]; gasClouds: GasCloudSnapshot[]; chemicalPools: ChemicalPoolSnapshot[]; cooldowns: CooldownSnapshot[] } {
     return {
       buffs: this.buildBuffSnapshots(),
       gasClouds: this.buildGasCloudSnapshots(),
       chemicalPools: this.buildChemPoolSnapshots(),
+      cooldowns: this.combatSystem.getAllCooldowns(),
     };
   }
 
