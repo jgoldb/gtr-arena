@@ -128,6 +128,7 @@ export class GameSession {
       this.broadcast(msg);
     };
     this.engine.onSendToPlayer = (entityId, msg) => this.sendToEntity(entityId, msg);
+    this.engine.onPositionRelay = (senderEntityId, msg) => this.broadcastExcept(senderEntityId, msg);
     this.engine.onGameOver = (winningTeam) => this.handleGameOver(winningTeam);
 
     // Wire match stat tracking
@@ -740,6 +741,17 @@ export class GameSession {
     const data = encodeMessage(msg);
     for (const socket of this.sockets.values()) {
       if (socket.readyState === socket.OPEN) {
+        socket.send(data);
+      }
+    }
+  }
+
+  /** Broadcast to all clients except the entity's owner (used for position relay). */
+  private broadcastExcept(entityId: string, msg: ServerMessage): void {
+    const senderUserId = this.userIdByEntityId.get(entityId);
+    const data = encodeMessage(msg);
+    for (const [userId, socket] of this.sockets) {
+      if (userId !== senderUserId && socket.readyState === socket.OPEN) {
         socket.send(data);
       }
     }

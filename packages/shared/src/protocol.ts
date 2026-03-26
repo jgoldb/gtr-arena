@@ -355,6 +355,29 @@ export interface S2C_ErrorMessage {
   message: string;
 }
 
+/** Server corrects the local player's position (rubber-band on validation failure). */
+export interface S2C_PositionCorrection {
+  type: 'position_correction';
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+}
+
+/** Immediate position relay — sent to other clients as soon as a position update is received,
+ *  bypassing the 20Hz tick broadcast for lower-latency dead reckoning corrections. */
+export interface S2C_PositionRelay {
+  type: 'position_relay';
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  rotationY: number;
+  isMoving: boolean;
+  vx: number;
+  vz: number;
+}
+
 export interface S2C_CountdownStart {
   type: 'countdown_start';
   countdown: number;
@@ -670,4 +693,6 @@ export type ServerMessage =
   | S2C_PlayerDisconnected
   | S2C_PlayerReconnected
   | S2C_EntityRemoved
-  | S2C_ForceClearTarget;
+  | S2C_ForceClearTarget
+  | S2C_PositionCorrection
+  | S2C_PositionRelay;

@@ -53,6 +53,8 @@ export class ServerEntity {
   velocityY = 0;
   grounded = true;
   fallPeakY = 0;
+  /** Timestamp (performance.now) of last accepted position update — used for movement validation. */
+  lastPositionUpdateTime = 0;
 
   // State
   discombobulated = false;

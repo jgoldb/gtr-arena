@@ -4,10 +4,10 @@ import type {
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
   S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing, S2C_Knockback,
-  S2C_EntityDied,
+  S2C_EntityDied, S2C_PositionRelay,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits, getCharacterStats, Sweep } from '@gtr/shared';
+import { yardsToUnits, getCharacterStats, Sweep, GLOBAL_COOLDOWN } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -30,6 +30,7 @@ import {
   disposeGroup,
 } from '../engine/effects/VisualEffects';
 import { BlindEffect } from '../engine/effects/BlindEffect';
+import { DeadReckoning } from './DeadReckoning';
 import { keybindManager } from '../ui/KeybindManager';
 
 interface RemoteEntity {
@@ -77,9 +78,10 @@ export class ClientEngine {
   // Snapshot interpolation buffer — smoothly interpolates remote entity positions
   // between two known server states instead of exponential chase lerp
   private snapshotBuffer = new SnapshotBuffer();
+  private deadReckoning = new DeadReckoning();
 
   private animationFrameId: number | null = null;
-  private static readonly SEND_RATE = 1000 / 20; // 20 Hz
+  private static readonly SEND_RATE = 1000 / 30; // 30 Hz — higher rate feeds fresher data to dead reckoning
   private sendAccumulator = 0;
   private lastSentPosition = { x: NaN, y: NaN, z: NaN, rotationY: NaN, isMoving: false };
   private prevSendPosition = { x: 0, y: 0, z: 0 };
@@ -93,7 +95,7 @@ export class ClientEngine {
   private prevMoving = false;
   private prevMoveAngle = 0;
   private static readonly IMMEDIATE_SEND_MIN_INTERVAL = 30; // ms — rate limit for immediate sends
-  private static readonly DIRECTION_CHANGE_THRESHOLD = 0.35; // radians (~20°)
+  private static readonly DIRECTION_CHANGE_THRESHOLD = 0.2; // radians (~11°) — detect turns faster for smoother dead reckoning
 
   // Visual effects
   private gasClouds = new Map<string, GasCloudVisual & { elapsed: number; duration: number }>();
@@ -106,7 +108,22 @@ export class ClientEngine {
   private cooldowns = new Map<string, { remaining: number; total: number }>();
   private gcd: { remaining: number; total: number } | null = null;
 
-  // Local entity casting state (from server snapshots)
+  // Ability queue — fires the queued ability the instant GCD/cast ends (like WoW's SpellQueueWindow)
+  private static readonly QUEUE_WINDOW = 0.4; // 400ms — ability can be queued during the last 400ms of GCD/cast
+  private queuedAbility: { abilityId: string; targetEntityId: string | null; groundTarget?: { x: number; z: number } } | null = null;
+  /** Callback invoked when a queued ability is ready to fire. Set by main.ts to handle targeting/validation. */
+  onQueuedAbilityReady: ((abilityId: string) => void) | null = null;
+
+  // Client-side ability prediction — apply GCD/cooldown/animation immediately, reconcile on server response
+  private static readonly PREDICTION_TIMEOUT = 0.5; // revert prediction if no server response within 500ms
+  private pendingPrediction: {
+    abilityId: string;
+    predictedAt: number; // performance.now()
+    cooldownPredicted: boolean;
+    castPredicted: boolean;
+  } | null = null;
+
+  // Local entity casting state (from server snapshots, or predicted locally)
   private localCastingAbilityId: string | null = null;
   private localCastingElapsed = 0;
   private localCastingTotalTime = 0;
@@ -362,8 +379,15 @@ export class ClientEngine {
   /** Handle delta updates (every tick) — positions only when changed, state/buffs only when changed. */
   handleGameStateUpdate(msg: S2C_GameStateUpdate): void {
     // Always feed into the snapshot buffer — even when no positions changed,
-    // the buffer needs continuous timestamps for adaptive delay & interpolation.
+    // the buffer needs continuous timestamps for adaptive delay & lag compensation.
     this.snapshotBuffer.pushPositions(msg.tick, msg.timestamp, msg.positions);
+
+    // Feed dead reckoning for remote entities
+    for (const pos of msg.positions) {
+      if (pos.id !== this.localEntityId) {
+        this.deadReckoning.updateEntity(pos.id, pos);
+      }
+    }
 
     // Apply state deltas (only present for entities whose state changed)
     if (msg.states) {
@@ -398,6 +422,12 @@ export class ClientEngine {
     }
   }
 
+  /** Handle an immediate position relay — feeds dead reckoning between tick broadcasts. */
+  handlePositionRelay(msg: S2C_PositionRelay): void {
+    if (msg.id === this.localEntityId) return; // should never happen, but guard
+    this.deadReckoning.updateEntity(msg.id, msg);
+  }
+
   /** Dispatch a bundled event from the tick update. */
   private handleBundledEvent(event: import('@gtr/shared').GameTickEvent): void {
     switch (event.type) {
@@ -421,6 +451,13 @@ export class ClientEngine {
       id: e.id, x: e.x, y: e.y, z: e.z, rotationY: e.rotationY, isMoving: e.isMoving,
       vx: 0, vz: 0, // keyframes don't carry velocity — entities re-acquire it on next delta
     })));
+
+    // Snap dead reckoning to keyframe positions (velocity unknown in keyframes)
+    for (const snap of msg.entities) {
+      if (snap.id !== this.localEntityId) {
+        this.deadReckoning.snapEntity(snap.id, snap.x, snap.y, snap.z, snap.rotationY);
+      }
+    }
 
     // Apply full entity state
     for (const snap of msg.entities) {
@@ -512,6 +549,7 @@ export class ClientEngine {
 
     this.remoteEntities.delete(entityId);
     this.snapshotBuffer.removeEntity(entityId);
+    this.deadReckoning.removeEntity(entityId);
   }
 
   /** Apply state deltas to local player and remote entities. */
@@ -524,7 +562,7 @@ export class ClientEngine {
         if (delta.mana !== undefined) pc.mana = delta.mana;
         if (delta.maxMana !== undefined) pc.maxMana = delta.maxMana;
         if (delta.dead !== undefined) {
-          if (delta.dead && !pc.dead) pc.die();
+          if (delta.dead && !pc.dead) { pc.die(); this.queuedAbility = null; }
           else if (!delta.dead && pc.dead) pc.respawn();
           pc.dead = delta.dead;
         }
@@ -533,10 +571,16 @@ export class ClientEngine {
           else if (!delta.inCombat && pc.inCombat) this.onLeaveCombat?.(delta.id);
           pc.inCombat = delta.inCombat;
         }
-        if (delta.stunned !== undefined) { pc.stunned = delta.stunned; pc.setStunned(delta.stunned); }
+        if (delta.stunned !== undefined) { pc.stunned = delta.stunned; pc.setStunned(delta.stunned); if (delta.stunned) this.queuedAbility = null; }
         if (delta.charging !== undefined) pc.charging = delta.charging;
         if (delta.isAutoAttacking !== undefined) pc.setAutoAttacking(delta.isAutoAttacking);
-        if ('castingAbilityId' in delta) this.localCastingAbilityId = delta.castingAbilityId!;
+        if ('castingAbilityId' in delta) {
+          // Server confirmed the cast we predicted — clear prediction so it won't timeout/revert
+          if (this.pendingPrediction?.castPredicted && delta.castingAbilityId === this.pendingPrediction.abilityId) {
+            this.pendingPrediction = null;
+          }
+          this.localCastingAbilityId = delta.castingAbilityId!;
+        }
         if (delta.castingElapsed !== undefined) this.localCastingElapsed = delta.castingElapsed;
         if (delta.castingTotalTime !== undefined) this.localCastingTotalTime = delta.castingTotalTime;
         if (delta.castingIsChannel !== undefined) this.localCastingIsChannel = delta.castingIsChannel;
@@ -695,8 +739,15 @@ export class ClientEngine {
       : undefined;
 
     if (msg.entityId === this.localEntityId) {
-      const targetPos = groundPos ?? (this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId)?.position.clone() : undefined);
-      this.playerController.triggerAbilityAnimation(msg.abilityId, targetPos);
+      // If we predicted this ability, skip the animation (already playing) and clear prediction
+      const predicted = this.pendingPrediction?.abilityId === msg.abilityId;
+      if (predicted) {
+        this.pendingPrediction = null;
+      }
+      if (!predicted) {
+        const targetPos = groundPos ?? (this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId)?.position.clone() : undefined);
+        this.playerController.triggerAbilityAnimation(msg.abilityId, targetPos);
+      }
       this.onAbilitySuccess?.(msg.abilityId);
       if (msg.manaStolen) this.onManaDrained?.(msg.manaStolen);
       // Optimistically update local buff stacks (server will confirm in next snapshot)
@@ -804,6 +855,12 @@ export class ClientEngine {
       duration: msg.duration,
       elapsed: 0,
     });
+  }
+
+  /** Server rejected our position — snap local player back to the corrected position. */
+  handlePositionCorrection(msg: { x: number; y: number; z: number; rotationY: number }): void {
+    this.playerController.mesh.position.set(msg.x, msg.y, msg.z);
+    this.playerController.mesh.rotation.y = msg.rotationY;
   }
 
   private updateKnockbacks(dt: number): void {
@@ -950,6 +1007,147 @@ export class ClientEngine {
     };
   }
 
+  // ── Ability queue ────────────────────────────────────────────────────
+
+  /** Queue an ability to fire the instant GCD/cast ends. Replaces any existing queue. */
+  queueAbility(abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
+    this.queuedAbility = { abilityId, targetEntityId, groundTarget };
+  }
+
+  clearAbilityQueue(): void {
+    this.queuedAbility = null;
+  }
+
+  getQueuedAbilityId(): string | null {
+    return this.queuedAbility?.abilityId ?? null;
+  }
+
+  /** Returns true if the remaining time is within the queue window. */
+  isWithinQueueWindow(remaining: number): boolean {
+    return remaining > 0 && remaining <= ClientEngine.QUEUE_WINDOW;
+  }
+
+  // ── Client-side ability prediction ──────────────────────────────────
+
+  /**
+   * Optimistically predict ability effects locally before server confirms.
+   * Call immediately before sendAbility(). Applies GCD, cooldown, mana, animation/cast bar.
+   * Server response reconciles via handleCooldownUpdate/handleAbilityEffect/state deltas.
+   */
+  predictAbility(abilityId: string, targetEntityId: string | null): void {
+    const stats = getCharacterStats(this.playerController.characterId as CharacterId);
+    const ability = stats.abilities.find(a => a !== null && a.id === abilityId);
+    if (!ability) return;
+
+    const pc = this.playerController as any;
+
+    // Predict GCD (CC-immune abilities bypass GCD)
+    if (!ability.usableWhileCCd) {
+      this.gcd = { remaining: GLOBAL_COOLDOWN, total: GLOBAL_COOLDOWN };
+    }
+
+    // Predict ability cooldown
+    let cooldownPredicted = false;
+    if (ability.cooldown > 0) {
+      this.cooldowns.set(abilityId, { remaining: ability.cooldown, total: ability.cooldown });
+      this.onCooldownUpdate?.(abilityId, ability.cooldown, ability.cooldown);
+      cooldownPredicted = true;
+    }
+
+    // Predict mana deduction
+    const effectiveCost = Math.round(ability.manaCost * this.getManaCostMultiplier());
+    if (effectiveCost > 0) {
+      pc.mana = Math.max(0, pc.mana - effectiveCost);
+    }
+
+    // Predict cast bar for cast-time abilities (only if not moving — server rejects casts while moving)
+    let castPredicted = false;
+    if (ability.castTime && !pc.isMoving) {
+      this.localCastingAbilityId = abilityId;
+      this.localCastingElapsed = 0;
+      this.localCastingTotalTime = ability.castTime;
+      this.localCastingIsChannel = !!ability.isChannel;
+      castPredicted = true;
+    }
+
+    // Predict animation for instant-cast abilities (cast animations are driven by casting state)
+    if (!ability.castTime) {
+      const targetPos = targetEntityId ? this.getEntityMesh(targetEntityId)?.position.clone() : undefined;
+      this.playerController.triggerAbilityAnimation(abilityId, targetPos);
+    }
+
+    this.pendingPrediction = {
+      abilityId,
+      predictedAt: performance.now(),
+      cooldownPredicted,
+      castPredicted,
+    };
+  }
+
+  /**
+   * Predict GCD/cooldown/mana for a ground-targeted ability (skip animation — projectile
+   * animations are complex and rely on server-provided ground position).
+   */
+  predictGroundAbility(abilityId: string): void {
+    const stats = getCharacterStats(this.playerController.characterId as CharacterId);
+    const ability = stats.abilities.find(a => a !== null && a.id === abilityId);
+    if (!ability) return;
+
+    const pc = this.playerController as any;
+
+    if (!ability.usableWhileCCd) {
+      this.gcd = { remaining: GLOBAL_COOLDOWN, total: GLOBAL_COOLDOWN };
+    }
+
+    let cooldownPredicted = false;
+    if (ability.cooldown > 0) {
+      this.cooldowns.set(abilityId, { remaining: ability.cooldown, total: ability.cooldown });
+      this.onCooldownUpdate?.(abilityId, ability.cooldown, ability.cooldown);
+      cooldownPredicted = true;
+    }
+
+    const effectiveCost = Math.round(ability.manaCost * this.getManaCostMultiplier());
+    if (effectiveCost > 0) {
+      pc.mana = Math.max(0, pc.mana - effectiveCost);
+    }
+
+    this.pendingPrediction = {
+      abilityId,
+      predictedAt: performance.now(),
+      cooldownPredicted,
+      castPredicted: false,
+    };
+  }
+
+  /**
+   * Revert a pending prediction (called when server sends an error or prediction times out).
+   * Mana and cooldowns are corrected naturally by server deltas within 1-2 ticks.
+   * GCD and casting state need explicit revert since no server update will clear them.
+   */
+  revertPrediction(): void {
+    if (!this.pendingPrediction) return;
+    const pred = this.pendingPrediction;
+    this.pendingPrediction = null;
+
+    // Revert predicted GCD — server didn't trigger one
+    this.gcd = null;
+
+    // Revert predicted cooldown — server didn't set one
+    if (pred.cooldownPredicted) {
+      this.cooldowns.delete(pred.abilityId);
+    }
+
+    // Revert predicted cast bar
+    if (pred.castPredicted && this.localCastingAbilityId === pred.abilityId) {
+      this.localCastingAbilityId = null;
+      this.localCastingElapsed = 0;
+      this.localCastingTotalTime = 0;
+      this.localCastingIsChannel = false;
+    }
+
+    // Mana: let server's next state delta correct it (within 50-100ms)
+  }
+
   getLocalBuffs(): EntityBuffSnapshot['buffs'] {
     return this.localBuffs;
   }
@@ -1013,6 +1211,30 @@ export class ClientEngine {
 
   sendSetTarget(targetEntityId: string | null): void {
     this.network.send({ type: 'set_target', targetEntityId });
+  }
+
+  /** Check if the queued ability can fire (GCD done, not casting, not incapacitated). */
+  private processAbilityQueue(): void {
+    if (!this.queuedAbility) return;
+
+    const pc = this.playerController as any;
+
+    // Clear queue if player can't act
+    if (pc.dead || pc.stunned || pc.charging) {
+      this.queuedAbility = null;
+      return;
+    }
+
+    // Still on GCD
+    if (this.gcd && this.gcd.remaining > 0) return;
+
+    // Still casting (non-channel blocks queue; channel doesn't block action bar)
+    if (this.localCastingAbilityId && !this.localCastingIsChannel) return;
+
+    // Ready to fire — use callback so main.ts handles target resolution & validation
+    const { abilityId } = this.queuedAbility;
+    this.queuedAbility = null;
+    this.onQueuedAbilityReady?.(abilityId);
   }
 
   /** Returns true if the entity is hostile and currently untargetable (e.g. dumpster-diving). */
@@ -1303,7 +1525,7 @@ export class ClientEngine {
     }
     this.prevMoving = isMovingNow;
 
-    // Periodic 20Hz position updates — drift correction between state changes
+    // Periodic 30Hz position updates — drift correction between state changes
     this.sendAccumulator += dt * 1000;
     if (this.sendAccumulator >= ClientEngine.SEND_RATE) {
       this.sendAccumulator -= ClientEngine.SEND_RATE;
@@ -1319,6 +1541,18 @@ export class ClientEngine {
     if (this.gcd) {
       this.gcd.remaining -= dt;
       if (this.gcd.remaining <= 0) this.gcd = null;
+    }
+
+    // Process ability queue — fire queued ability the instant GCD/cast ends
+    this.processAbilityQueue();
+
+    // Revert prediction if server hasn't responded within timeout.
+    // Cast-time predictions skip this — they're confirmed by ability_effect on completion
+    // or reverted by server error. The timeout only applies to instant abilities.
+    if (this.pendingPrediction &&
+        !this.pendingPrediction.castPredicted &&
+        performance.now() - this.pendingPrediction.predictedAt > ClientEngine.PREDICTION_TIMEOUT * 1000) {
+      this.revertPrediction();
     }
 
     // Locally decrement buff remaining timers so UI stays smooth between
@@ -1337,18 +1571,18 @@ export class ClientEngine {
       this.blindEffect.update(dt);
     }
 
-    // Interpolate remote entity positions using snapshot buffer
-    // (linear interpolation between two known server states, ~100ms behind real-time)
+    // Dead-reckon remote entity positions — predict current position from
+    // last known server state + velocity, with smooth error correction.
     for (const entity of this.remoteEntities.values()) {
-      const interp = this.snapshotBuffer.getInterpolatedPosition(entity.id);
+      const dr = this.deadReckoning.getPosition(entity.id, dt);
       let interpVx = 0;
       let interpVz = 0;
-      if (interp) {
-        entity.isMoving = interp.isMoving;
-        entity.mesh.position.set(interp.x, interp.y, interp.z);
-        entity.mesh.rotation.y = interp.rotationY;
-        interpVx = interp.vx;
-        interpVz = interp.vz;
+      if (dr) {
+        entity.isMoving = dr.isMoving;
+        entity.mesh.position.set(dr.x, dr.y, dr.z);
+        entity.mesh.rotation.y = dr.rotationY;
+        interpVx = dr.vx;
+        interpVz = dr.vz;
       }
 
       // Update model animation state
@@ -1809,6 +2043,7 @@ export class ClientEngine {
     this.crotchRotVisuals.clear();
     for (const entity of this.remoteEntities.values()) this.scene.remove(entity.mesh);
     this.remoteEntities.clear();
+    this.deadReckoning.clear();
     this.scene.remove(this.playerController.mesh);
   }
 }

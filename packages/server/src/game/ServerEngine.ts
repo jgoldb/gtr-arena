@@ -159,6 +159,16 @@ export class ServerEngine {
   // ~10 ticks at 20Hz (400ms / 50ms = 8, +2 margin)
   private static readonly MAX_HISTORY_TICKS = Math.ceil(400 / ServerEngine.TICK_MS) + 2;
 
+  // Ability queue — holds one pending ability per entity when request arrives slightly
+  // before GCD/cast expires. Processed on the tick where GCD/cast clears.
+  private static readonly ABILITY_QUEUE_TOLERANCE = 0.1; // 100ms — accept abilities arriving up to 2 ticks before GCD expires
+  private static readonly ABILITY_QUEUE_MAX_AGE = 0.5;   // expire stale queued abilities after 500ms
+  private abilityQueue = new Map<string, {
+    abilityId: string; targetEntityId: string | null;
+    groundTarget?: { x: number; z: number }; clientServerTimestamp?: number;
+    age: number;
+  }>();
+
   // Event queue (flushed each tick)
   private pendingEvents: ServerMessage[] = [];
 
@@ -187,6 +197,8 @@ export class ServerEngine {
 
   onBroadcast?: (msg: ServerMessage) => void;
   onSendToPlayer?: (entityId: string, msg: ServerMessage) => void;
+  /** Relay a position update to all clients EXCEPT the sender — called immediately on receipt for low-latency dead reckoning. */
+  onPositionRelay?: (senderEntityId: string, msg: ServerMessage) => void;
   onGameOver?: (winningTeam: number) => void;
   /** Fired whenever damage is dealt (sourceEntityId, targetEntityId, amount). */
   onStatDamage?: (sourceEntityId: string, targetEntityId: string, amount: number) => void;
@@ -444,11 +456,61 @@ export class ServerEngine {
     entity.disconnected = false;
   }
 
+  // ── Movement validation constants ───────────────────────────────────
+  // Speed tolerance: allow up to 50% over computed max speed to account for
+  // network jitter, tick misalignment, and rapid acceleration/deceleration.
+  private static readonly SPEED_TOLERANCE = 1.5;
+  // Flat distance buffer (world units) added on top of speed-based max distance.
+  // Covers turning, strafing, sub-tick movement bursts, and minor desync.
+  private static readonly POSITION_TOLERANCE_FLAT = 1.5;
+  // If more than this many seconds have passed since last position update,
+  // skip distance validation (handles reconnects, knockbacks, etc.).
+  private static readonly VALIDATION_GAP_THRESHOLD = 0.5; // 500ms
+
   updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean, vx: number, vz: number): void {
     const entity = this.getEntity(entityId);
     if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
     // During a sweep charge, the server is authoritative about position — ignore client updates
     if (this.sweepCharges.has(entityId)) return;
+
+    // ── Speed validation: clamp velocity magnitude to max possible speed ──
+    const maxSpeed = entity.speed * entity.movementSpeedModifier;
+    const clientSpeed = Math.sqrt(vx * vx + vz * vz);
+    if (!entity.godMode && clientSpeed > maxSpeed * ServerEngine.SPEED_TOLERANCE) {
+      const scale = maxSpeed / clientSpeed;
+      vx *= scale;
+      vz *= scale;
+    }
+
+    // ── Position validation: reject if distance traveled exceeds what's possible ──
+    const now = performance.now();
+    const timeSinceLastUpdate = entity.lastPositionUpdateTime > 0
+      ? (now - entity.lastPositionUpdateTime) / 1000
+      : 0;
+
+    // Skip distance validation when there's a large time gap (reconnect, knockback, first update)
+    if (timeSinceLastUpdate > 0 && timeSinceLastUpdate < ServerEngine.VALIDATION_GAP_THRESHOLD && !entity.godMode) {
+      const maxDistance = maxSpeed * ServerEngine.SPEED_TOLERANCE * timeSinceLastUpdate
+        + ServerEngine.POSITION_TOLERANCE_FLAT;
+      const dx = x - entity.x;
+      const dz = z - entity.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+
+      if (distance > maxDistance) {
+        // Rubber-band: reject the position and send correction
+        this.onSendToPlayer?.(entityId, {
+          type: 'position_correction',
+          x: entity.x,
+          y: entity.y,
+          z: entity.z,
+          rotationY: entity.rotationY,
+        } as any);
+        entity.lastPositionUpdateTime = now;
+        return;
+      }
+    }
+
+    entity.lastPositionUpdateTime = now;
     entity.x = x;
     entity.y = y;
     entity.z = z;
@@ -457,6 +519,12 @@ export class ServerEngine {
     entity.vx = vx;
     entity.vz = vz;
     if (isMoving) this.cancelResting(entityId);
+
+    // Immediately relay to other clients for low-latency dead reckoning
+    this.onPositionRelay?.(entityId, {
+      type: 'position_relay',
+      id: entityId, x, y, z, rotationY, isMoving, vx, vz,
+    });
 
     // Fall damage detection: track peak Y while airborne
     const resolved = this.collision.resolve(x, z, y, entity.collisionRadius);
@@ -517,7 +585,13 @@ export class ServerEngine {
     if (!ability) return;
 
     // Block during GCD (CC-immune abilities bypass GCD)
-    if (!entity.godMode && !ability.usableWhileCCd && this.combatSystem.getGcdRemaining(entityId) > 0) return;
+    if (!entity.godMode && !ability.usableWhileCCd && this.combatSystem.getGcdRemaining(entityId) > 0) {
+      // Queue the ability if GCD is about to expire (within tolerance) — fires on next tick
+      if (this.combatSystem.getGcdRemaining(entityId) <= ServerEngine.ABILITY_QUEUE_TOLERANCE) {
+        this.abilityQueue.set(entityId, { abilityId, targetEntityId, groundTarget, clientServerTimestamp, age: 0 });
+      }
+      return;
+    }
 
     // Cancel channel if starting new ability
     if (this.castingStates.has(entityId) && this.combatSystem.getCooldownRemaining(entityId, abilityId) <= 0) {
@@ -567,6 +641,26 @@ export class ServerEngine {
   cancelCastRequest(entityId: string): void {
     if (this.frozenEntities.has(entityId)) return;
     this.cancelCasting(entityId);
+  }
+
+  /** Process queued abilities — called each tick after GCD/cast updates. */
+  private processAbilityQueue(dt: number): void {
+    for (const [entityId, queued] of this.abilityQueue) {
+      queued.age += dt;
+
+      // Expire stale entries or clear if entity can no longer act
+      const entity = this.getEntity(entityId);
+      if (queued.age > ServerEngine.ABILITY_QUEUE_MAX_AGE || !entity || entity.dead || entity.stunned) {
+        this.abilityQueue.delete(entityId);
+        continue;
+      }
+
+      // Re-attempt — requestAbility will succeed now if GCD/cast cleared this tick
+      if (this.combatSystem.getGcdRemaining(entityId) <= 0 && !this.castingStates.has(entityId)) {
+        this.abilityQueue.delete(entityId);
+        this.requestAbility(entityId, queued.abilityId, queued.targetEntityId, queued.groundTarget, queued.clientServerTimestamp);
+      }
+    }
   }
 
   /** Execute a ground-targeted AoE ability at a world position. Consumes resources immediately, delays damage until impact. */
@@ -796,6 +890,9 @@ export class ServerEngine {
     this.combatSystem.update(dt);
     this.buffSystem.update(dt);
     this.regenSystem.update(dt);
+
+    // Process queued abilities — fire any that are no longer blocked after GCD/cast updates
+    this.processAbilityQueue(dt);
 
     // Build and broadcast state (events are bundled into delta updates)
     this.broadcastGameState();
@@ -1123,6 +1220,7 @@ export class ServerEngine {
       }
 
       entity.charging = false;
+      entity.lastPositionUpdateTime = 0; // skip validation on next client position update
       this.sweepCharges.delete(entity.id);
     }
   }
@@ -1323,6 +1421,8 @@ export class ServerEngine {
       if (t >= 1) {
         // Land — apply stun
         this.buffSystem.apply(kb.target, KaboomStun);
+        // Reset validation timer so the client's next position update isn't rejected
+        kb.target.lastPositionUpdateTime = 0;
         this.activeKnockbacks.splice(i, 1);
       }
     }

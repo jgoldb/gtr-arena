@@ -781,7 +781,33 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     const groundPos = clientEngine.targetingSystem.getGroundTargetPosition();
     clientEngine.targetingSystem.cancelGroundTarget();
     mpPendingGroundAbility = null;
+    clientEngine.predictGroundAbility(ability.id);
     clientEngine.sendAbility(ability.id, mpSelectedTargetId, { x: groundPos.x, z: groundPos.z });
+  };
+
+  /** Fire an ability immediately (no GCD/cast checks). Used by both direct activation and queue callback. */
+  function mpFireAbility(ability: Ability): void {
+    if (clientEngine!.getCooldownRemaining(ability.id) > 0) return;
+    if (ability.groundTargeted) {
+      if (mpPendingGroundAbility?.id === ability.id) {
+        mpCancelGroundTargeting();
+      } else {
+        mpCancelGroundTargeting();
+        mpPendingGroundAbility = ability;
+        clientEngine!.targetingSystem.startGroundTarget(ability.aoeRadius ?? 1, ability.range ?? 10);
+      }
+      return;
+    }
+    mpCancelGroundTargeting();
+    clientEngine!.predictAbility(ability.id, mpSelectedTargetId);
+    clientEngine!.sendAbility(ability.id, mpSelectedTargetId);
+  }
+
+  // Ability queue callback — fires queued ability the instant GCD/cast ends
+  clientEngine.onQueuedAbilityReady = (abilityId) => {
+    const ability = abilities.find(a => a !== null && a.id === abilityId);
+    if (!ability) return;
+    mpFireAbility(ability);
   };
 
   mpActionBar = new ActionBar({
@@ -792,22 +818,28 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       if (castState?.isChannel && clientEngine!.getCooldownRemaining(ability.id) <= 0) {
         clientEngine!.sendCancelCast();
       }
-      // Block during GCD (CC-immune abilities bypass GCD)
-      if (!ability.usableWhileCCd && clientEngine!.getGcdRemaining() > 0) return;
-      // Ground-targeted abilities enter reticle mode
-      if (ability.groundTargeted) {
-        if (mpPendingGroundAbility?.id === ability.id) {
-          mpCancelGroundTargeting();
-        } else {
-          if (clientEngine!.getCooldownRemaining(ability.id) > 0) return;
-          mpCancelGroundTargeting();
-          mpPendingGroundAbility = ability;
-          clientEngine!.targetingSystem.startGroundTarget(ability.aoeRadius ?? 1, ability.range ?? 10);
+
+      // Determine if blocked by GCD or casting
+      const gcdRemaining = clientEngine!.getGcdRemaining();
+      const gcdBlocked = !ability.usableWhileCCd && gcdRemaining > 0;
+      const castBlocked = castState !== null && !castState.isChannel;
+      const castRemaining = castBlocked ? Math.max(0, castState!.totalTime - castState!.elapsed) : 0;
+
+      if (gcdBlocked || castBlocked) {
+        // Queue if within queue window (last 400ms of GCD/cast)
+        const blockingRemaining = Math.max(
+          gcdBlocked ? gcdRemaining : 0,
+          castBlocked ? castRemaining : 0,
+        );
+        if (clientEngine!.isWithinQueueWindow(blockingRemaining)) {
+          clientEngine!.queueAbility(ability.id, mpSelectedTargetId);
         }
         return;
       }
-      mpCancelGroundTargeting();
-      clientEngine!.sendAbility(ability.id, mpSelectedTargetId);
+
+      // Not blocked — clear queue and fire immediately
+      clientEngine!.clearAbilityQueue();
+      mpFireAbility(ability);
     },
     getAbilityStatus: (ability) => {
       const effectiveManaCost = Math.round(ability.manaCost * clientEngine!.getManaCostMultiplier());
@@ -848,10 +880,16 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     getGcdRemaining: () => clientEngine!.getGcdRemaining(),
     getGcdTotal: () => clientEngine!.getGcdTotal(),
     isDisabled: () => {
+      if (player.dead || player.stunned || player.charging) return true;
       const castState = clientEngine!.getLocalCastingState();
-      const isCasting = castState !== null && !castState.isChannel;
-      return player.dead || player.stunned || player.charging || isCasting;
+      if (castState && !castState.isChannel) {
+        // Allow ability presses in the last 400ms of a cast for queuing
+        const castRemaining = Math.max(0, castState.totalTime - castState.elapsed);
+        return !clientEngine!.isWithinQueueWindow(castRemaining);
+      }
+      return false;
     },
+    getQueuedAbilityId: () => clientEngine!.getQueuedAbilityId(),
   });
   document.body.appendChild(mpActionBar.element);
   const charId = (localSnap?.characterId ?? 'janitor') as string;
@@ -1266,6 +1304,14 @@ function handleServerMessage(msg: ServerMessage): void {
       clientEngine?.handleForceClearTarget();
       break;
 
+    case 'position_correction':
+      clientEngine?.handlePositionCorrection(msg);
+      break;
+
+    case 'position_relay':
+      clientEngine?.handlePositionRelay(msg);
+      break;
+
     case 'countdown_start':
       // Server confirmed all clients are ready — reset the arena timer so
       // everyone's countdown is synchronized regardless of load time.
@@ -1328,6 +1374,7 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'error':
       if (currentState === 'multiplayer') {
+        clientEngine?.revertPrediction();
         mpErrorText?.show(msg.message);
       } else {
         console.warn('Server error:', msg.message);

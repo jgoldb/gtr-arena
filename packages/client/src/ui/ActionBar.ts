@@ -17,6 +17,7 @@ export interface ActionBarCallbacks {
   getGcdRemaining?: () => number;
   getGcdTotal?: () => number;
   isDisabled?: () => boolean;
+  getQueuedAbilityId?: () => string | null;
 }
 
 /** Action IDs in the KeybindManager that correspond to action bar slot indices */
@@ -163,12 +164,22 @@ export class ActionBar {
   update(): void {
     const combat = this.callbacks.getCombatSystem();
     const disabled = this.callbacks.isDisabled?.() ?? false;
+    const queuedId = this.callbacks.getQueuedAbilityId?.() ?? null;
     for (let i = 0; i < this.slots.length; i++) {
       const slot = this.slots[i];
       const slotEl = this.slotElements[i];
       const overlay = this.cooldownOverlays[i];
       const cdText = this.cooldownTexts[i];
       const statusOv = this.statusOverlays[i];
+
+      // Queued ability highlight — white glow border
+      const isQueued = slot.ability !== null && slot.ability.id === queuedId;
+      slotEl.style.borderColor = isQueued
+        ? 'rgba(255, 255, 255, 0.9)'
+        : 'rgba(255, 255, 255, 0.2)';
+      slotEl.style.boxShadow = isQueued
+        ? '0 0 8px rgba(255, 255, 255, 0.5), inset 0 0 4px rgba(255, 255, 255, 0.2)'
+        : 'none';
 
       if (!slot.ability) {
         slotEl.style.opacity = disabled ? '0.3' : '1';
