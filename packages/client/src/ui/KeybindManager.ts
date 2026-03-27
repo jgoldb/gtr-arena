@@ -28,6 +28,7 @@ const DEFAULT_BINDS: { id: string; label: string; category: string; code: string
   { id: 'jump', label: 'Jump', category: 'Movement', code: 'Space' },
   { id: 'rest', label: 'Rest', category: 'Movement', code: 'KeyR' },
   // Action bar slots
+  { id: 'action_0', label: 'Action Bar 0', category: 'Action Bar', code: 'Backquote' },
   { id: 'action_1', label: 'Action Bar 1', category: 'Action Bar', code: 'Digit1' },
   { id: 'action_2', label: 'Action Bar 2', category: 'Action Bar', code: 'Digit2' },
   { id: 'action_3', label: 'Action Bar 3', category: 'Action Bar', code: 'Digit3' },

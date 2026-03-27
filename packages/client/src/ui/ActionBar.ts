@@ -18,10 +18,12 @@ export interface ActionBarCallbacks {
   getGcdTotal?: () => number;
   isDisabled?: () => boolean;
   getQueuedAbilityId?: () => string | null;
+  isAutoAttacking?: () => boolean;
 }
 
 /** Action IDs in the KeybindManager that correspond to action bar slot indices */
 const SLOT_ACTION_IDS = [
+  'action_0',
   'action_1', 'action_2', 'action_3', 'action_4',
   'action_5', 'action_6', 'action_7', 'action_8',
   'action_9',
@@ -45,8 +47,23 @@ export class ActionBar {
   private pressedSlots: Set<number> = new Set();
   private pressedTimers: Map<number, ReturnType<typeof setTimeout>> = new Map();
 
+  private static styleInjected = false;
+
   constructor(callbacks: ActionBarCallbacks) {
     this.callbacks = callbacks;
+
+    // Inject CSS keyframe animation for auto-attack flash (once)
+    if (!ActionBar.styleInjected) {
+      ActionBar.styleInjected = true;
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes actionbar-aa-flash {
+          0%, 100% { background: rgba(200, 30, 30, 0.5); }
+          50% { background: rgba(200, 30, 30, 0.05); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
 
     // Initialize slots from keybind manager
     for (let i = 0; i < SLOT_ACTION_IDS.length; i++) {
@@ -197,7 +214,30 @@ export class ActionBar {
         slotEl.style.opacity = '0.3';
         overlay.style.background = 'transparent';
         statusOv.style.background = 'transparent';
+        statusOv.style.animation = '';
         cdText.textContent = '';
+        continue;
+      }
+
+      // Auto-attack toggle — flashing red when active, no GCD/cooldown display
+      if (slot.ability.isAutoAttack) {
+        const aaActive = this.callbacks.isAutoAttacking?.() ?? false;
+        const status = this.callbacks.getAbilityStatus(slot.ability);
+        overlay.style.background = 'transparent';
+        cdText.textContent = '';
+        if (aaActive) {
+          statusOv.style.animation = 'actionbar-aa-flash 1s ease-in-out infinite';
+          slotEl.style.opacity = '1';
+        } else {
+          statusOv.style.animation = '';
+          if (status === 'no-target') {
+            statusOv.style.background = 'transparent';
+            slotEl.style.opacity = '0.5';
+          } else {
+            statusOv.style.background = 'transparent';
+            slotEl.style.opacity = '1';
+          }
+        }
         continue;
       }
 
@@ -206,6 +246,7 @@ export class ActionBar {
         slotEl.style.opacity = '0.3';
         overlay.style.background = 'transparent';
         statusOv.style.background = 'transparent';
+        statusOv.style.animation = '';
         cdText.textContent = '';
         continue;
       }

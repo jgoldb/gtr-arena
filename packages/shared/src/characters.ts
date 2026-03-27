@@ -3,7 +3,7 @@ import {
   Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper,
   BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom,
   Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD,
-  PvPTrinket,
+  Attack, PvPTrinket,
   TweakingBuff,
 } from './abilities.js';
 
@@ -47,7 +47,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.17,
     hpRegen: 32,
     manaRegen: 12,
-    abilities: [Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket],
+    abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket],
   },
   'dr-retardo': {
     id: 'dr-retardo',
@@ -62,7 +62,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.05,
     hpRegen: 24,
     manaRegen: 48,
-    abilities: [BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket],
+    abilities: [Attack, BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket],
   },
   'crackhead': {
     id: 'crackhead',
@@ -77,7 +77,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.10,
     hpRegen: 28,
     manaRegen: 16,
-    abilities: [Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD, PvPTrinket],
+    abilities: [Attack, Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD, PvPTrinket],
     startingBuffs: [TweakingBuff],
     playgroundOnly: false,
   },
@@ -94,7 +94,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.15,
     hpRegen: 30,
     manaRegen: 20,
-    abilities: [null, null, null, null, null, null, null, null, PvPTrinket],
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
     playgroundOnly: true,
   },
 };

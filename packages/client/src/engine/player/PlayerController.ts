@@ -122,6 +122,10 @@ export class PlayerController implements Targetable {
     return this.characterModel.abilities;
   }
 
+  get isAutoAttacking(): boolean {
+    return this.characterModel.isAutoAttacking;
+  }
+
   setAutoAttacking(active: boolean): void {
     this.characterModel.setAutoAttacking(active);
   }

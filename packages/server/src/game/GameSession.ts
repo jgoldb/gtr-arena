@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { DataChannel } from 'node-datachannel';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_GateVoteUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
 import { MAPS, MAP_LIST, xpToLevel, calculateXpGain, getMaxPlayers, encodeMessage } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
@@ -44,6 +44,7 @@ export class GameSession {
   private arenaPreparationActive = false;
   private countdownStarted = false;
   private arenaCountdownStartedAt = 0;
+  private gateVotes = new Set<string>();
   private static readonly READY_TIMEOUT_MS = 10_000; // max wait for slow clients
   private static readonly COUNTDOWN_SECONDS = 3;
 
@@ -243,6 +244,33 @@ export class GameSession {
     }, arenaOpenTime * 1000);
   }
 
+  private handleGateVote(userId: string): void {
+    if (!this.arenaPreparationActive || this.stopped) return;
+    this.gateVotes.add(userId);
+
+    const totalPlayers = this.players.length;
+    const voteCount = this.gateVotes.size;
+
+    // Broadcast updated vote count
+    this.broadcast({
+      type: 'gate_vote_update',
+      voteCount,
+      totalPlayers,
+    } as S2C_GateVoteUpdate);
+
+    // If all players voted, immediately open gates
+    if (voteCount >= totalPlayers) {
+      this.arenaPreparationActive = false;
+      if (this.arenaOpenTimeoutId) {
+        clearTimeout(this.arenaOpenTimeoutId);
+        this.arenaOpenTimeoutId = null;
+      }
+      if (!this.stopped) {
+        this.engine.removeArenaPreparation();
+      }
+    }
+  }
+
   stop(): void {
     this.stopped = true;
     this.arenaPreparationActive = false;
@@ -278,6 +306,11 @@ export class GameSession {
 
     if (msg.type === 'client_ready') {
       this.markReady(userId);
+      return;
+    }
+
+    if (msg.type === 'vote_open_gates') {
+      this.handleGateVote(userId);
       return;
     }
 

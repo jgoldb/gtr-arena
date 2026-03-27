@@ -44,6 +44,9 @@ export abstract class ArenaScript implements MapScript {
   private overlayEl: HTMLElement | null = null;
   private countdownEl: HTMLElement | null = null;
   private fightEl: HTMLElement | null = null;
+  private voteBtn: HTMLButtonElement | null = null;
+  private voteStatusEl: HTMLElement | null = null;
+  private hasVoted = false;
 
   protected readonly OPEN_TIME: number = 30;
   protected readonly OPEN_ANIM_DURATION: number = 2.5;
@@ -144,6 +147,8 @@ export abstract class ArenaScript implements MapScript {
     this.overlayEl = null;
     this.fightEl = null;
     this.countdownEl = null;
+    this.voteBtn = null;
+    this.voteStatusEl = null;
     this.flashLights = [];
     this.disposeArena();
   }
@@ -177,6 +182,22 @@ export abstract class ArenaScript implements MapScript {
   // Internal
   // ---------------------------------------------------------------------------
   onDoorsOpen?: () => void;
+
+  private _onVoteOpenGates?: () => void;
+  get onVoteOpenGates() { return this._onVoteOpenGates; }
+  set onVoteOpenGates(cb: (() => void) | undefined) {
+    this._onVoteOpenGates = cb;
+    if (this.voteBtn) {
+      this.voteBtn.style.display = cb ? '' : 'none';
+    }
+  }
+
+  updateGateVotes(voteCount: number, totalPlayers: number): void {
+    if (this.voteStatusEl) {
+      this.voteStatusEl.textContent = `${voteCount}/${totalPlayers} voted`;
+      this.voteStatusEl.style.display = '';
+    }
+  }
 
   private triggerOpen(silent = false): void {
     this.opened = true;
@@ -267,6 +288,60 @@ export abstract class ArenaScript implements MapScript {
     `;
     countdown.textContent = String(this.OPEN_TIME);
     overlay.appendChild(countdown);
+
+    const voteBtn = document.createElement('button');
+    voteBtn.style.cssText = `
+      display: none;
+      pointer-events: auto;
+      cursor: pointer;
+      margin-top: 8px;
+      padding: 6px 18px;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      color: #fff;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 4px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      transition: background 0.2s, border-color 0.2s;
+    `;
+    voteBtn.textContent = 'Open Gates';
+    voteBtn.addEventListener('mouseenter', () => {
+      if (!this.hasVoted) {
+        voteBtn.style.background = 'rgba(255,255,255,0.22)';
+        voteBtn.style.borderColor = 'rgba(255,255,255,0.45)';
+      }
+    });
+    voteBtn.addEventListener('mouseleave', () => {
+      if (!this.hasVoted) {
+        voteBtn.style.background = 'rgba(255,255,255,0.12)';
+        voteBtn.style.borderColor = 'rgba(255,255,255,0.25)';
+      }
+    });
+    voteBtn.addEventListener('click', () => {
+      if (this.hasVoted) return;
+      this.hasVoted = true;
+      voteBtn.textContent = 'Voted!';
+      voteBtn.style.background = 'rgba(100,255,100,0.15)';
+      voteBtn.style.borderColor = 'rgba(100,255,100,0.4)';
+      voteBtn.style.cursor = 'default';
+      this.onVoteOpenGates?.();
+    });
+    overlay.appendChild(voteBtn);
+    this.voteBtn = voteBtn;
+
+    const voteStatus = document.createElement('div');
+    voteStatus.style.cssText = `
+      font-size: 13px;
+      color: #aaa;
+      margin-top: 4px;
+      font-family: Arial, sans-serif;
+      letter-spacing: 1px;
+      display: none;
+    `;
+    overlay.appendChild(voteStatus);
+    this.voteStatusEl = voteStatus;
 
     document.body.appendChild(overlay);
     this.overlayEl = overlay;

@@ -85,6 +85,11 @@ export class MapManager {
     this.currentScript?.forceOpenDoors?.();
   }
 
+  /** Update the gate vote display. */
+  updateGateVotes(voteCount: number, totalPlayers: number): void {
+    (this.currentScript as any)?.updateGateVotes?.(voteCount, totalPlayers);
+  }
+
   /** Notify the map script of a killing blow. */
   onKillingBlow(killerTeam: number, victimTeam: number): void {
     this.currentScript?.onKillingBlow?.(killerTeam, victimTeam);

@@ -427,6 +427,14 @@ function startMultiplayer(msg: S2C_GameStart): void {
   clientEngine.onError = (message) => mpErrorText?.show(message);
   clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
+  // Wire gate vote button
+  const script = clientEngine.mapManager.getScript();
+  if (script && 'onVoteOpenGates' in script) {
+    (script as any).onVoteOpenGates = () => {
+      network!.send({ type: 'vote_open_gates' });
+    };
+  }
+
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
     // Skip 0-amount damage text (e.g. debuff-only abilities, hostile channel starts)
     if (amount === 0 && type !== 'miss' && type !== 'dodge' && type !== 'immune') return;
@@ -532,6 +540,14 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
   // Wire callbacks (same as startMultiplayer)
   clientEngine.onError = (message) => mpErrorText?.show(message);
   clientEngine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
+
+  // Wire gate vote button
+  const rejoinScript = clientEngine.mapManager.getScript();
+  if (rejoinScript && 'onVoteOpenGates' in rejoinScript) {
+    (rejoinScript as any).onVoteOpenGates = () => {
+      network!.send({ type: 'vote_open_gates' });
+    };
+  }
 
   clientEngine.onCombatText = (sourceEntityId, targetEntityId, amount, type) => {
     // Skip 0-amount damage text (e.g. debuff-only abilities, hostile channel starts)
@@ -867,6 +883,17 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
 
   mpActionBar = new ActionBar({
     onActivate: (ability) => {
+      // Attack toggle — bypass GCD/queue, just toggle auto-attack
+      if (ability.isAutoAttack) {
+        if (clientEngine!.playerController.isAutoAttacking) {
+          clientEngine!.sendStopAutoAttack();
+        } else if (mpSelectedTargetId) {
+          if (clientEngine!.isResting()) clientEngine!.stopResting();
+          clientEngine!.sendAutoAttack(mpSelectedTargetId);
+        }
+        return;
+      }
+
       if (clientEngine!.isResting()) clientEngine!.stopResting();
       // Cancel current channel if starting new ability (same as playground)
       const castState = clientEngine!.getLocalCastingState();
@@ -914,6 +941,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       return false;
     },
     getQueuedAbilityId: () => clientEngine!.getQueuedAbilityId(),
+    isAutoAttacking: () => clientEngine!.playerController.isAutoAttacking,
   });
   document.body.appendChild(mpActionBar.element);
   const charId = (localSnap?.characterId ?? 'janitor') as string;
@@ -1349,6 +1377,15 @@ function handleServerMessage(msg: ServerMessage): void {
       // everyone's countdown is synchronized regardless of load time.
       if (clientEngine) {
         clientEngine.mapManager.resetTimer();
+      }
+      break;
+
+    case 'gate_vote_update':
+      if (clientEngine) {
+        clientEngine.mapManager.updateGateVotes(msg.voteCount, msg.totalPlayers);
+        if (msg.voteCount >= msg.totalPlayers) {
+          clientEngine.mapManager.forceOpenDoors();
+        }
       }
       break;
 
@@ -2130,6 +2167,20 @@ async function startPlayground(): Promise<void> {
   // Action bar
   const actionBar = new ActionBar({
     onActivate: (ability) => {
+      // Attack toggle — bypass GCD/queue, just toggle auto-attack
+      if (ability.isAutoAttack) {
+        if (engine.isAutoAttackActive()) {
+          engine.stopAutoAttack();
+        } else {
+          const target = engine.targetingSystem.currentTarget;
+          if (target && target.isHostileTo(engine.playerController) && !target.dead) {
+            if (engine.isResting()) engine.stopResting();
+            engine.startAutoAttack(target);
+          }
+        }
+        return;
+      }
+
       if (engine.isResting()) engine.stopResting();
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
       // Block during GCD (unless god mode or CC-immune ability)
@@ -2197,6 +2248,7 @@ async function startPlayground(): Promise<void> {
     getGcdRemaining: () => engine.combatSystem.getGcdRemaining(),
     getGcdTotal: () => engine.combatSystem.getGcdTotal(),
     isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || (engine.isCasting() && !engine.isChanneling()),
+    isAutoAttacking: () => engine.isAutoAttackActive(),
   });
   pgActionBar = actionBar;
   document.body.appendChild(actionBar.element);
@@ -2575,6 +2627,20 @@ async function startUISetup(): Promise<void> {
   // Action bar
   const actionBar = new ActionBar({
     onActivate: (ability) => {
+      // Attack toggle — bypass GCD/queue, just toggle auto-attack
+      if (ability.isAutoAttack) {
+        if (engine.isAutoAttackActive()) {
+          engine.stopAutoAttack();
+        } else {
+          const target = engine.targetingSystem.currentTarget;
+          if (target && target.isHostileTo(engine.playerController) && !target.dead) {
+            if (engine.isResting()) engine.stopResting();
+            engine.startAutoAttack(target);
+          }
+        }
+        return;
+      }
+
       if (engine.isResting()) engine.stopResting();
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
       if (!ability.usableWhileCCd && engine.combatSystem.getGcdRemaining() > 0) return;
@@ -2639,6 +2705,7 @@ async function startUISetup(): Promise<void> {
     getGcdRemaining: () => engine.combatSystem.getGcdRemaining(),
     getGcdTotal: () => engine.combatSystem.getGcdTotal(),
     isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || (engine.isCasting() && !engine.isChanneling()),
+    isAutoAttacking: () => engine.isAutoAttackActive(),
   });
   pgActionBar = actionBar;
   document.body.appendChild(actionBar.element);

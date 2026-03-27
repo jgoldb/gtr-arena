@@ -153,6 +153,10 @@ export interface C2S_ToggleGodMode {
   type: 'toggle_god_mode';
 }
 
+export interface C2S_VoteOpenGates {
+  type: 'vote_open_gates';
+}
+
 export interface C2S_SwapTeam {
   type: 'swap_team';
   draggedUserId: string;
@@ -638,6 +642,12 @@ export interface S2C_GameStateSnapshot {
   arenaTimeRemaining?: number;
 }
 
+export interface S2C_GateVoteUpdate {
+  type: 'gate_vote_update';
+  voteCount: number;
+  totalPlayers: number;
+}
+
 export interface S2C_XpUpdate {
   type: 'xp_update';
   xp: number;
@@ -720,6 +730,7 @@ export type ClientMessage =
   | C2S_AcceptRematch
   | C2S_DeclineRematch
   | C2S_ToggleGodMode
+  | C2S_VoteOpenGates
   | C2S_SwapTeam
   | C2S_AdminGetUsers
   | C2S_AdminDeleteUser
@@ -773,6 +784,7 @@ export type ServerMessage =
   | S2C_PlayerReconnected
   | S2C_EntityRemoved
   | S2C_ForceClearTarget
+  | S2C_GateVoteUpdate
   | S2C_PositionCorrection
   | S2C_PositionRelay
   | S2C_RtcOffer

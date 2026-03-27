@@ -86,6 +86,7 @@ export interface Ability {
   readonly suppressAutoTarget?: boolean; // if true, target does NOT auto-target the caster when hit
   readonly isMelee?: boolean; // melee attacks can be dodged; spells cannot
   readonly usableWhileCCd?: boolean; // if true, ability can be used while stunned/slept/blinded/etc.
+  readonly isAutoAttack?: boolean; // if true, this is the Attack toggle — not a real ability, just toggles auto-attack
 }
 
 // ── Buff definitions ────────────────────────────────────────────────────
@@ -741,6 +742,18 @@ export const OD: Ability = {
   description:
     "It's an overdose! For 6 seconds: +50% damage dealt, +30% movement speed, abilities cost no mana. Afterwards, you are stunned for 2 seconds and Tweaking is set to 100 stacks.",
   appliesSelfBuff: OverdosingBuff,
+};
+
+export const Attack: Ability = {
+  id: 'attack',
+  name: 'Attack',
+  icon: '⚔️',
+  manaCost: 0,
+  cooldown: 0,
+  damage: 0,
+  requiresHostileTarget: true,
+  description: 'Toggle auto-attack on the current target.',
+  isAutoAttack: true,
 };
 
 export const PvPTrinket: Ability = {

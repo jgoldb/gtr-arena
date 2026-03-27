@@ -704,6 +704,10 @@ export class Engine {
     this.playerController.setAutoAttacking(false);
   }
 
+  isAutoAttackActive(): boolean {
+    return this.autoAttacking;
+  }
+
   resetAutoAttackTimer(): void {
     this.autoAttackTimer = 0;
   }
