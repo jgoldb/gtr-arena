@@ -139,6 +139,7 @@ export class ServerEngine {
   private targets = new Map<string, string | null>(); // entityId -> targetEntityId
   private castingStates = new Map<string, CastingState>();
   private autoAttacks = new Map<string, AutoAttackState>();
+  private swingTimers = new Map<string, number>(); // entityId -> time since last swing (persists across toggle)
   private sweepCharges = new Map<string, SweepCharge>();
   private tweakerSprintCharges = new Map<string, TweakerSprintCharge>();
   private fullRetardAuras = new Map<string, FullRetardAura>();
@@ -560,6 +561,7 @@ export class ServerEngine {
     this.frozenEntities.delete(entityId);
     this.castingStates.delete(entityId);
     this.autoAttacks.delete(entityId);
+    this.swingTimers.delete(entityId);
     this.sweepCharges.delete(entityId);
     this.tweakerSprintCharges.delete(entityId);
     this.fullRetardAuras.delete(entityId);
@@ -760,11 +762,18 @@ export class ServerEngine {
     const existing = this.autoAttacks.get(entityId);
     if (existing && existing.target === target) return;
 
-    this.autoAttacks.set(entityId, { target, timer: entity.autoAttackSpeed });
+    // Use persistent swing timer so toggling can't bypass the cooldown
+    const timeSinceLastSwing = this.swingTimers.get(entityId) ?? Infinity;
+    this.autoAttacks.set(entityId, { target, timer: Math.min(timeSinceLastSwing, entity.autoAttackSpeed) });
     entity.isAutoAttacking = true;
   }
 
   stopAutoAttack(entityId: string): void {
+    // Save the current timer before deleting state
+    const state = this.autoAttacks.get(entityId);
+    if (state) {
+      this.swingTimers.set(entityId, state.timer);
+    }
     this.autoAttacks.delete(entityId);
     const entity = this.getEntity(entityId);
     if (entity) entity.isAutoAttacking = false;
@@ -1136,6 +1145,11 @@ export class ServerEngine {
       this.updateTweakerSprintCharge(entity, dt);
     }
 
+    // Tick persistent swing timers (even for entities not currently auto-attacking)
+    for (const [id, t] of this.swingTimers) {
+      this.swingTimers.set(id, t + dt);
+    }
+
     // Update auto-attacks
     for (const entity of this.entities) {
       this.updateAutoAttack(entity, dt);
@@ -1387,6 +1401,8 @@ export class ServerEngine {
     }
 
     state.timer += dt;
+    // Keep persistent swing timer in sync while auto-attacking
+    this.swingTimers.set(entity.id, state.timer);
     const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(entity) * (entity.godMode ? 6 : 1);
     if (state.timer >= entity.autoAttackSpeed / atkSpeedMult) {
       const dx = entity.x - state.target.x;
@@ -1395,10 +1411,12 @@ export class ServerEngine {
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (dist > entity.autoAttackRange + ServerEngine.RANGE_TOLERANCE) {
         state.timer = entity.autoAttackSpeed;
+        this.swingTimers.set(entity.id, state.timer);
         return;
       }
       if (!this.combatSystem.hasLineOfSight(entity.x, entity.z, state.target.x, state.target.z, entity.y, state.target.y)) {
         state.timer = entity.autoAttackSpeed;
+        this.swingTimers.set(entity.id, state.timer);
         this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Not in line of sight' });
         return;
       }
@@ -1411,12 +1429,14 @@ export class ServerEngine {
         const fwdZ = Math.cos(entity.rotationY);
         if (fwdX * (toX / len) + fwdZ * (toZ / len) <= 0.5) {
           state.timer = 0;
+          this.swingTimers.set(entity.id, 0);
           this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Not facing target' });
           return;
         }
       }
 
       state.timer = 0;
+      this.swingTimers.set(entity.id, 0);
       this.combatSystem.applyAutoAttackDamage(entity, state.target, entity.rollAutoAttackDamage());
       // Notify clients to play swing animation
       this.emitEvent({

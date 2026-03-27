@@ -123,7 +123,7 @@ export class Engine {
   private channelBeamTarget: Targetable | null = null;
   private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
-  private autoAttackTimer = 0;
+  private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
   private autoAttackTarget: Targetable | null = null;
   private dumpsterDiveAutoTarget: Targetable | null = null;
   private sweepCharge: {
@@ -694,13 +694,13 @@ export class Engine {
     if (this.resting) this.stopResting();
     this.autoAttacking = true;
     this.autoAttackTarget = target;
-    this.autoAttackTimer = this.playerController.autoAttackSpeed; // immediate first swing
+    // Don't reset timer — it ticks continuously so toggling can't bypass the swing cooldown
     this.playerController.setAutoAttacking(true);
   }
 
   stopAutoAttack(): void {
     this.autoAttacking = false;
-    this.autoAttackTimer = 0;
+    // Don't reset timer — preserve swing cooldown across toggle
     this.autoAttackTarget = null;
     this.playerController.setAutoAttacking(false);
   }
@@ -1557,8 +1557,6 @@ export class Engine {
       return;
     }
 
-    this.autoAttackTimer += dt;
-
     const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(player) * (this.godMode ? 6 : 1);
     if (this.autoAttackTimer >= player.autoAttackSpeed / atkSpeedMult) {
       // Check range (3D distance including Y)
@@ -1631,6 +1629,7 @@ export class Engine {
     // Update cursor for hover detection (only when pointer is unlocked)
     this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.isMouseButtonDown('right'));
 
+    this.autoAttackTimer += deltaTime; // always tick swing timer (even when not auto-attacking)
     this.updateAutoAttack(deltaTime);
 
     // Update buff-driven modifiers before player update
