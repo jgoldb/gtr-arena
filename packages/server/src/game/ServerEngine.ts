@@ -13,7 +13,7 @@ import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
 import { ServerRegenSystem } from './ServerRegenSystem.js';
-import { CollisionSystem } from './ServerMapManager.js';
+import { CollisionSystem, type BoxCollider } from './ServerMapManager.js';
 
 
 interface CastingState {
@@ -58,6 +58,7 @@ interface TweakerSprintCharge {
 interface ActiveGasCloud {
   id: string;
   centerX: number;
+  centerY: number;
   centerZ: number;
   radius: number;
   duration: number;
@@ -73,6 +74,7 @@ interface ActiveGasCloud {
 interface ActiveChemicalPool {
   id: string;
   centerX: number;
+  centerY: number;
   centerZ: number;
   radius: number;
   duration: number;
@@ -109,6 +111,7 @@ interface FullRetardAura {
 interface PendingAoeImpact {
   ability: Ability;
   groundX: number;
+  groundY: number;
   groundZ: number;
   delay: number;
   elapsed: number;
@@ -184,7 +187,7 @@ export class ServerEngine {
   private static readonly ABILITY_QUEUE_MAX_AGE = 0.5;   // expire stale queued abilities after 500ms
   private abilityQueue = new Map<string, {
     abilityId: string; targetEntityId: string | null;
-    groundTarget?: { x: number; z: number }; clientServerTimestamp?: number;
+    groundTarget?: { x: number; y: number; z: number }; clientServerTimestamp?: number;
     age: number;
   }>();
 
@@ -246,9 +249,45 @@ export class ServerEngine {
   onStatKill?: (killerEntityId: string, victimEntityId: string) => void;
   private gameOverFired = false;
 
-  constructor(obstacles: import('@gtr/shared').ObstacleConfig[]) {
+  // ── Map-specific state ─────────────────────────────────────────────
+  private readonly mapId: string;
+  private startTime = 0; // Date.now() when start() was called (matches ArenaScript elapsed=0)
+
+  // Celestial Ballroom elevator
+  private elevatorCollider: BoxCollider | null = null;
+  private static readonly ELEVATOR_CX = 1;
+  private static readonly ELEVATOR_CZ = -1;
+  private static readonly ELEVATOR_HALF_W = 4;
+  private static readonly ELEVATOR_HALF_D = 4;
+  private static readonly ELEVATOR_HALF_H = 0.2;
+  private static readonly ELEVATOR_FLOORS = [0.2, 13.5, 40];
+  private static readonly ELEVATOR_STOPS  = [0, 1, 2, 1];
+  private static readonly ELEVATOR_IDLE   = 8;
+  private static readonly ELEVATOR_TRAVEL = 3;
+  private static readonly ELEVATOR_PHASE  = 8 + 3; // IDLE + TRAVEL
+  private static readonly ELEVATOR_CYCLE  = 4 * (8 + 3); // STOPS.length * PHASE
+
+  constructor(obstacles: import('@gtr/shared').ObstacleConfig[], mapId: string = '') {
+    this.mapId = mapId;
     this.collision = new CollisionSystem();
     this.collision.buildFromObstacles(obstacles);
+
+    // Create elevator collider for Celestial Ballroom
+    if (mapId === 'celestial-ballroom') {
+      this.elevatorCollider = {
+        type: 'box',
+        cx: ServerEngine.ELEVATOR_CX,
+        cz: ServerEngine.ELEVATOR_CZ,
+        halfW: ServerEngine.ELEVATOR_HALF_W,
+        halfD: ServerEngine.ELEVATOR_HALF_D,
+        cosY: 1,
+        sinY: 0,
+        centerY: 0.2,
+        halfH: ServerEngine.ELEVATOR_HALF_H,
+        rotZ: 0,
+      };
+      this.collision.addCollider(this.elevatorCollider);
+    }
 
     this.buffSystem = new ServerBuffSystem();
     this.regenSystem = new ServerRegenSystem(() => this.entities);
@@ -397,7 +436,7 @@ export class ServerEngine {
   private applyFallDamage(entity: ServerEntity, fallDistance: number): void {
     if (entity.dead || entity.godMode) return;
     const SAFE_FALL = 8;   // ~13 yards — no damage below this
-    const FATAL_FALL = 28; // ~47 yards — 100% HP damage
+    const FATAL_FALL = 40; // ~67 yards — 100% HP damage
     if (fallDistance <= SAFE_FALL) return;
     const pct = Math.min(1, (fallDistance - SAFE_FALL) / (FATAL_FALL - SAFE_FALL));
     const damage = Math.round(entity.maxHp * pct);
@@ -466,6 +505,11 @@ export class ServerEngine {
     this.frozenEntities.add(entityId);
     entity.disconnected = true;
     entity.isMoving = false;
+    entity.vx = 0;
+    entity.vz = 0;
+    entity.moveFlags = 0;
+    entity.moveSpeed = 0;
+    entity.turnSpeed = 0;
     this.cancelCasting(entityId);
     this.stopAutoAttack(entityId);
     this.cancelResting(entityId);
@@ -475,6 +519,36 @@ export class ServerEngine {
       this.sweepCharges.delete(entityId);
       this.tweakerSprintCharges.delete(entityId);
     }
+
+    // Check if the entity is airborne — if so, keep vy so gravity simulation
+    // continues the fall. Otherwise snap to elevator / zero vy as before.
+    const resolved = this.collision.resolve(entity.x, entity.z, entity.y, entity.collisionRadius);
+    const airborne = entity.y > resolved.groundY + 0.1;
+    if (airborne) {
+      // Preserve vy so the server gravity sim continues the fall.
+      // Track the fall peak if not already set.
+      if (entity.fallPeakY < entity.y) {
+        entity.fallPeakY = entity.y;
+      }
+    } else {
+      entity.vy = 0;
+      // Snap to elevator surface so the entity doesn't float after the
+      // elevator moves away during the disconnect grace period.
+      this.snapEntityToElevator(entityId);
+    }
+
+    // Immediately broadcast the frozen position with zero horizontal velocities
+    // so remote clients don't dead-reckon any residual drift before the next tick.
+    const relayMsg: ServerMessage = {
+      type: 'position_relay',
+      id: entityId,
+      x: entity.x, y: entity.y, z: entity.z,
+      rotationY: entity.rotationY,
+      isMoving: false,
+      vx: 0, vz: 0,
+      moveFlags: 0, moveSpeed: 0, vy: entity.vy, turnSpeed: 0,
+    };
+    this.onPositionRelay?.(entityId, relayMsg);
   }
 
   /** Fully remove an entity from the game world (not a kill). */
@@ -518,6 +592,43 @@ export class ServerEngine {
     if (!entity) return;
     this.frozenEntities.delete(entityId);
     entity.disconnected = false;
+  }
+
+  /** Simulate gravity for frozen (disconnected) entities so they don't float. */
+  private updateFrozenGravity(dt: number): void {
+    for (const entityId of this.frozenEntities) {
+      const entity = this.getEntity(entityId);
+      if (!entity || entity.dead) continue;
+
+      const resolved = this.collision.resolve(entity.x, entity.z, entity.y, entity.collisionRadius);
+      const onGround = entity.y <= resolved.groundY + 0.1;
+      if (onGround) continue;
+
+      // Apply gravity
+      entity.vy -= entity.gravity * dt;
+      entity.y += entity.vy * dt;
+
+      // Track peak height
+      if (entity.y > entity.fallPeakY) {
+        entity.fallPeakY = entity.y;
+      }
+
+      // Check if landed
+      const resolvedAfter = this.collision.resolve(entity.x, entity.z, entity.y, entity.collisionRadius);
+      if (entity.y <= resolvedAfter.groundY + 0.1) {
+        entity.y = resolvedAfter.groundY;
+        entity.vy = 0;
+
+        // Apply fall damage
+        if (entity.fallPeakY > resolvedAfter.groundY + 0.5) {
+          const fallDistance = entity.fallPeakY - resolvedAfter.groundY;
+          entity.fallPeakY = 0;
+          this.applyFallDamage(entity, fallDistance);
+        } else {
+          entity.fallPeakY = 0;
+        }
+      }
+    }
   }
 
   // ── Movement validation constants ───────────────────────────────────
@@ -605,7 +716,15 @@ export class ServerEngine {
     const resolved = this.collision.resolve(x, z, y, entity.collisionRadius);
     const onGround = y <= resolved.groundY + 0.1;
     if (!onGround) {
-      if (y > entity.fallPeakY) entity.fallPeakY = y;
+      // If the client reports ~zero vertical velocity while above server-known
+      // ground, the player is riding a dynamic surface (e.g. moving platform).
+      // Reset the peak so we don't accumulate phantom fall height that
+      // triggers lethal damage on descent.
+      if (vy !== undefined && Math.abs(vy) < 0.5) {
+        entity.fallPeakY = 0;
+      } else if (y > entity.fallPeakY) {
+        entity.fallPeakY = y;
+      }
     } else if (entity.fallPeakY > resolved.groundY + 0.5) {
       const fallDistance = entity.fallPeakY - resolved.groundY;
       entity.fallPeakY = 0;
@@ -652,7 +771,7 @@ export class ServerEngine {
   }
 
   requestAbility(entityId: string, abilityId: string, targetEntityId: string | null,
-                 groundTarget?: { x: number; z: number }, clientServerTimestamp?: number): void {
+                 groundTarget?: { x: number; y: number; z: number }, clientServerTimestamp?: number): void {
     const entity = this.getEntity(entityId);
     if (!entity || this.frozenEntities.has(entityId)) return;
 
@@ -767,6 +886,7 @@ export class ServerEngine {
     this.pendingAoeImpacts.push({
       ability,
       groundX,
+      groundY: entity.y,
       groundZ,
       delay: ServerEngine.BOTTLE_CHUCK_IMPACT_DELAY,
       elapsed: 0,
@@ -787,8 +907,9 @@ export class ServerEngine {
       for (const target of this.entities) {
         if (target === impact.owner || target.dead || !target.isHostileTo(impact.owner) || this.buffSystem.isUntargetable(target)) continue;
         const dx = target.x - impact.groundX;
+        const dy = target.y - impact.groundY;
         const dz = target.z - impact.groundZ;
-        if (dx * dx + dz * dz > radius * radius) continue;
+        if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
         this.combatSystem.applyAoeDamage(impact.owner, target, impact.ability);
       }
 
@@ -822,6 +943,7 @@ export class ServerEngine {
 
   start(): void {
     if (this.tickTimeoutId) return;
+    this.startTime = Date.now();
     this.lastTickTime = performance.now();
     this.nextTickTarget = this.lastTickTime + ServerEngine.TICK_MS;
     this.scheduleNextTick();
@@ -965,6 +1087,12 @@ export class ServerEngine {
     const dt = Math.min((now - this.lastTickTime) / 1000, 0.1);
     this.lastTickTime = now;
     this.tick++;
+
+    // Update dynamic map colliders (elevator) before entity processing
+    this.updateElevator();
+
+    // Simulate gravity for frozen (disconnected) entities
+    this.updateFrozenGravity(dt);
 
     // Update buff-driven modifiers
     for (const entity of this.entities) {
@@ -1366,12 +1494,12 @@ export class ServerEngine {
 
   private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank', 'gank'];
 
-  private onAbilitySuccess(entity: ServerEntity, ability: Ability, groundTarget?: { x: number; z: number }): void {
+  private onAbilitySuccess(entity: ServerEntity, ability: Ability, groundTarget?: { x: number; y: number; z: number }): void {
     const abilityEvent: S2C_AbilityEffect = {
       type: 'ability_effect',
       entityId: entity.id,
       abilityId: ability.id,
-      ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetZ: groundTarget.z } : {}),
+      ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetY: groundTarget.y, groundTargetZ: groundTarget.z } : {}),
     };
     this.emitEvent(abilityEvent);
 
@@ -1684,6 +1812,7 @@ export class ServerEngine {
     this.gasClouds.push({
       id,
       centerX: owner.x,
+      centerY: owner.y,
       centerZ: owner.z,
       radius, duration, elapsed: 0,
       debuff,
@@ -1695,7 +1824,7 @@ export class ServerEngine {
     });
     this.onBroadcast?.({
       type: 'gas_cloud_spawn',
-      id, x: owner.x, z: owner.z, radius, duration,
+      id, x: owner.x, y: owner.y, z: owner.z, radius, duration,
     } as S2C_GasCloudSpawn);
   }
 
@@ -1708,8 +1837,9 @@ export class ServerEngine {
       for (const entity of this.entities) {
         if (entity.dead || !entity.isHostileTo(cloud.owner) || this.buffSystem.isUntargetable(entity)) continue;
         const dx = entity.x - cloud.centerX;
+        const dy = entity.y - cloud.centerY;
         const dz = entity.z - cloud.centerZ;
-        if (dx * dx + dz * dz <= cloud.radius * cloud.radius) {
+        if (dx * dx + dy * dy + dz * dz <= cloud.radius * cloud.radius) {
           inCloud.add(entity);
           const isNew = !cloud.affectedTargets.has(entity);
           this.buffSystem.apply(entity, cloud.debuff);
@@ -1769,7 +1899,7 @@ export class ServerEngine {
     const id = `cp_${this.nextEffectId++}`;
     this.chemicalPools.push({
       id,
-      centerX: owner.x, centerZ: owner.z,
+      centerX: owner.x, centerY: owner.y, centerZ: owner.z,
       radius, duration, elapsed: 0,
       speedBuff, dot,
       initialDamageMin, initialDamageMax,
@@ -1779,7 +1909,7 @@ export class ServerEngine {
     });
     this.onBroadcast?.({
       type: 'chem_pool_spawn',
-      id, x: owner.x, z: owner.z, radius, duration, activationDelay,
+      id, x: owner.x, y: owner.y, z: owner.z, radius, duration, activationDelay,
     } as S2C_ChemPoolSpawn);
   }
 
@@ -1798,8 +1928,9 @@ export class ServerEngine {
       for (const entity of this.entities) {
         if (entity.dead || this.buffSystem.isUntargetable(entity)) continue;
         const dx = entity.x - pool.centerX;
+        const dy = entity.y - pool.centerY;
         const dz = entity.z - pool.centerZ;
-        if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
+        if (dx * dx + dy * dy + dz * dz > pool.radius * pool.radius) continue;
 
         if (entity.isHostileTo(pool.owner)) {
           const rolledDmg = pool.initialDamageMin + Math.floor(Math.random() * (pool.initialDamageMax - pool.initialDamageMin + 1));
@@ -2211,7 +2342,7 @@ export class ServerEngine {
   private buildGasCloudSnapshots(): GasCloudSnapshot[] {
     return this.gasClouds.map(gc => ({
       id: gc.id,
-      x: gc.centerX, z: gc.centerZ,
+      x: gc.centerX, y: gc.centerY, z: gc.centerZ,
       radius: gc.radius, elapsed: gc.elapsed, duration: gc.duration,
     }));
   }
@@ -2219,7 +2350,7 @@ export class ServerEngine {
   private buildChemPoolSnapshots(): ChemicalPoolSnapshot[] {
     return this.chemicalPools.map(cp => ({
       id: cp.id,
-      x: cp.centerX, z: cp.centerZ,
+      x: cp.centerX, y: cp.centerY, z: cp.centerZ,
       radius: cp.radius, elapsed: cp.elapsed, duration: cp.duration,
       activationDelay: cp.activationDelay, consumed: cp.consumed,
     }));
@@ -2233,6 +2364,93 @@ export class ServerEngine {
       chemicalPools: this.buildChemPoolSnapshots(),
       cooldowns: this.combatSystem.getAllCooldowns(),
     };
+  }
+
+  // ── Elevator (Celestial Ballroom) ───────────────────────────────────
+
+  /** Compute the current elevator Y position from game elapsed time. */
+  private computeElevatorY(gameElapsed: number): number {
+    const { ELEVATOR_FLOORS: FLOORS, ELEVATOR_STOPS: STOPS, ELEVATOR_IDLE: IDLE,
+            ELEVATOR_TRAVEL: TRAVEL, ELEVATOR_PHASE: PHASE, ELEVATOR_CYCLE: CYCLE } = ServerEngine;
+
+    const t = gameElapsed % CYCLE;
+    const stopIdx = Math.floor(t / PHASE);
+    const phaseT  = t - stopIdx * PHASE;
+
+    const fromY = FLOORS[STOPS[stopIdx]];
+    const toY   = FLOORS[STOPS[(stopIdx + 1) % STOPS.length]];
+
+    if (phaseT < IDLE) {
+      // Idling — replicate hover bob for accurate collision
+      // Skip the bob at ground level so the platform sits still
+      const isGroundFloor = STOPS[stopIdx] === 0;
+      if (isGroundFloor) return fromY;
+      const fadeIn  = Math.min(1, phaseT / 1.0);
+      const fadeOut = Math.min(1, (IDLE - phaseT) / 1.0);
+      return fromY + Math.sin(gameElapsed * 1.5) * 0.4 * fadeIn * fadeOut;
+    }
+    // Traveling — ease-in-out cubic
+    const p = (phaseT - IDLE) / TRAVEL;
+    const eased = p < 0.5
+      ? 4 * p * p * p
+      : 1 - Math.pow(-2 * p + 2, 3) / 2;
+    return fromY + (toY - fromY) * eased;
+  }
+
+  /** Update the elevator collider position (called each tick). */
+  private updateElevator(): void {
+    if (!this.elevatorCollider) return;
+    this.elevatorCollider.centerY = this.computeElevatorY(this.getGameElapsed());
+
+    // Keep frozen (disconnected) entities riding the elevator surface so they
+    // don't float in mid-air after the platform moves away.
+    // Use expanded footprint (+ collisionRadius) to match the client collision
+    // system's overlap detection — players can stand up to 0.4 units beyond
+    // the box edge and still be "on" the platform.
+    const surfaceY = this.elevatorCollider.centerY + ServerEngine.ELEVATOR_HALF_H;
+    for (const entityId of this.frozenEntities) {
+      const entity = this.getEntity(entityId);
+      if (!entity || entity.dead) continue;
+      const dx = entity.x - ServerEngine.ELEVATOR_CX;
+      const dz = entity.z - ServerEngine.ELEVATOR_CZ;
+      if (Math.abs(dx) <= ServerEngine.ELEVATOR_HALF_W + entity.collisionRadius &&
+          Math.abs(dz) <= ServerEngine.ELEVATOR_HALF_D + entity.collisionRadius) {
+        entity.y = surfaceY;
+      }
+    }
+  }
+
+  /** Seconds since the game engine started (matches client ArenaScript.elapsed). */
+  getGameElapsed(): number {
+    if (this.startTime === 0) return 0;
+    return (Date.now() - this.startTime) / 1000;
+  }
+
+  /** Current elevator surface Y, or undefined if no elevator on this map. */
+  getElevatorY(): number | undefined {
+    if (!this.elevatorCollider) return undefined;
+    return this.elevatorCollider.centerY + ServerEngine.ELEVATOR_HALF_H;
+  }
+
+  /**
+   * If the entity is within the elevator's XZ footprint (+ collision radius),
+   * snap its Y to the current elevator surface so it doesn't spawn in mid-air
+   * on rejoin.  The expanded footprint matches the client collision system's
+   * overlap detection — players can stand up to collisionRadius beyond the
+   * box edge.
+   */
+  snapEntityToElevator(entityId: string): void {
+    if (!this.elevatorCollider) return;
+    const entity = this.getEntity(entityId);
+    if (!entity || entity.dead) return;
+
+    const dx = entity.x - ServerEngine.ELEVATOR_CX;
+    const dz = entity.z - ServerEngine.ELEVATOR_CZ;
+    if (Math.abs(dx) <= ServerEngine.ELEVATOR_HALF_W + entity.collisionRadius &&
+        Math.abs(dz) <= ServerEngine.ELEVATOR_HALF_D + entity.collisionRadius) {
+      entity.y = this.elevatorCollider.centerY + ServerEngine.ELEVATOR_HALF_H;
+      entity.fallPeakY = 0;
+    }
   }
 
   // ── Win condition ───────────────────────────────────────────────────

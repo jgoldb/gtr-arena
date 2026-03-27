@@ -95,6 +95,14 @@ export class MapManager {
     this.currentScript?.onKillingBlow?.(killerTeam, victimTeam);
   }
 
+  /**
+   * If a moving platform jumped this frame (e.g. tab restore), returns the
+   * surface Y for the entity at (px, pz).  Undefined = no snap needed.
+   */
+  getMovingPlatformSnapY(px: number, pz: number): number | undefined {
+    return this.currentScript?.getMovingPlatformSnapY?.(px, pz);
+  }
+
   getScript(): MapScript | null {
     return this.currentScript;
   }

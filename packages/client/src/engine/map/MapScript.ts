@@ -15,4 +15,9 @@ export interface MapScript {
   onDoorsOpen?: () => void;
   /** Called when a killing blow occurs. */
   onKillingBlow?(killerTeam: number, victimTeam: number): void;
+  /**
+   * If a moving platform jumped significantly this frame (e.g. tab was backgrounded),
+   * returns the surface Y to snap entities at (px, pz) to. Returns undefined otherwise.
+   */
+  getMovingPlatformSnapY?(px: number, pz: number): number | undefined;
 }

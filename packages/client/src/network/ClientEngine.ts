@@ -51,6 +51,7 @@ interface RemoteEntity {
   targetable: Targetable;
   targetEntityId: string | null;
   disconnected: boolean;
+  godMode: boolean;
   // Previous frame rotation for computing turn speed
   prevRotationY: number;
 }
@@ -142,7 +143,7 @@ export class ClientEngine {
   private tweakerSprintCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number; savedAutoAttackTargetId: string | null } | null = null;
 
   // Active knockbacks (visual displacement on client)
-  private activeKnockbacks: { entityId: string; dirX: number; dirZ: number; distance: number; duration: number; elapsed: number }[] = [];
+  private activeKnockbacks: { entityId: string; dirX: number; dirZ: number; distance: number; duration: number; elapsed: number; startY: number }[] = [];
 
   // Blind state (blur + sand specks + eyelid blinks + targeting prevention)
   private readonly blindEffect = new BlindEffect();
@@ -308,6 +309,7 @@ export class ClientEngine {
       targetable: null!, // Set below
       targetEntityId: snap.targetEntityId,
       disconnected: snap.disconnected ?? false,
+      godMode: false,
       prevRotationY: snap.rotationY,
     };
 
@@ -499,8 +501,15 @@ export class ClientEngine {
       }
     }
 
-    // Sync arena countdown timer from server keyframe
-    if (msg.arenaTimeRemaining !== undefined && msg.arenaTimeRemaining > 0) {
+    // Sync elapsed time from server keyframe — gameElapsed is authoritative
+    if (msg.gameElapsed !== undefined) {
+      this.mapManager.setElapsed(msg.gameElapsed);
+      const script = this.mapManager.getScript();
+      const openTime = (script && 'OPEN_TIME' in script) ? (script as any).OPEN_TIME as number : 30;
+      if (msg.gameElapsed >= openTime && script && 'opened' in script && !(script as any).opened) {
+        this.mapManager.forceOpenDoors();
+      }
+    } else if (msg.arenaTimeRemaining !== undefined && msg.arenaTimeRemaining > 0) {
       const script = this.mapManager.getScript();
       const openTime = (script && 'OPEN_TIME' in script) ? (script as any).OPEN_TIME as number : 30;
       this.mapManager.setElapsed(openTime - msg.arenaTimeRemaining);
@@ -533,6 +542,9 @@ export class ClientEngine {
       entity.disconnected = true;
       entity.isMoving = false;
     }
+    // Immediately freeze dead reckoning — zero all velocities and error so the
+    // entity stops exactly where it is with no residual extrapolation drift.
+    this.deadReckoning.freezeEntity(entityId);
   }
 
   handlePlayerReconnected(entityId: string): void {
@@ -753,16 +765,18 @@ export class ClientEngine {
 
     // Ground-targeted abilities use the ground position for the projectile animation
     const groundPos = msg.groundTargetX !== undefined && msg.groundTargetZ !== undefined
-      ? new THREE.Vector3(msg.groundTargetX, 0, msg.groundTargetZ)
+      ? new THREE.Vector3(msg.groundTargetX, msg.groundTargetY ?? 0, msg.groundTargetZ)
       : undefined;
 
     if (msg.entityId === this.localEntityId) {
-      // If we predicted this ability, skip the animation (already playing) and clear prediction
+      // If we predicted this ability, clear prediction state
       const predicted = this.pendingPrediction?.abilityId === msg.abilityId;
       if (predicted) {
         this.pendingPrediction = null;
       }
-      if (!predicted) {
+      // Play animation if not predicted, OR if it was a ground-targeted prediction
+      // (ground predictions skip animation during prediction, deferring to server confirmation)
+      if (!predicted || groundPos) {
         const targetPos = groundPos ?? (this.selectedTargetId ? this.getEntityMesh(this.selectedTargetId)?.position.clone() : undefined);
         this.playerController.triggerAbilityAnimation(msg.abilityId, targetPos);
       }
@@ -832,12 +846,12 @@ export class ClientEngine {
   }
 
   handleGasCloudSpawn(msg: S2C_GasCloudSpawn): void {
-    const visual = createGasCloud(this.scene, msg.x, msg.z, msg.radius);
+    const visual = createGasCloud(this.scene, msg.x, msg.z, msg.radius, msg.y);
     this.gasClouds.set(msg.id, { ...visual, elapsed: 0, duration: msg.duration });
   }
 
   handleChemPoolSpawn(msg: S2C_ChemPoolSpawn): void {
-    const visual = createChemPool(this.scene, msg.x, msg.z, msg.radius);
+    const visual = createChemPool(this.scene, msg.x, msg.z, msg.radius, msg.y);
     this.chemPools.set(msg.id, {
       ...visual, elapsed: 0, duration: msg.duration,
       activationDelay: msg.activationDelay, consumed: false, consumeElapsed: 0,
@@ -869,6 +883,14 @@ export class ClientEngine {
   }
 
   handleKnockback(msg: S2C_Knockback): void {
+    // Capture the entity's current Y so the arc is relative to their actual height
+    let startY = 0;
+    if (msg.entityId === this.localEntityId) {
+      startY = this.playerController.mesh.position.y;
+    } else {
+      const entity = this.remoteEntities.get(msg.entityId);
+      if (entity) startY = entity.mesh.position.y;
+    }
     this.activeKnockbacks.push({
       entityId: msg.entityId,
       dirX: msg.dirX,
@@ -876,6 +898,7 @@ export class ClientEngine {
       distance: msg.distance,
       duration: msg.duration,
       elapsed: 0,
+      startY,
     });
   }
 
@@ -892,28 +915,32 @@ export class ClientEngine {
       const t = Math.min(1, kb.elapsed / kb.duration);
 
       const speed = kb.distance / kb.duration;
-      const height = 3.0 * 4 * t * (1 - t); // parabolic arc
+      const height = 3.0 * 4 * t * (1 - t); // parabolic arc (relative offset)
 
       if (kb.entityId === this.localEntityId) {
         this.playerController.mesh.position.x += kb.dirX * speed * dt;
         this.playerController.mesh.position.z += kb.dirZ * speed * dt;
-        this.playerController.mesh.position.y = height;
+        this.playerController.mesh.position.y = kb.startY + height;
       } else {
         const entity = this.remoteEntities.get(kb.entityId);
         if (entity) {
           entity.mesh.position.x += kb.dirX * speed * dt;
           entity.mesh.position.z += kb.dirZ * speed * dt;
-          entity.mesh.position.y = height;
+          entity.mesh.position.y = kb.startY + height;
         }
       }
 
       if (t >= 1) {
-        // Reset Y on landing
         if (kb.entityId === this.localEntityId) {
-          this.playerController.mesh.position.y = 0;
+          // Return to starting height — PlayerController physics will handle
+          // the fall if knocked off a ledge (gravity, grounded detection, etc.)
+          this.playerController.mesh.position.y = kb.startY;
+          (this.playerController as any).grounded = false;
+          this.playerController.velocityY = 0;
+          (this.playerController as any).fallPeakY = kb.startY;
         } else {
           const entity = this.remoteEntities.get(kb.entityId);
-          if (entity) entity.mesh.position.y = 0;
+          if (entity) entity.mesh.position.y = kb.startY;
         }
         this.activeKnockbacks.splice(i, 1);
       }
@@ -1205,6 +1232,9 @@ export class ClientEngine {
       this.godMode = active;
       this.playerController.godMode = active;
       this.onGodModeToggle?.(active);
+    } else {
+      const entity = this.remoteEntities.get(entityId);
+      if (entity) entity.godMode = active;
     }
   }
 
@@ -1220,14 +1250,14 @@ export class ClientEngine {
 
   // ── Network commands ──────────────────────────────────────────────────
 
-  sendAbility(abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
+  sendAbility(abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; y: number; z: number }): void {
     const clockOffset = this.network.clockSync.synced ? this.network.clockSync.offset : undefined;
     const serverTimestamp = this.snapshotBuffer.getCurrentRenderServerTimestamp(clockOffset);
     this.network.send({
       type: 'use_ability',
       abilityId,
       targetEntityId,
-      ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetZ: groundTarget.z } : {}),
+      ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetY: groundTarget.y, groundTargetZ: groundTarget.z } : {}),
       ...(serverTimestamp !== null ? { serverTimestamp } : {}),
     });
   }
@@ -1414,6 +1444,23 @@ export class ClientEngine {
       }
     }
     this.playerController.movementSpeedModifier = Math.max(0, moveMult) * (this.godMode ? 4 : 1);
+
+    // Update map script (platform colliders, shader uniforms, etc.) BEFORE entity
+    // physics so that moving surfaces like the Celestial Ballroom elevator and Cage
+    // pillars have their collision data current for this frame.  Previously this ran
+    // after entity updates, causing a one-frame visual lag on moving platforms.
+    this.mapManager.update(dt);
+
+    // If a moving platform jumped (tab was backgrounded), snap the player to it
+    // so they don't fall from the sky.
+    const snapY = this.mapManager.getMovingPlatformSnapY(
+      this.playerController.mesh.position.x,
+      this.playerController.mesh.position.z,
+    );
+    if (snapY !== undefined) {
+      this.playerController.mesh.position.y = snapY;
+      this.playerController.velocityY = 0;
+    }
 
     // Update local player using the real PlayerController (same as playground)
     this.playerController.update(dt);
@@ -1609,24 +1656,48 @@ export class ClientEngine {
       let interpVz = 0;
       if (dr) {
         entity.isMoving = dr.isMoving;
-        // When grounded (vy=0), resolve Y against the client's collision system
-        // so remote players track animated surfaces like the Celestial Ballroom
-        // elevator. Between server updates, DR holds Y static for grounded
-        // entities, but the platform's collider centerY updates every frame.
-        // The 1-unit threshold prevents snapping to distant surfaces (e.g. when
-        // an entity walks off a ledge — vy is still 0 for the first frame).
-        let finalY = dr.y;
-        if (dr.vy === 0) {
-          const groundY = this.mapManager.collision.resolve(dr.x, dr.z, dr.y, 0.4).groundY;
-          const diff = groundY - dr.y;
-          if (diff > 0.1 || (diff < 0 && diff > -1)) {
-            finalY = groundY;
+
+        if (entity.disconnected) {
+          // Disconnected entities: freeze X/Z exactly where they are.
+          // Use the server-sent Y from dead reckoning so gravity-simulated
+          // falls are visible to remote players. Fall back to collision
+          // resolution only when vy is zero (tracking moving surfaces).
+          if (dr.vy !== 0) {
+            // Server is simulating gravity — use its Y position
+            entity.mesh.position.y = dr.y;
+          } else {
+            const baseY = entity.mesh.position.y;
+            const groundY = this.mapManager.collision.resolve(
+              entity.mesh.position.x, entity.mesh.position.z, baseY + 1, 0.4,
+            ).groundY;
+            const diff = groundY - baseY;
+            if (Math.abs(diff) < 2) {
+              entity.mesh.position.y = groundY;
+            }
           }
+        } else {
+          // When grounded (vy=0), resolve Y against the client's collision system
+          // so remote players track animated surfaces like the Celestial Ballroom
+          // elevator and Cage pillars.  We resolve from the entity's last rendered
+          // Y (which was on the platform surface last frame) rather than the stale
+          // DR Y.  This way the boost only needs to cover one frame of platform
+          // movement (~0.44u at 60fps, max) instead of the full network lag,
+          // avoiding false snaps to distant surfaces (e.g. a pillar top when the
+          // entity is at ground level).
+          let finalY = dr.y;
+          if (dr.vy === 0 && !entity.godMode) {
+            const baseY = entity.mesh.position.y;
+            const groundY = this.mapManager.collision.resolve(dr.x, dr.z, baseY + 1, 0.4).groundY;
+            const diff = groundY - baseY;
+            if (Math.abs(diff) < 2) {
+              finalY = groundY;
+            }
+          }
+          entity.mesh.position.set(dr.x, finalY, dr.z);
+          entity.mesh.rotation.y = dr.rotationY;
+          interpVx = dr.vx;
+          interpVz = dr.vz;
         }
-        entity.mesh.position.set(dr.x, finalY, dr.z);
-        entity.mesh.rotation.y = dr.rotationY;
-        interpVx = dr.vx;
-        interpVz = dr.vz;
       }
 
       // Update model animation state
@@ -1753,9 +1824,6 @@ export class ClientEngine {
 
     // Update Crotch Rot cloud visuals
     this.updateCrotchRotVisuals(dt);
-
-    // Update map script (e.g., gate animations)
-    this.mapManager.update(dt);
 
     // Tab targeting — nearest hostile in front within 30 yards (blocked while blinded)
     const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));

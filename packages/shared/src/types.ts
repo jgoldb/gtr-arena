@@ -118,6 +118,7 @@ export interface EntityBuffSnapshot {
 export interface GasCloudSnapshot {
   id: string;
   x: number;
+  y: number;
   z: number;
   radius: number;
   elapsed: number;
@@ -127,6 +128,7 @@ export interface GasCloudSnapshot {
 export interface ChemicalPoolSnapshot {
   id: string;
   x: number;
+  y: number;
   z: number;
   radius: number;
   elapsed: number;

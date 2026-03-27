@@ -98,8 +98,9 @@ export class Nameplates {
 
       // Distance check
       const dx = target.mesh.position.x - player.mesh.position.x;
+      const dy = target.mesh.position.y - player.mesh.position.y;
       const dz = target.mesh.position.z - player.mesh.position.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       const inRange = !forceSimple && dist <= MAX_RANGE;
 
       const hostile = target.isHostileTo(player);

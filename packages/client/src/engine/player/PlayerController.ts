@@ -428,6 +428,9 @@ export class PlayerController implements Targetable {
       }
       this.velocityY = 0;
       this.grounded = false;
+      // Clear air velocity each frame so exiting god mode drops straight down
+      // instead of arcing sideways from a stale jump velocity.
+      this.airVelocity.set(0, 0, 0);
     } else {
       // Normal jump — requires fresh press (not held from previous frame)
       if (spaceDown && !this.spaceWasDown && this.grounded) {
@@ -492,6 +495,16 @@ export class PlayerController implements Targetable {
         // Walked off a ledge — start falling
         this.grounded = false;
         this.fallPeakY = this.mesh.position.y;
+        // Snapshot current movement so the player carries their walking
+        // momentum into the fall (mirrors the jump snapshot at line 435).
+        // Without this, stale airVelocity from a previous jump can pull
+        // the player back toward a platform edge they just walked off.
+        if (isMoving) {
+          moveDir.normalize();
+          this.airVelocity.copy(moveDir).multiplyScalar(effectiveSpeed);
+        } else {
+          this.airVelocity.set(0, 0, 0);
+        }
       }
     }
     this.spaceWasDown = spaceDown;

@@ -1368,9 +1368,9 @@ export class Crackhead extends CharacterModel {
       // Save dive-in origin position
       const spawnPos = new THREE.Vector3();
       parent.getWorldPosition(spawnPos);
-      this.dumpsterDiveOrigin.set(spawnPos.x, 0, spawnPos.z);
+      this.dumpsterDiveOrigin.set(spawnPos.x, spawnPos.y, spawnPos.z);
       this.dumpsterEmergeSnapped = false;
-      this.dumpsterGroup.position.set(spawnPos.x, 0, spawnPos.z);
+      this.dumpsterGroup.position.set(spawnPos.x, spawnPos.y, spawnPos.z);
       // Match character facing
       this.dumpsterGroup.rotation.y = parent.rotation.y;
       scene.add(this.dumpsterGroup);
@@ -1409,12 +1409,18 @@ export class Crackhead extends CharacterModel {
 
     if (t >= emergePhaseStart && !this.dumpsterEmergeSnapped) {
       this.dumpsterEmergeSnapped = true;
-      this.dumpsterDiveOrigin.set(currentPos.x, 0, currentPos.z);
+      this.dumpsterDiveOrigin.set(currentPos.x, currentPos.y, currentPos.z);
       dumpster.rotation.y = parent.rotation.y;
     }
 
     const ox = this.dumpsterDiveOrigin.x;
+    const oy = this.dumpsterDiveOrigin.y;
     const oz = this.dumpsterDiveOrigin.z;
+
+    // Track Y offset relative to surface for visibility toggling — when the
+    // dumpster is fully below the surface, hide it so it doesn't float in mid-air
+    // on elevated platforms where there's no terrain to occlude it.
+    let yOff = SUBMERGE; // default: hidden
 
     if (hostile) {
       // ── Enemy POV: fade out → dumpster dive → underground → dumpster emerge → fade in ──
@@ -1423,26 +1429,30 @@ export class Crackhead extends CharacterModel {
         const p = t / 0.15;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(1 - ease);
-        dumpster.position.set(ox, SUBMERGE + -SUBMERGE * ease, oz);
+        yOff = SUBMERGE + -SUBMERGE * ease;
+        dumpster.position.set(ox, oy + yOff, oz);
         if (lidPivot) lidPivot.rotation.x = -1.75;
       } else if (t < 0.25) {
         // Phase 2: Lid swings shut
         const p = (t - 0.15) / 0.10;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(0);
-        dumpster.position.set(ox, 0, oz);
+        yOff = 0;
+        dumpster.position.set(ox, oy, oz);
         if (lidPivot) lidPivot.rotation.x = -1.75 * (1 - ease);
       } else if (t < 0.40) {
         // Phase 3: Closed dumpster descends fully underground
         const p = (t - 0.25) / 0.15;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(0);
-        dumpster.position.set(ox, SUBMERGE * ease, oz);
+        yOff = SUBMERGE * ease;
+        dumpster.position.set(ox, oy + yOff, oz);
         if (lidPivot) lidPivot.rotation.x = 0;
       } else if (t < 0.70) {
         // Phase 4-5: Underground — dumpster fully hidden, character invisible
         this.setOpacity(0);
-        dumpster.position.set(ox, SUBMERGE, oz);
+        yOff = SUBMERGE;
+        dumpster.position.set(ox, oy + SUBMERGE, oz);
         if (lidPivot) lidPivot.rotation.x = 0;
       } else if (t < 0.95) {
         // Phase 6-8: Emerge sequence — dumpster rises, lid opens, character fades in
@@ -1457,10 +1467,10 @@ export class Crackhead extends CharacterModel {
         // Dumpster rises (0.70-0.80), then stays at ground level
         const riseP = Math.min(1, (t - 0.70) / 0.10);
         const riseEase = riseP * riseP * (3 - 2 * riseP);
-        const dumpsterY = riseP < 1
+        yOff = riseP < 1
           ? SUBMERGE + -SUBMERGE * riseEase
           : SUBMERGE * Math.max(0, (t - 0.85) / 0.10); // descend in last portion
-        dumpster.position.set(ox, dumpsterY, oz);
+        dumpster.position.set(ox, oy + yOff, oz);
 
         // Lid opens (0.77-0.85)
         const lidP = Math.max(0, Math.min(1, (t - 0.77) / 0.08));
@@ -1469,7 +1479,8 @@ export class Crackhead extends CharacterModel {
       } else {
         // Phase 9: Settle — character fully visible, dumpster underground
         this.setOpacity(1);
-        dumpster.position.set(ox, SUBMERGE, oz);
+        yOff = SUBMERGE;
+        dumpster.position.set(ox, oy + SUBMERGE, oz);
       }
     } else {
       // ── Self / teammate POV: full dumpster animation (appears twice) ──
@@ -1478,54 +1489,66 @@ export class Crackhead extends CharacterModel {
         const p = t / 0.15;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(1 - ease);
-        dumpster.position.set(ox, SUBMERGE + -SUBMERGE * ease, oz);
+        yOff = SUBMERGE + -SUBMERGE * ease;
+        dumpster.position.set(ox, oy + yOff, oz);
         if (lidPivot) lidPivot.rotation.x = -1.75;
       } else if (t < 0.25) {
         // Phase 2: Lid swings shut
         const p = (t - 0.15) / 0.10;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(0);
-        dumpster.position.set(ox, 0, oz);
+        yOff = 0;
+        dumpster.position.set(ox, oy, oz);
         if (lidPivot) lidPivot.rotation.x = -1.75 * (1 - ease);
       } else if (t < 0.40) {
         // Phase 3: Closed dumpster descends fully underground
         const p = (t - 0.25) / 0.15;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(0);
-        dumpster.position.set(ox, SUBMERGE * ease, oz);
+        yOff = SUBMERGE * ease;
+        dumpster.position.set(ox, oy + yOff, oz);
         if (lidPivot) lidPivot.rotation.x = 0;
       } else if (t < 0.55) {
         // Phase 4: Underground pause
         this.setOpacity(0);
-        dumpster.position.set(ox, SUBMERGE, oz);
+        yOff = SUBMERGE;
+        dumpster.position.set(ox, oy + SUBMERGE, oz);
         if (lidPivot) lidPivot.rotation.x = 0;
       } else if (t < 0.70) {
         // Phase 5: Closed dumpster rises at current position (snapped)
         const p = (t - 0.55) / 0.15;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(0);
-        dumpster.position.set(ox, SUBMERGE + -SUBMERGE * ease, oz);
+        yOff = SUBMERGE + -SUBMERGE * ease;
+        dumpster.position.set(ox, oy + yOff, oz);
         if (lidPivot) lidPivot.rotation.x = 0;
       } else if (t < 0.80) {
         // Phase 6: Lid swings open
         const p = (t - 0.70) / 0.10;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(0);
-        dumpster.position.set(ox, 0, oz);
+        yOff = 0;
+        dumpster.position.set(ox, oy, oz);
         if (lidPivot) lidPivot.rotation.x = -1.75 * ease;
       } else if (t < 0.95) {
         // Phase 7: Open dumpster descends, character fades in
         const p = (t - 0.80) / 0.15;
         const ease = p * p * (3 - 2 * p);
         this.setOpacity(ease);
-        dumpster.position.set(ox, SUBMERGE * ease, oz);
+        yOff = SUBMERGE * ease;
+        dumpster.position.set(ox, oy + yOff, oz);
         if (lidPivot) lidPivot.rotation.x = -1.75;
       } else {
         // Phase 8: Settle — character fully visible
         this.setOpacity(1);
-        dumpster.position.set(ox, SUBMERGE, oz);
+        yOff = SUBMERGE;
+        dumpster.position.set(ox, oy + SUBMERGE, oz);
       }
     }
+
+    // Hide the dumpster when it's fully submerged — on elevated surfaces there's
+    // no terrain to occlude it, so it would otherwise float visibly below the platform.
+    dumpster.visible = yOff > SUBMERGE + 0.05;
   }
 
   private spawnStickyFingersGlow(): void {

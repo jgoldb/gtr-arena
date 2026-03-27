@@ -659,9 +659,18 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
     clientEngine.handlePlayerDisconnected(entityId);
   }
 
-  // Sync arena countdown state
-  if (msg.arenaTimeRemaining !== undefined && msg.arenaTimeRemaining > 0) {
-    // Still in arena preparation — set elapsed to match server's progress
+  // Sync elapsed time from server — gameElapsed is authoritative and covers both
+  // the arena countdown period and post-open time (needed for elevator sync, etc.)
+  if (msg.gameElapsed !== undefined) {
+    clientEngine.mapManager.setElapsed(msg.gameElapsed);
+    // If doors should already be open, trigger the open immediately
+    const script = clientEngine.mapManager.getScript();
+    const openTime = (script && 'OPEN_TIME' in script) ? (script as any).OPEN_TIME as number : 30;
+    if (msg.gameElapsed >= openTime && script && 'opened' in script && !(script as any).opened) {
+      clientEngine.mapManager.forceOpenDoors();
+    }
+  } else if (msg.arenaTimeRemaining !== undefined && msg.arenaTimeRemaining > 0) {
+    // Fallback: legacy path using arenaTimeRemaining
     const script = clientEngine.mapManager.getScript();
     const openTime = (script && 'OPEN_TIME' in script) ? (script as any).OPEN_TIME as number : 30;
     clientEngine.mapManager.setElapsed(openTime - msg.arenaTimeRemaining);
@@ -798,7 +807,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     clientEngine.targetingSystem.cancelGroundTarget();
     mpPendingGroundAbility = null;
     clientEngine.predictGroundAbility(ability.id);
-    clientEngine.sendAbility(ability.id, mpSelectedTargetId, { x: groundPos.x, z: groundPos.z });
+    clientEngine.sendAbility(ability.id, mpSelectedTargetId, { x: groundPos.x, y: groundPos.y, z: groundPos.z });
   };
 
   /** Fire an ability immediately (no GCD/cast checks). Used by both direct activation and queue callback. */

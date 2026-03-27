@@ -87,7 +87,7 @@ export class GameSession {
     this.mapId = mapId;
     this.mapInfo = MAPS[mapId];
     const mapInfo = this.mapInfo;
-    this.engine = new ServerEngine(mapInfo?.obstacles ?? []);
+    this.engine = new ServerEngine(mapInfo?.obstacles ?? [], mapId);
 
     this.players = players.map(p => ({
       userId: p.userId,
@@ -120,15 +120,19 @@ export class GameSession {
       this.matchStats.set(p.userId, { kills: 0, deaths: 0, damageDealt: 0, healingDone: 0 });
     }
 
-    // Wire engine callbacks — inject arenaTimeRemaining into keyframe snapshots
+    // Wire engine callbacks — inject arenaTimeRemaining + gameElapsed into keyframe snapshots
     this.engine.onBroadcast = (msg) => {
-      if (msg.type === 'game_state_snapshot' && this.arenaPreparationActive && this.arenaCountdownStartedAt > 0) {
-        const arenaOpenTime = this.mapInfo?.arenaOpenTime ?? 30;
-        const elapsedMs = Date.now() - this.arenaCountdownStartedAt;
-        const remainingSec = arenaOpenTime - elapsedMs / 1000;
-        if (remainingSec > 0) {
-          (msg as import('@gtr/shared').S2C_GameStateSnapshot).arenaTimeRemaining = remainingSec;
+      if (msg.type === 'game_state_snapshot') {
+        const snapshot = msg as import('@gtr/shared').S2C_GameStateSnapshot;
+        if (this.arenaPreparationActive && this.arenaCountdownStartedAt > 0) {
+          const arenaOpenTime = this.mapInfo?.arenaOpenTime ?? 30;
+          const elapsedMs = Date.now() - this.arenaCountdownStartedAt;
+          const remainingSec = arenaOpenTime - elapsedMs / 1000;
+          if (remainingSec > 0) {
+            snapshot.arenaTimeRemaining = remainingSec;
+          }
         }
+        snapshot.gameElapsed = this.engine.getGameElapsed();
       }
       this.broadcast(msg);
     };
@@ -319,13 +323,18 @@ export class GameSession {
 
     switch (msg.type) {
       case 'player_state':
+        // Ignore position updates from clients that haven't yet signalled ready for
+        // this session.  During a rematch the old ClientEngine can still fire off
+        // player_state messages before the new game_start is processed, which would
+        // overwrite the fresh spawn position.
+        if (!this.readyPlayers.has(userId) && !this.countdownStarted) break;
         this.engine.updateEntityPosition(entityId, msg.x, msg.y, msg.z, msg.rotationY, msg.isMoving, msg.vx, msg.vz, msg.moveFlags, msg.moveSpeed, msg.vy, msg.turnSpeed);
         break;
       case 'use_ability':
         this.engine.requestAbility(
           entityId, msg.abilityId, msg.targetEntityId ?? null,
           msg.groundTargetX !== undefined && msg.groundTargetZ !== undefined
-            ? { x: msg.groundTargetX, z: msg.groundTargetZ } : undefined,
+            ? { x: msg.groundTargetX, y: msg.groundTargetY ?? 0, z: msg.groundTargetZ } : undefined,
           msg.serverTimestamp
         );
         break;
@@ -460,6 +469,9 @@ export class GameSession {
     this.sockets.set(userId, socket);
     this.engine.unfreezeEntity(entityId);
 
+    // Snap entity to elevator if within its footprint (prevents mid-air spawn on rejoin)
+    this.engine.snapEntityToElevator(entityId);
+
     // Build rejoin message with full current state
     const allEntities = this.engine.getAllEntities();
     const snapshots = allEntities.map(e => e.toSnapshot());
@@ -493,6 +505,7 @@ export class GameSession {
       disconnectedEntityIds,
       ...(this.gameOver ? { gameOver: { winningTeam: this.getWinningTeam(), playerResults: this.buildPlayerResults(this.getWinningTeam()) } } : {}),
       ...(arenaTimeRemaining !== undefined ? { arenaTimeRemaining } : {}),
+      gameElapsed: this.engine.getGameElapsed(),
     };
     this.sendToUser(userId, rejoinMsg);
 

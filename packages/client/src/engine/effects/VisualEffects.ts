@@ -38,9 +38,9 @@ export function disposeGroup(scene: THREE.Scene, group: THREE.Group): void {
 
 // ── Gas Cloud ────────────────────────────────────────────────────────────
 
-export function createGasCloud(scene: THREE.Scene, x: number, z: number, radius: number): GasCloudVisual {
+export function createGasCloud(scene: THREE.Scene, x: number, z: number, radius: number, y = 0): GasCloudVisual {
   const group = new THREE.Group();
-  group.position.set(x, 0.02, z);
+  group.position.set(x, y + 0.02, z);
 
   // Base ground disc
   const baseMat = new THREE.MeshStandardMaterial({
@@ -113,9 +113,9 @@ export function updateGasCloud(visual: GasCloudVisual, elapsed: number, duration
 
 // ── Chemical Pool ────────────────────────────────────────────────────────
 
-export function createChemPool(scene: THREE.Scene, x: number, z: number, radius: number): ChemPoolVisual {
+export function createChemPool(scene: THREE.Scene, x: number, z: number, radius: number, y = 0): ChemPoolVisual {
   const group = new THREE.Group();
-  group.position.set(x, 0.02, z);
+  group.position.set(x, y + 0.02, z);
 
   // Base pool disc — mixed green/purple chemical liquid
   const baseMat = new THREE.MeshStandardMaterial({

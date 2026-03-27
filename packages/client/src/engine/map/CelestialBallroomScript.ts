@@ -20,6 +20,8 @@ export class CelestialBallroomScript extends ArenaScript {
   private archShaderMaterials: THREE.ShaderMaterial[] = [];
   private glassPlatformGroup: THREE.Group | null = null;
   private glassPlatformCollider: BoxCollider | null = null;
+  private lastPlatformY = 0.2;
+  private platformJumped = false;
 
   protected override readonly OPEN_ANIM_DURATION = 1.5;
 
@@ -731,9 +733,11 @@ export class CelestialBallroomScript extends ArenaScript {
     let y: number;
     if (phaseT < IDLE) {
       // Idling — gentle hover bob that fades in/out for smooth transitions
+      // Skip the bob at ground level so the platform sits still
+      const isGroundFloor = STOPS[stopIdx] === 0;
       const fadeIn  = Math.min(1, phaseT / 1.0);
       const fadeOut = Math.min(1, (IDLE - phaseT) / 1.0);
-      y = fromY + Math.sin(this.elapsed * 1.5) * 0.4 * fadeIn * fadeOut;
+      y = fromY + (isGroundFloor ? 0 : Math.sin(this.elapsed * 1.5) * 0.4 * fadeIn * fadeOut);
     } else {
       // Traveling — ease-in-out cubic
       const p = (phaseT - IDLE) / TRAVEL;
@@ -743,8 +747,22 @@ export class CelestialBallroomScript extends ArenaScript {
       y = fromY + (toY - fromY) * eased;
     }
 
+    // Detect if the platform jumped significantly (tab was backgrounded)
+    this.platformJumped = Math.abs(y - this.lastPlatformY) > 2;
+    this.lastPlatformY = y;
+
     this.glassPlatformGroup.position.y = y;
     this.glassPlatformCollider.centerY = y;
+  }
+
+  getMovingPlatformSnapY(px: number, pz: number): number | undefined {
+    if (!this.platformJumped || !this.glassPlatformCollider) return undefined;
+    const dx = px - 1;   // ELEVATOR_CX
+    const dz = pz - (-1); // ELEVATOR_CZ
+    if (Math.abs(dx) <= 4 && Math.abs(dz) <= 4) { // halfW, halfD
+      return this.glassPlatformCollider.centerY + 0.2; // + halfH
+    }
+    return undefined;
   }
 
   // ---------------------------------------------------------------------------

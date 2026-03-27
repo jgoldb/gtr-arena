@@ -82,6 +82,7 @@ export interface C2S_UseAbility {
   abilityId: string;
   targetEntityId: string | null;
   groundTargetX?: number;
+  groundTargetY?: number;
   groundTargetZ?: number;
   /** Server timestamp the client was rendering when the ability was fired (lag compensation). */
   serverTimestamp?: number;
@@ -241,6 +242,7 @@ export interface S2C_AbilityEffect {
   entityId: string;
   abilityId: string;
   groundTargetX?: number;
+  groundTargetY?: number;
   groundTargetZ?: number;
   manaStolen?: number;
 }
@@ -263,6 +265,7 @@ export interface S2C_GasCloudSpawn {
   type: 'gas_cloud_spawn';
   id: string;
   x: number;
+  y: number;
   z: number;
   radius: number;
   duration: number;
@@ -272,6 +275,7 @@ export interface S2C_ChemPoolSpawn {
   type: 'chem_pool_spawn';
   id: string;
   x: number;
+  y: number;
   z: number;
   radius: number;
   duration: number;
@@ -443,6 +447,8 @@ export interface S2C_RejoinGame {
   gameOver?: { winningTeam: number; playerResults: PlayerMatchResult[] };
   /** Seconds remaining until arena doors open. Undefined/0 = already open. */
   arenaTimeRemaining?: number;
+  /** Total seconds since game started — used to sync time-based map features (elevator, etc.). */
+  gameElapsed?: number;
 }
 
 export interface S2C_PlayerDisconnected {
@@ -640,6 +646,8 @@ export interface S2C_GameStateSnapshot {
   chemicalPools: ChemicalPoolSnapshot[];
   /** Seconds remaining until arena doors open. Undefined = already open. */
   arenaTimeRemaining?: number;
+  /** Total seconds since game started — used to sync time-based map features (elevator, etc.). */
+  gameElapsed?: number;
 }
 
 export interface S2C_GateVoteUpdate {

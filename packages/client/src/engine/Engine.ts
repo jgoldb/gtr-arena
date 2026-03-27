@@ -284,7 +284,7 @@ export class Engine {
     this.playerController.onFallDamage = (fallDistance: number) => {
       if (this.godMode || this.playerController.dead) return;
       const SAFE_FALL = 8;   // ~13 yards — no damage below this
-      const FATAL_FALL = 28; // ~47 yards — 100% HP damage
+      const FATAL_FALL = 40; // ~67 yards — 100% HP damage
       if (fallDistance <= SAFE_FALL) return;
       const pct = Math.min(1, (fallDistance - SAFE_FALL) / (FATAL_FALL - SAFE_FALL));
       const damage = Math.round(this.playerController.maxHp * pct);
@@ -571,8 +571,9 @@ export class Engine {
       for (const target of this.npcs) {
         if (target.dead || !target.isHostileTo(impact.owner) || this.buffSystem.isUntargetable(target)) continue;
         const dx = target.mesh.position.x - impact.groundPos.x;
+        const dy = target.mesh.position.y - impact.groundPos.y;
         const dz = target.mesh.position.z - impact.groundPos.z;
-        if (dx * dx + dz * dz > radius * radius) continue;
+        if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
         this.combatSystem.applyAoeDamage(impact.owner, target, impact.ability);
       }
 
@@ -723,11 +724,11 @@ export class Engine {
   ): void {
     const tickCount = Math.floor(duration / tickInterval);
     const damagePerTick = Math.round(totalDamage / tickCount);
-    const visual = createGasCloud(this.scene, position.x, position.z, radius);
+    const visual = createGasCloud(this.scene, position.x, position.z, radius, position.y);
 
     this.gasClouds.push({
       ...visual,
-      center: new THREE.Vector3(position.x, 0, position.z),
+      center: new THREE.Vector3(position.x, position.y, position.z),
       radius,
       duration,
       elapsed: 0,
@@ -756,11 +757,11 @@ export class Engine {
   ): void {
     const dotTickCount = Math.floor(dotDuration / dotTickInterval);
     const dotDamagePerTick = Math.round(dotTotalDamage / dotTickCount);
-    const visual = createChemPool(this.scene, position.x, position.z, radius);
+    const visual = createChemPool(this.scene, position.x, position.z, radius, position.y);
 
     this.chemicalPools.push({
       ...visual,
-      center: new THREE.Vector3(position.x, 0, position.z),
+      center: new THREE.Vector3(position.x, position.y, position.z),
       radius,
       duration,
       elapsed: 0,
@@ -795,8 +796,9 @@ export class Engine {
         for (const target of allTargets) {
           if (target.dead || this.buffSystem.isUntargetable(target)) continue;
           const dx = target.mesh.position.x - pool.center.x;
+          const dy = target.mesh.position.y - pool.center.y;
           const dz = target.mesh.position.z - pool.center.z;
-          if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
+          if (dx * dx + dy * dy + dz * dz > pool.radius * pool.radius) continue;
 
           if (target.isHostileTo(pool.owner)) {
             this.combatSystem.onHostileAction?.(pool.owner, target);
@@ -957,8 +959,9 @@ export class Engine {
       for (const target of targets) {
         if (target.dead || this.buffSystem.isUntargetable(target)) continue;
         const dx = target.mesh.position.x - cloud.center.x;
+        const dy = target.mesh.position.y - cloud.center.y;
         const dz = target.mesh.position.z - cloud.center.z;
-        if (dx * dx + dz * dz <= cloud.radius * cloud.radius) {
+        if (dx * dx + dy * dy + dz * dz <= cloud.radius * cloud.radius) {
           inCloud.add(target);
           const isNew = !cloud.affectedTargets.has(target);
           this.buffSystem.apply(target, cloud.debuff);
@@ -1846,6 +1849,18 @@ export class Engine {
     }
 
     this.mapManager.update(deltaTime);
+
+    // If a moving platform jumped (tab was backgrounded), snap the player to it
+    // so they don't fall from the sky.
+    const snapY = this.mapManager.getMovingPlatformSnapY(
+      this.playerController.mesh.position.x,
+      this.playerController.mesh.position.z,
+    );
+    if (snapY !== undefined) {
+      this.playerController.mesh.position.y = snapY;
+      this.playerController.velocityY = 0;
+    }
+
     this.playerController.update(deltaTime);
     for (const npc of this.npcs) npc.update(deltaTime);
     // Despawn dead NPCs after their timer expires

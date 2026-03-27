@@ -402,6 +402,28 @@ export class DeadReckoning {
     }
   }
 
+  /**
+   * Freeze an entity's dead reckoning — zero all velocities and error so the
+   * entity stays exactly at its last known position with no extrapolation.
+   */
+  freezeEntity(id: string): void {
+    const existing = this.entities.get(id);
+    if (existing) {
+      existing.serverIsMoving = false;
+      existing.serverVx = 0;
+      existing.serverVz = 0;
+      existing.serverVy = 0;
+      existing.serverMoveFlags = 0;
+      existing.serverMoveSpeed = 0;
+      existing.serverTurnSpeed = 0;
+      existing.errorX = 0;
+      existing.errorZ = 0;
+      existing.errorY = 0;
+      existing.stopBlendRemaining = 0;
+      existing.receiveTime = performance.now();
+    }
+  }
+
   removeEntity(id: string): void {
     this.entities.delete(id);
   }
