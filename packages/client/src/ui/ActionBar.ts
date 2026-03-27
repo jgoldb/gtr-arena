@@ -8,7 +8,7 @@ export interface ActionBarSlot {
   keyCode: string; // KeyboardEvent.code ("Digit1", etc.)
 }
 
-export type AbilityUsabilityStatus = 'usable' | 'no-target' | 'out-of-range' | 'not-enough-resource';
+export type AbilityUsabilityStatus = 'usable' | 'no-target' | 'out-of-range' | 'not-enough-resource' | 'locked';
 
 export interface ActionBarCallbacks {
   onActivate: (ability: Ability) => void;
@@ -202,6 +202,13 @@ export class ActionBar {
       }
 
       const status = this.callbacks.getAbilityStatus(slot.ability);
+      if (status === 'locked') {
+        slotEl.style.opacity = '0.3';
+        overlay.style.background = 'transparent';
+        statusOv.style.background = 'transparent';
+        cdText.textContent = '';
+        continue;
+      }
       const cdRemaining = combat.getCooldownRemaining(slot.ability.id);
       const gcdRemaining = this.callbacks.getGcdRemaining?.() ?? 0;
       const onCooldown = cdRemaining > 0 || gcdRemaining > 0;
@@ -414,7 +421,9 @@ export class ActionBar {
     let statsHtml = '';
     if (hasRange) {
       const rangeYards = Math.round(ability.range! / YARDS_TO_UNITS);
-      const label = rangeYards <= 5 ? 'Melee Range' : `${rangeYards} yd range`;
+      const minRangeYards = ability.minRange ? Math.round(ability.minRange / YARDS_TO_UNITS) : 0;
+      let label = rangeYards <= 5 ? 'Melee Range' : `${rangeYards} yd range`;
+      if (minRangeYards > 0) label = `${minRangeYards}-${rangeYards} yd range`;
       statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${label}</div>`;
     }
     if (hasCooldown) {

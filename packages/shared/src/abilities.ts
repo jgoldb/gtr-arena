@@ -13,7 +13,7 @@ export function yardsToUnits(yards: number): number {
 // ── Buff/debuff system types ────────────────────────────────────────────
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'blind' | 'damageDealtPercent' | 'manaCostPercent' | 'untargetable';
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'blind' | 'damageDealtPercent' | 'manaCostPercent' | 'untargetable' | 'damageTakenPercent';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
   readonly minStacks?: number; // effect only applies when buff has >= this many stacks
 }
@@ -61,6 +61,7 @@ export interface Ability {
   readonly name: string;
   readonly icon: string; // emoji or short label for the slot
   readonly range?: number; // world units (use yardsToUnits() to define from yards); omit for self-buffs
+  readonly minRange?: number; // world units — minimum range (ability fails if too close)
   readonly manaCost: number;
   readonly cooldown: number; // seconds
   readonly damage: number; // base damage (non-crit)
@@ -275,6 +276,16 @@ export const JanitorsHelperDebuff: BuffDefinition = {
   description: 'Knocked out cold.',
   effects: [{ type: 'sleep', value: 0 }],
   drCategory: 'sleep',
+};
+
+export const ParanoidDebuff: BuffDefinition = {
+  id: 'paranoid',
+  name: 'Paranoid',
+  icon: '👁️',
+  duration: 6,
+  type: 'debuff',
+  description: 'Taking 30% increased damage.',
+  effects: [{ type: 'damageTakenPercent', value: 30 }],
 };
 
 export const TweakingBuff: BuffDefinition = {
@@ -604,6 +615,16 @@ export const StickyFingers: Ability = {
     'Steals a buff from the target. If the target has no buffs, instead steals 150 mana. +15 Tweaking.',
 };
 
+export const TweakerSprintSlow: BuffDefinition = {
+  id: 'tweaker-sprint-slow',
+  name: 'Tweaker Sprint',
+  icon: '🏃',
+  duration: 2,
+  type: 'debuff',
+  description: 'Movement speed reduced by 40%.',
+  effects: [{ type: 'movementSpeedPercent', value: -40 }],
+};
+
 export const DumpsterDivingBuff: BuffDefinition = {
   id: 'dumpster-diving',
   name: 'Dumpster Diving',
@@ -644,12 +665,28 @@ export const DumpsterDive: Ability = {
   name: 'Dumpster Dive',
   icon: '🗑️',
   manaCost: 80,
-  cooldown: 30,
+  cooldown: 25,
   damage: 0,
   requiresHostileTarget: false,
   description:
-    'Dives into a dumpster, becoming untargetable and invisible for 4 seconds. When emerging, deals 150 damage to nearby enemies.',
+    'Dives into a dumpster, becoming untargetable and invisible for 4 seconds. When emerging, deals 150 damage to nearby enemies. +15 Tweaking.',
   appliesSelfBuff: DumpsterDivingBuff,
+};
+
+export const TweakerSprint: Ability = {
+  id: 'tweaker-sprint',
+  name: 'Tweaker Sprint',
+  icon: '🏃',
+  range: yardsToUnits(15),
+  minRange: yardsToUnits(5),
+  manaCost: 115,
+  cooldown: 25,
+  damage: 0,
+  requiresHostileTarget: true,
+  chargeSpeed: yardsToUnits(60), // 60 yards/sec — very fast dash
+  chargeMaxDamage: 100,
+  description:
+    'Dashes to the enemy, dealing 100 damage and reducing movement speed by 40% for 2 seconds to all enemies in your way. +15 Tweaking.',
 };
 
 export const PvPTrinket: Ability = {

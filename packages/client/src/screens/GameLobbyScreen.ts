@@ -106,7 +106,7 @@ export class GameLobbyScreen {
       charName.style.cssText = 'font-weight: 600; font-size: 15px; color: #bbc4dd; margin-bottom: 5px;';
 
       const charRole = document.createElement('div');
-      charRole.textContent = char.id === 'janitor' ? 'Melee / Tank' : 'Ranged / Caster';
+      charRole.textContent = char.id === 'janitor' ? 'Brawler' : char.id === 'crackhead' ? 'Scrapper' : 'Caster';
       charRole.style.cssText = 'font-size: 11px; color: rgba(120,130,160,0.5);';
 
       card.appendChild(charName);

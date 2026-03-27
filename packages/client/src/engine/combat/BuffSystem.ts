@@ -275,6 +275,20 @@ export class BuffSystem {
     return mult;
   }
 
+  getDamageTakenMultiplier(target: Targetable): number {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return 1;
+    let mult = 1;
+    for (const buff of buffs) {
+      for (const effect of buff.definition.effects) {
+        if (effect.type === 'damageTakenPercent' && this.isEffectActive(buff, effect)) {
+          mult += effect.value / 100;
+        }
+      }
+    }
+    return mult;
+  }
+
   update(dt: number): void {
     for (const [entity, buffs] of this.activeBuffs) {
       for (let i = buffs.length - 1; i >= 0; i--) {

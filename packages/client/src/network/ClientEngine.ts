@@ -7,7 +7,7 @@ import type {
   S2C_EntityDied, S2C_PositionRelay, S2C_PositionUpdate,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits, getCharacterStats, Sweep, GLOBAL_COOLDOWN } from '@gtr/shared';
+import { yardsToUnits, getCharacterStats, Sweep, TweakerSprint, GLOBAL_COOLDOWN } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -137,6 +137,9 @@ export class ClientEngine {
 
   // Sweep charge (local player only — client-side movement during charge)
   private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number; savedAutoAttackTargetId: string | null } | null = null;
+
+  // Tweaker Sprint charge (local player only — dash to target)
+  private tweakerSprintCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number; savedAutoAttackTargetId: string | null } | null = null;
 
   // Active knockbacks (visual displacement on client)
   private activeKnockbacks: { entityId: string; dirX: number; dirZ: number; distance: number; duration: number; elapsed: number }[] = [];
@@ -766,7 +769,7 @@ export class ClientEngine {
       this.onAbilitySuccess?.(msg.abilityId);
       if (msg.manaStolen) this.onManaDrained?.(msg.manaStolen);
       // Optimistically update local buff stacks (server will confirm in next snapshot)
-      if (msg.abilityId === 'shank' || msg.abilityId === 'pocket-sand' || msg.abilityId === 'sticky-fingers') {
+      if (msg.abilityId === 'shank' || msg.abilityId === 'pocket-sand' || msg.abilityId === 'sticky-fingers' || msg.abilityId === 'tweaker-sprint') {
         const buff = this.localBuffs.find(b => b.id === 'tweaking');
         if (buff && buff.stacks !== undefined) {
           buff.stacks = Math.min(buff.stacks + 15, buff.maxStacks ?? Infinity);
@@ -781,6 +784,10 @@ export class ClientEngine {
       // Start sweep charge for local player
       if (msg.abilityId === 'sweep') {
         this.startSweepCharge();
+      }
+      // Start tweaker sprint charge for local player
+      if (msg.abilityId === 'tweaker-sprint') {
+        this.startTweakerSprintCharge();
       }
       if (msg.abilityId === 'kaboom') {
         this.spawnKaboomGust(this.playerController.mesh.position, this.playerController.mesh.rotation.y);
@@ -1383,11 +1390,16 @@ export class ClientEngine {
       if (pool.consumed) pool.consumeElapsed += gap;
     }
 
-    // Sweep charge — if we were mid-charge when backgrounded, it's certainly
+    // Sweep/sprint charge — if we were mid-charge when backgrounded, it's certainly
     // finished by now.  Clear it so the player isn't stuck in a charge state.
     if (this.sweepCharge) {
       this.sweepCharge = null;
       this.playerController.charging = false;
+    }
+    if (this.tweakerSprintCharge) {
+      this.tweakerSprintCharge = null;
+      this.playerController.charging = false;
+      this.playerController.chargeAnimSpeed = 1;
     }
   }
 
@@ -1717,6 +1729,7 @@ export class ClientEngine {
 
     // Update sweep charge (local player movement during charge)
     this.updateSweepCharge(dt);
+    this.updateTweakerSprintCharge(dt);
 
     // Update knockbacks (visual displacement)
     this.updateKnockbacks(dt);
@@ -1907,6 +1920,58 @@ export class ClientEngine {
 
       this.playerController.charging = false;
       this.sweepCharge = null;
+    }
+  }
+
+  // ── Tweaker Sprint charge ───────────────────────────────────────────
+
+  private startTweakerSprintCharge(): void {
+    // Dash toward the selected target
+    const targetId = this.selectedTargetId;
+    const targetMesh = targetId ? this.getEntityMesh(targetId) : null;
+    if (!targetMesh) return;
+
+    const dx = targetMesh.position.x - this.playerController.mesh.position.x;
+    const dz = targetMesh.position.z - this.playerController.mesh.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist < 0.01) return;
+
+    const direction = new THREE.Vector3(dx / dist, 0, dz / dist);
+    // Face the target
+    this.playerController.mesh.rotation.y = Math.atan2(direction.x, direction.z);
+
+    const speed = TweakerSprint.chargeSpeed!;
+    const chargeDist = Math.max(0, dist - yardsToUnits(1)); // stop 1 yard short
+    const duration = chargeDist / speed;
+
+    const savedAutoAttackTargetId = this.selectedTargetId;
+    this.sendStopAutoAttack();
+    this.playerController.charging = true;
+    this.playerController.chargeAnimSpeed = 3; // fast frantic run
+    this.tweakerSprintCharge = {
+      elapsed: 0,
+      duration,
+      direction,
+      speed,
+      savedAutoAttackTargetId,
+    };
+  }
+
+  private updateTweakerSprintCharge(dt: number): void {
+    if (!this.tweakerSprintCharge) return;
+    this.tweakerSprintCharge.elapsed += dt;
+    this.playerController.mesh.position.addScaledVector(
+      this.tweakerSprintCharge.direction, this.tweakerSprintCharge.speed * dt
+    );
+    if (this.tweakerSprintCharge.elapsed >= this.tweakerSprintCharge.duration) {
+      const targetId = this.tweakerSprintCharge.savedAutoAttackTargetId;
+      if (targetId) {
+        this.sendAutoAttack(targetId);
+      }
+
+      this.playerController.charging = false;
+      this.playerController.chargeAnimSpeed = 1;
+      this.tweakerSprintCharge = null;
     }
   }
 

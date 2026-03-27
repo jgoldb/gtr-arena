@@ -483,7 +483,7 @@ function startMultiplayer(msg: S2C_GameStart): void {
     }
   };
   clientEngine.onAbilitySuccess = (abilityId) => {
-    if (abilityId === 'shank' || abilityId === 'pocket-sand') {
+    if (abilityId === 'shank' || abilityId === 'pocket-sand' || abilityId === 'tweaker-sprint') {
       const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
       if (mesh && mpCombatText) {
         mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
@@ -589,7 +589,7 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
     }
   };
   clientEngine.onAbilitySuccess = (abilityId) => {
-    if (abilityId === 'shank' || abilityId === 'pocket-sand') {
+    if (abilityId === 'shank' || abilityId === 'pocket-sand' || abilityId === 'tweaker-sprint') {
       const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
       if (mesh && mpCombatText) {
         mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
@@ -814,6 +814,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   };
 
   function mpGetAbilityStatus(ability: Ability): AbilityUsabilityStatus {
+    if (ability.id !== 'crack-rock' && clientEngine!.getLocalBuffs().some(b => b.id === 'dumpster-diving')) return 'locked';
     const effectiveManaCost = Math.round(ability.manaCost * clientEngine!.getManaCostMultiplier());
     if (player.mana < effectiveManaCost) return 'not-enough-resource';
     if (ability.requiresHostileTarget) {
@@ -826,6 +827,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       const dz = pos.z - target.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (ability.range && dist > ability.range) return 'out-of-range';
+      if (ability.minRange && dist < ability.minRange) return 'out-of-range';
     }
     if (ability.requiresTarget && !ability.requiresHostileTarget) {
       // Friendly-or-self targeted abilities (e.g. Chudmax channel)
@@ -1957,6 +1959,7 @@ async function startPlayground(): Promise<void> {
     if (target === engine.playerController) {
       const color = definition.type === 'buff' ? '#3388ff' : '#ff6644';
       combatText.spawnText(target.mesh, `+${definition.name}`, color, true);
+      if (definition.id === 'dumpster-diving') engine.saveDumpsterDiveAutoTarget();
     }
   };
   engine.buffSystem.onBuffExpired = (target, definition) => {
@@ -2051,12 +2054,18 @@ async function startPlayground(): Promise<void> {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
       }
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'dumpster-dive' || ability.id === 'tweaker-sprint') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
     }
     if (ability.id === 'crack-rock') {
       engine.combatSystem.applyHeal(engine.playerController, 400);
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
+    }
+    if (ability.id === 'tweaker-sprint') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && !target.dead) {
+        engine.startTweakerSprintCharge(target);
+      }
     }
     if (ability.id === 'sticky-fingers') {
       const target = engine.targetingSystem.currentTarget;
@@ -2130,6 +2139,7 @@ async function startPlayground(): Promise<void> {
     },
     getAbilityStatus: (ability) => {
       const player = engine.playerController;
+      if (ability.id !== 'crack-rock' && engine.buffSystem.hasBuff(player, 'dumpster-diving')) return 'locked';
       const effectiveManaCost = Math.round(ability.manaCost * engine.buffSystem.getManaCostMultiplier(player));
       if (player.mana < effectiveManaCost) return 'not-enough-resource';
       if (ability.requiresHostileTarget) {
@@ -2138,7 +2148,9 @@ async function startPlayground(): Promise<void> {
         const dx = player.mesh.position.x - target.mesh.position.x;
         const dy = player.mesh.position.y - target.mesh.position.y;
         const dz = player.mesh.position.z - target.mesh.position.z;
-        if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range!) return 'out-of-range';
+        const hostileDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (hostileDist > ability.range!) return 'out-of-range';
+        if (ability.minRange && hostileDist < ability.minRange) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {
         const target = engine.targetingSystem.currentTarget ?? player;
@@ -2394,6 +2406,7 @@ async function startUISetup(): Promise<void> {
     if (target === engine.playerController) {
       const color = definition.type === 'buff' ? '#3388ff' : '#ff6644';
       combatText.spawnText(target.mesh, `+${definition.name}`, color, true);
+      if (definition.id === 'dumpster-diving') engine.saveDumpsterDiveAutoTarget();
     }
   };
   engine.buffSystem.onBuffExpired = (target, definition) => {
@@ -2476,12 +2489,18 @@ async function startUISetup(): Promise<void> {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
       }
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'dumpster-dive' || ability.id === 'tweaker-sprint') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
     }
     if (ability.id === 'crack-rock') {
       engine.combatSystem.applyHeal(engine.playerController, 400);
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
+    }
+    if (ability.id === 'tweaker-sprint') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && !target.dead) {
+        engine.startTweakerSprintCharge(target);
+      }
     }
     if (ability.id === 'sticky-fingers') {
       const target = engine.targetingSystem.currentTarget;
@@ -2550,6 +2569,7 @@ async function startUISetup(): Promise<void> {
     },
     getAbilityStatus: (ability) => {
       const player = engine.playerController;
+      if (ability.id !== 'crack-rock' && engine.buffSystem.hasBuff(player, 'dumpster-diving')) return 'locked';
       const effectiveManaCost = Math.round(ability.manaCost * engine.buffSystem.getManaCostMultiplier(player));
       if (player.mana < effectiveManaCost) return 'not-enough-resource';
       if (ability.requiresHostileTarget) {
@@ -2558,7 +2578,9 @@ async function startUISetup(): Promise<void> {
         const dx = player.mesh.position.x - target.mesh.position.x;
         const dy = player.mesh.position.y - target.mesh.position.y;
         const dz = player.mesh.position.z - target.mesh.position.z;
-        if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range!) return 'out-of-range';
+        const hostileDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (hostileDist > ability.range!) return 'out-of-range';
+        if (ability.minRange && hostileDist < ability.minRange) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {
         const target = engine.targetingSystem.currentTarget ?? player;

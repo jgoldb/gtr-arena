@@ -8,7 +8,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { GLOBAL_COOLDOWN, yardsToUnits, MoveFlags, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, Sweep, getBuffDescription, getCharacterStats } from '@gtr/shared';
+import { GLOBAL_COOLDOWN, yardsToUnits, MoveFlags, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -41,6 +41,17 @@ interface SweepCharge {
   speed: number;
   hitTargets: Set<ServerEntity>;
   maxDamage: number;
+  savedAutoAttackTarget: ServerEntity | null;
+}
+
+interface TweakerSprintCharge {
+  elapsed: number;
+  duration: number;
+  dirX: number;
+  dirZ: number;
+  speed: number;
+  hitTargets: Set<ServerEntity>;
+  damage: number;
   savedAutoAttackTarget: ServerEntity | null;
 }
 
@@ -126,6 +137,7 @@ export class ServerEngine {
   private castingStates = new Map<string, CastingState>();
   private autoAttacks = new Map<string, AutoAttackState>();
   private sweepCharges = new Map<string, SweepCharge>();
+  private tweakerSprintCharges = new Map<string, TweakerSprintCharge>();
   private fullRetardAuras = new Map<string, FullRetardAura>();
 
   // World state
@@ -134,6 +146,7 @@ export class ServerEngine {
   private activeDots: ActiveDot[] = [];
   private pendingAoeImpacts: PendingAoeImpact[] = [];
   private activeKnockbacks: ActiveKnockback[] = [];
+  private dumpsterDiveAutoTargets = new Map<string, string>(); // entityId -> saved auto-attack target id
   private nextEffectId = 1;
 
   // Tick
@@ -266,6 +279,9 @@ export class ServerEngine {
     };
 
     this.buffSystem.onBuffExpired = (target, definition) => {
+      if (definition.id === 'paranoid') {
+        this.buffSystem.removeStacks(target, 'tweaking', 100);
+      }
       if (definition.id === 'crotch-rot') {
         this.buffSystem.apply(target, RottenCrotchStun);
       }
@@ -293,6 +309,15 @@ export class ServerEngine {
               entity.die();
               this.combatSystem.onEntityKilled?.(target, entity);
             }
+          }
+        }
+        // Re-engage auto-attack if the player was auto-attacking before diving
+        const savedTargetId = this.dumpsterDiveAutoTargets.get(target.id);
+        if (savedTargetId) {
+          this.dumpsterDiveAutoTargets.delete(target.id);
+          const currentTargetId = this.targets.get(target.id);
+          if (currentTargetId === savedTargetId) {
+            this.requestAutoAttack(target.id, savedTargetId);
           }
         }
       }
@@ -437,6 +462,7 @@ export class ServerEngine {
     if (entity.charging) {
       entity.charging = false;
       this.sweepCharges.delete(entityId);
+      this.tweakerSprintCharges.delete(entityId);
     }
   }
 
@@ -450,7 +476,9 @@ export class ServerEngine {
     this.castingStates.delete(entityId);
     this.autoAttacks.delete(entityId);
     this.sweepCharges.delete(entityId);
+    this.tweakerSprintCharges.delete(entityId);
     this.fullRetardAuras.delete(entityId);
+    this.dumpsterDiveAutoTargets.delete(entityId);
     this.targets.delete(entityId);
     this.lastBroadcastPosition.delete(entityId);
     this.lastBroadcastState.delete(entityId);
@@ -495,8 +523,8 @@ export class ServerEngine {
   updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean, vx: number, vz: number, moveFlags?: number, moveSpeed?: number, vy?: number, turnSpeed?: number): void {
     const entity = this.getEntity(entityId);
     if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
-    // During a sweep charge, the server is authoritative about position — ignore client updates
-    if (this.sweepCharges.has(entityId)) return;
+    // During a charge, the server is authoritative about position — ignore client updates
+    if (this.sweepCharges.has(entityId) || this.tweakerSprintCharges.has(entityId)) return;
 
     // ── Speed validation: clamp velocity magnitude to max possible speed ──
     const maxSpeed = entity.speed * entity.movementSpeedModifier;
@@ -746,7 +774,7 @@ export class ServerEngine {
       // Impact! Damage all hostiles in radius
       const radius = impact.ability.aoeRadius ?? 0;
       for (const target of this.entities) {
-        if (target === impact.owner || target.dead || !target.isHostileTo(impact.owner)) continue;
+        if (target === impact.owner || target.dead || !target.isHostileTo(impact.owner) || this.buffSystem.isUntargetable(target)) continue;
         const dx = target.x - impact.groundX;
         const dz = target.z - impact.groundZ;
         if (dx * dx + dz * dz > radius * radius) continue;
@@ -941,6 +969,10 @@ export class ServerEngine {
           entity.charging = false;
           this.sweepCharges.delete(entity.id);
         }
+        if (this.tweakerSprintCharges.has(entity.id)) {
+          entity.charging = false;
+          this.tweakerSprintCharges.delete(entity.id);
+        }
       }
 
 
@@ -958,6 +990,11 @@ export class ServerEngine {
     // Update sweep charges
     for (const entity of this.entities) {
       this.updateSweepCharge(entity, dt);
+    }
+
+    // Update tweaker sprint charges
+    for (const entity of this.entities) {
+      this.updateTweakerSprintCharge(entity, dt);
     }
 
     // Update auto-attacks
@@ -1342,7 +1379,7 @@ export class ServerEngine {
     // Hit detection
     const hitRadius = 1.0;
     for (const other of this.entities) {
-      if (other.dead || charge.hitTargets.has(other) || !other.isHostileTo(entity)) continue;
+      if (other.dead || charge.hitTargets.has(other) || !other.isHostileTo(entity) || this.buffSystem.isUntargetable(other)) continue;
       const dx = entity.x - other.x;
       const dz = entity.z - other.z;
       if (Math.sqrt(dx * dx + dz * dz) <= hitRadius) {
@@ -1358,7 +1395,7 @@ export class ServerEngine {
     if (charge.elapsed >= charge.duration) {
       // AoE burst at end
       for (const other of this.entities) {
-        if (other.dead || !other.isHostileTo(entity)) continue;
+        if (other.dead || !other.isHostileTo(entity) || this.buffSystem.isUntargetable(other)) continue;
         const dx = entity.x - other.x;
         const dz = entity.z - other.z;
         if (Math.sqrt(dx * dx + dz * dz) <= entity.autoAttackRange) {
@@ -1413,12 +1450,21 @@ export class ServerEngine {
     if (ability.id === 'kaboom') {
       this.executeKaboom(entity);
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers') {
+    if (ability.id === 'tweaker-sprint') {
+      this.startTweakerSprintCharge(entity);
+    }
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'tweaker-sprint') {
       this.buffSystem.addStacks(entity, 'tweaking', 15);
+      if (this.buffSystem.getStacks(entity, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(entity, 'paranoid')) {
+        this.buffSystem.apply(entity, ParanoidDebuff);
+      }
     }
     if (ability.id === 'crack-rock') {
       this.combatSystem.applyHeal(entity, entity, 400);
       this.buffSystem.addStacks(entity, 'tweaking', 25);
+      if (this.buffSystem.getStacks(entity, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(entity, 'paranoid')) {
+        this.buffSystem.apply(entity, ParanoidDebuff);
+      }
     }
     if (ability.id === 'sticky-fingers') {
       const target = this.getTarget(entity.id);
@@ -1439,6 +1485,13 @@ export class ServerEngine {
       }
     }
     if (ability.id === 'dumpster-dive') {
+      this.buffSystem.addStacks(entity, 'tweaking', 15);
+      if (this.buffSystem.getStacks(entity, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(entity, 'paranoid')) {
+        this.buffSystem.apply(entity, ParanoidDebuff);
+      }
+      // Save auto-attack target for re-engage on emerge
+      const aa = this.autoAttacks.get(entity.id);
+      if (aa) this.dumpsterDiveAutoTargets.set(entity.id, aa.target.id);
       // Stop auto-attack while in the dumpster
       this.stopAutoAttack(entity.id);
       // Force all enemies targeting this entity to lose their target
@@ -1504,6 +1557,89 @@ export class ServerEngine {
     });
   }
 
+  // ── Tweaker Sprint charge ───────────────────────────────────────────
+
+  private startTweakerSprintCharge(entity: ServerEntity): void {
+    const target = this.getTarget(entity.id);
+    if (!target) return;
+
+    const dx = target.x - entity.x;
+    const dz = target.z - entity.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist < 0.01) return;
+
+    const dirX = dx / dist;
+    const dirZ = dz / dist;
+    // Face the target
+    entity.rotationY = Math.atan2(dirX, dirZ);
+
+    const speed = TweakerSprint.chargeSpeed!;
+    const chargeDist = Math.max(0, dist - yardsToUnits(1)); // stop 1 yard short
+    const duration = chargeDist / speed;
+
+    const savedAutoAttackTarget = this.autoAttacks.get(entity.id)?.target ?? null;
+    this.stopAutoAttack(entity.id);
+    entity.charging = true;
+    this.tweakerSprintCharges.set(entity.id, {
+      elapsed: 0,
+      duration,
+      dirX,
+      dirZ,
+      speed,
+      hitTargets: new Set(),
+      damage: TweakerSprint.chargeMaxDamage!,
+      savedAutoAttackTarget,
+    });
+  }
+
+  private updateTweakerSprintCharge(entity: ServerEntity, dt: number): void {
+    const charge = this.tweakerSprintCharges.get(entity.id);
+    if (!charge) return;
+
+    charge.elapsed += dt;
+
+    // Sub-step movement to prevent tunneling through thin walls at high speed
+    const totalDx = charge.dirX * charge.speed * dt;
+    const totalDz = charge.dirZ * charge.speed * dt;
+    const totalDist = Math.sqrt(totalDx * totalDx + totalDz * totalDz);
+    const maxStep = 0.25;
+    const numSteps = Math.max(1, Math.ceil(totalDist / maxStep));
+    const stepDx = totalDx / numSteps;
+    const stepDz = totalDz / numSteps;
+    for (let i = 0; i < numSteps; i++) {
+      entity.x += stepDx;
+      entity.z += stepDz;
+      const resolved = this.collision.resolve(entity.x, entity.z, entity.y, 0.4);
+      entity.x = resolved.x;
+      entity.z = resolved.z;
+    }
+
+    // Hit detection: flat damage + slow debuff
+    const hitRadius = 1.0;
+    for (const other of this.entities) {
+      if (other.dead || charge.hitTargets.has(other) || !other.isHostileTo(entity) || this.buffSystem.isUntargetable(other)) continue;
+      const dx = entity.x - other.x;
+      const dz = entity.z - other.z;
+      if (Math.sqrt(dx * dx + dz * dz) <= hitRadius) {
+        charge.hitTargets.add(other);
+        this.combatSystem.applySweepDamage(entity, other, charge.damage);
+        this.buffSystem.apply(other, TweakerSprintSlow);
+      }
+    }
+
+    if (charge.elapsed >= charge.duration) {
+      // Re-engage auto-attack
+      const savedTarget = charge.savedAutoAttackTarget;
+      if (savedTarget && !savedTarget.dead && savedTarget.isHostileTo(entity)) {
+        this.requestAutoAttack(entity.id, savedTarget.id);
+      }
+
+      entity.charging = false;
+      entity.lastPositionUpdateTime = 0;
+      this.tweakerSprintCharges.delete(entity.id);
+    }
+  }
+
   // ── Kaboom cone AoE with knockback ──────────────────────────────────
 
   private static readonly KABOOM_CONE_RANGE = yardsToUnits(8);
@@ -1518,7 +1654,7 @@ export class ServerEngine {
     const cosHalf = Math.cos(ServerEngine.KABOOM_CONE_HALF_ANGLE);
 
     for (const other of this.entities) {
-      if (other === entity || other.dead || !other.isHostileTo(entity)) continue;
+      if (other === entity || other.dead || !other.isHostileTo(entity) || this.buffSystem.isUntargetable(other)) continue;
       const dx = other.x - entity.x;
       const dz = other.z - entity.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
@@ -1701,7 +1837,7 @@ export class ServerEngine {
       if (pool.elapsed < pool.activationDelay) continue;
 
       for (const entity of this.entities) {
-        if (entity.dead) continue;
+        if (entity.dead || this.buffSystem.isUntargetable(entity)) continue;
         const dx = entity.x - pool.centerX;
         const dz = entity.z - pool.centerZ;
         if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
@@ -1793,7 +1929,7 @@ export class ServerEngine {
       while (aura.elapsed >= aura.nextTickAt) {
         // Damage hostiles
         for (const other of this.entities) {
-          if (other.dead || !other.isHostileTo(aura.entity)) continue;
+          if (other.dead || !other.isHostileTo(aura.entity) || this.buffSystem.isUntargetable(other)) continue;
           const dx = aura.entity.x - other.x;
           const dz = aura.entity.z - other.z;
           if (dx * dx + dz * dz <= meleeRange * meleeRange) {

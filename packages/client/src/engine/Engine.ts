@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, type Ability } from './combat/Ability';
+import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { getCharacterStats } from '@gtr/shared';
@@ -125,6 +125,7 @@ export class Engine {
   private autoAttacking = false;
   private autoAttackTimer = 0;
   private autoAttackTarget: Targetable | null = null;
+  private dumpsterDiveAutoTarget: Targetable | null = null;
   private sweepCharge: {
     elapsed: number;
     duration: number;
@@ -132,6 +133,15 @@ export class Engine {
     speed: number;
     hitTargets: Set<Targetable>;
     maxDamage: number;
+    savedAutoAttackTarget: Targetable | null;
+  } | null = null;
+  private tweakerSprintCharge: {
+    elapsed: number;
+    duration: number;
+    direction: THREE.Vector3;
+    speed: number;
+    hitTargets: Set<Targetable>;
+    damage: number;
     savedAutoAttackTarget: Targetable | null;
   } | null = null;
 
@@ -559,7 +569,7 @@ export class Engine {
       // Impact! Damage all hostiles in radius
       const radius = impact.ability.aoeRadius ?? 0;
       for (const target of this.npcs) {
-        if (target.dead || !target.isHostileTo(impact.owner)) continue;
+        if (target.dead || !target.isHostileTo(impact.owner) || this.buffSystem.isUntargetable(target)) continue;
         const dx = target.mesh.position.x - impact.groundPos.x;
         const dz = target.mesh.position.z - impact.groundPos.z;
         if (dx * dx + dz * dz > radius * radius) continue;
@@ -779,7 +789,7 @@ export class Engine {
         }
 
         for (const target of allTargets) {
-          if (target.dead) continue;
+          if (target.dead || this.buffSystem.isUntargetable(target)) continue;
           const dx = target.mesh.position.x - pool.center.x;
           const dz = target.mesh.position.z - pool.center.z;
           if (dx * dx + dz * dz > pool.radius * pool.radius) continue;
@@ -855,6 +865,12 @@ export class Engine {
     }
   }
 
+  saveDumpsterDiveAutoTarget(): void {
+    if (this.autoAttacking && this.autoAttackTarget) {
+      this.dumpsterDiveAutoTarget = this.autoAttackTarget;
+    }
+  }
+
   handleBuffExpired(target: Targetable, definition: BuffDefinition): void {
     if (definition.id === 'crotch-rot') {
       this.buffSystem.apply(target, RottenCrotchStun);
@@ -874,6 +890,13 @@ export class Engine {
           this.combatSystem.enterCombat(npc);
           if (npc.hp <= 0 && !npc.dead) npc.die();
         }
+      }
+      // Re-engage auto-attack if target is still valid
+      const saved = this.dumpsterDiveAutoTarget;
+      this.dumpsterDiveAutoTarget = null;
+      if (saved && !saved.dead && saved.isHostileTo(this.playerController)
+        && this.targetingSystem.currentTarget === saved && !this.buffSystem.isUntargetable(saved)) {
+        this.startAutoAttack(saved);
       }
     }
   }
@@ -914,7 +937,7 @@ export class Engine {
       // Determine who is currently in the cloud
       const inCloud = new Set<Targetable>();
       for (const target of targets) {
-        if (target.dead) continue;
+        if (target.dead || this.buffSystem.isUntargetable(target)) continue;
         const dx = target.mesh.position.x - cloud.center.x;
         const dz = target.mesh.position.z - cloud.center.z;
         if (dx * dx + dz * dz <= cloud.radius * cloud.radius) {
@@ -1023,7 +1046,7 @@ export class Engine {
     while (aura.elapsed >= aura.nextTickAt) {
       // Damage hostiles
       for (const npc of this.npcs) {
-        if (npc.dead || !npc.isHostileTo(this.playerController)) continue;
+        if (npc.dead || !npc.isHostileTo(this.playerController) || this.buffSystem.isUntargetable(npc)) continue;
         const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
         const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
         if (dx * dx + dz * dz <= meleeRange * meleeRange) {
@@ -1242,7 +1265,7 @@ export class Engine {
     // Hit detection: check all hostile NPCs
     const hitRadius = 1.0; // world units (~1.67 yards)
     for (const npc of this.npcs) {
-      if (npc.dead || charge.hitTargets.has(npc) || !npc.isHostileTo(this.playerController)) continue;
+      if (npc.dead || charge.hitTargets.has(npc) || !npc.isHostileTo(this.playerController) || this.buffSystem.isUntargetable(npc)) continue;
       const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
       const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
@@ -1262,7 +1285,7 @@ export class Engine {
       // AoE burst at end: full damage to all hostiles in melee range
       const meleeRange = this.playerController.autoAttackRange;
       for (const npc of this.npcs) {
-        if (npc.dead || !npc.isHostileTo(this.playerController)) continue;
+        if (npc.dead || !npc.isHostileTo(this.playerController) || this.buffSystem.isUntargetable(npc)) continue;
         const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
         const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
         const dist = Math.sqrt(dx * dx + dz * dz);
@@ -1279,6 +1302,75 @@ export class Engine {
 
       this.playerController.charging = false;
       this.sweepCharge = null;
+    }
+  }
+
+  // ── Tweaker Sprint charge ──────────────────────────────────────────
+
+  startTweakerSprintCharge(target: Targetable): void {
+    const player = this.playerController;
+    const dx = target.mesh.position.x - player.mesh.position.x;
+    const dz = target.mesh.position.z - player.mesh.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist < 0.01) return;
+
+    const direction = new THREE.Vector3(dx / dist, 0, dz / dist);
+    // Face the target
+    player.mesh.rotation.y = Math.atan2(direction.x, direction.z);
+
+    const speed = TweakerSprint.chargeSpeed!;
+    const chargeDist = Math.max(0, dist - yardsToUnits(1)); // stop 1 yard short
+    const duration = chargeDist / speed;
+
+    const savedAutoAttackTarget = this.autoAttackTarget;
+    this.stopAutoAttack();
+    player.charging = true;
+    player.chargeAnimSpeed = 3; // fast frantic run
+    this.tweakerSprintCharge = {
+      elapsed: 0,
+      duration,
+      direction,
+      speed,
+      hitTargets: new Set(),
+      damage: TweakerSprint.chargeMaxDamage!,
+      savedAutoAttackTarget,
+    };
+  }
+
+  private updateTweakerSprintCharge(dt: number): void {
+    if (!this.tweakerSprintCharge) return;
+
+    const charge = this.tweakerSprintCharge;
+    charge.elapsed += dt;
+
+    // Move player toward target
+    this.playerController.mesh.position.addScaledVector(charge.direction, charge.speed * dt);
+
+    // Hit detection: check all hostile NPCs (flat damage + slow debuff)
+    const hitRadius = 1.0; // world units (~1.67 yards)
+    for (const npc of this.npcs) {
+      if (npc.dead || charge.hitTargets.has(npc) || !npc.isHostileTo(this.playerController) || this.buffSystem.isUntargetable(npc)) continue;
+      const dx = this.playerController.mesh.position.x - npc.mesh.position.x;
+      const dz = this.playerController.mesh.position.z - npc.mesh.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist <= hitRadius) {
+        charge.hitTargets.add(npc);
+        this.combatSystem.applySweepDamage(this.playerController, npc, charge.damage);
+        this.buffSystem.apply(npc, TweakerSprintSlow);
+      }
+    }
+
+    // End charge
+    if (charge.elapsed >= charge.duration) {
+      // Re-engage auto-attack
+      const savedTarget = charge.savedAutoAttackTarget;
+      if (savedTarget && !savedTarget.dead && savedTarget.isHostileTo(this.playerController)) {
+        this.startAutoAttack(savedTarget);
+      }
+
+      this.playerController.charging = false;
+      this.playerController.chargeAnimSpeed = 1;
+      this.tweakerSprintCharge = null;
     }
   }
 
@@ -1302,7 +1394,7 @@ export class Engine {
     this.spawnKaboomGust(player.mesh.position, rotY, range);
 
     for (const npc of this.npcs) {
-      if (npc.dead || !npc.isHostileTo(player)) continue;
+      if (npc.dead || !npc.isHostileTo(player) || this.buffSystem.isUntargetable(npc)) continue;
       const dx = npc.mesh.position.x - player.mesh.position.x;
       const dz = npc.mesh.position.z - player.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);
@@ -1721,11 +1813,17 @@ export class Engine {
 
     // Sweep charge: move player before collision resolution in player update
     this.updateSweepCharge(deltaTime);
+    this.updateTweakerSprintCharge(deltaTime);
 
-    // Cancel sweep if stunned
+    // Cancel charges if stunned
     if (playerStunned && this.sweepCharge) {
       this.playerController.charging = false;
       this.sweepCharge = null;
+    }
+    if (playerStunned && this.tweakerSprintCharge) {
+      this.playerController.charging = false;
+      this.playerController.chargeAnimSpeed = 1;
+      this.tweakerSprintCharge = null;
     }
 
     this.mapManager.update(deltaTime);

@@ -6,7 +6,7 @@ import type { RegenSystem } from './RegenSystem';
 import type { BuffSystem } from './BuffSystem';
 import type { CollisionSystem } from '../physics/CollisionSystem';
 
-export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned' | 'casting' | 'moving';
+export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned' | 'casting' | 'moving' | 'locked';
 
 export interface CombatResult {
   success: boolean;
@@ -218,6 +218,9 @@ export class CombatSystem {
     if (!ability.usableWhileCCd && this.buffSystem.isStunned(attacker)) {
       return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     }
+    if (ability.id !== 'crack-rock' && this.buffSystem.hasBuff(attacker, 'dumpster-diving')) {
+      return { success: false, error: 'locked', errorMessage: 'Cannot use while Dumpster Diving' };
+    }
     const isGod = this.godModeEntities.has(attacker);
     if (!isGod && this.cooldowns.has(ability.id)) {
       return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
@@ -244,6 +247,9 @@ export class CombatSystem {
       const dist = this.getDistance(attacker.mesh.position, target.mesh.position);
       if (dist > ability.range!) {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
+      }
+      if (ability.minRange && dist < ability.minRange) {
+        return { success: false, error: 'out-of-range', errorMessage: 'Too close' };
       }
       if (!this.isFacing(attacker.mesh.position, attackerRotY, target.mesh.position)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
@@ -523,8 +529,10 @@ export class CombatSystem {
     this.enterCombat(target);
   }
 
-  /** Process damage through shields. Returns actual HP damage. Handles reflection. */
+  /** Process damage through shields. Returns actual HP damage. Handles reflection and damage-taken modifiers. */
   processDamageAbsorb(target: Targetable, damage: number, attacker: Targetable | null): number {
+    const damageTakenMult = this.buffSystem.getDamageTakenMultiplier(target);
+    damage = Math.round(damage * damageTakenMult);
     const { remaining, reflectDamage } = this.buffSystem.absorbDamage(target, damage);
     if (reflectDamage > 0 && attacker && !attacker.dead && !this.godModeEntities.has(attacker)) {
       attacker.hp = Math.max(0, attacker.hp - reflectDamage);

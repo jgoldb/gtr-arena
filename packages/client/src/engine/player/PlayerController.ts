@@ -166,6 +166,7 @@ export class PlayerController implements Targetable {
   movementSpeedModifier = 1;
   stunned = false;
   charging = false;
+  chargeAnimSpeed = 1;
   discombobulated = false;
   isMoving = false;
   moveFlags = 0;
@@ -313,7 +314,7 @@ export class PlayerController implements Targetable {
         isGrounded: this.grounded,
         velocityY: this.velocityY,
         turnSpeed: 0,
-        speedMultiplier: 1,
+        speedMultiplier: this.chargeAnimSpeed,
         strafeDirection: 0,
       });
       return;

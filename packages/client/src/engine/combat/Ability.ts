@@ -36,6 +36,8 @@ export {
   Shank,
   CrackRockSpeedBuff,
   CrackRock,
+  TweakerSprintSlow,
+  TweakerSprint,
   ArenaPreparationBuff,
   RestingBuff,
   PvPTrinket,

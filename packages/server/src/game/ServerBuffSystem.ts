@@ -253,6 +253,18 @@ export class ServerBuffSystem {
     return mult;
   }
 
+  getDamageTakenMultiplier(target: ServerEntity): number {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return 1;
+    let mult = 1;
+    for (const buff of buffs) {
+      for (const effect of buff.definition.effects) {
+        if (effect.type === 'damageTakenPercent' && this.isEffectActive(buff, effect)) mult += effect.value / 100;
+      }
+    }
+    return mult;
+  }
+
   getManaCostMultiplier(source: ServerEntity): number {
     const buffs = this.activeBuffs.get(source);
     if (!buffs) return 1;

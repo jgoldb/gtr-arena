@@ -5,7 +5,7 @@ import type { ServerBuffSystem } from './ServerBuffSystem.js';
 import type { ServerRegenSystem } from './ServerRegenSystem.js';
 import type { CollisionSystem } from './ServerMapManager.js';
 
-export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned' | 'casting';
+export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned' | 'casting' | 'locked';
 
 export interface CombatResult {
   success: boolean;
@@ -199,6 +199,9 @@ export class ServerCombatSystem {
     if (!ability.usableWhileCCd && this.buffSystem.isStunned(attacker)) {
       return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
     }
+    if (ability.id !== 'crack-rock' && this.buffSystem.hasBuff(attacker, 'dumpster-diving')) {
+      return { success: false, error: 'locked', errorMessage: 'Cannot use while Dumpster Diving' };
+    }
     if (!attacker.godMode && this.getCooldownRemaining(attacker.id, ability.id) > 0) {
       return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
     }
@@ -223,6 +226,9 @@ export class ServerCombatSystem {
       const dist = this.getDistance(attacker.x, attacker.z, tx, tz, attacker.y, target!.y);
       if (dist > ability.range! + ServerCombatSystem.RANGE_TOLERANCE) {
         return { success: false, error: 'out-of-range', errorMessage: 'Out of range' };
+      }
+      if (ability.minRange && dist < ability.minRange) {
+        return { success: false, error: 'out-of-range', errorMessage: 'Too close' };
       }
       if (!this.isFacing(attacker.x, attacker.z, attacker.rotationY, tx, tz)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
@@ -469,6 +475,8 @@ export class ServerCombatSystem {
   }
 
   processDamageAbsorb(target: ServerEntity, damage: number, attacker: ServerEntity | null): number {
+    const damageTakenMult = this.buffSystem.getDamageTakenMultiplier(target);
+    damage = Math.round(damage * damageTakenMult);
     const { remaining, reflectDamage } = this.buffSystem.absorbDamage(target, damage);
     if (reflectDamage > 0 && attacker && !attacker.dead && !attacker.godMode) {
       attacker.hp = Math.max(0, attacker.hp - reflectDamage);
