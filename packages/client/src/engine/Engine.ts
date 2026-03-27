@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, type Ability } from './combat/Ability';
+import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, ODStunDebuff, ParanoidDebuff, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { getCharacterStats } from '@gtr/shared';
@@ -872,8 +872,22 @@ export class Engine {
   }
 
   handleBuffExpired(target: Targetable, definition: BuffDefinition): void {
+    if (definition.id === 'paranoid') {
+      this.buffSystem.removeStacks(target, 'tweaking', 100);
+    }
     if (definition.id === 'crotch-rot') {
       this.buffSystem.apply(target, RottenCrotchStun);
+    }
+    if (definition.id === 'overdosing') {
+      this.buffSystem.apply(target, ODStunDebuff);
+    }
+    if (definition.id === 'od-stun') {
+      // Set Tweaking to 100 stacks
+      this.buffSystem.removeStacks(target, 'tweaking', 100);
+      this.buffSystem.addStacks(target, 'tweaking', 100);
+      if (!this.buffSystem.hasDebuff(target, 'paranoid')) {
+        this.buffSystem.apply(target, ParanoidDebuff);
+      }
     }
     if (definition.id === 'dumpster-diving' && target === this.playerController) {
       // AoE damage on emerge: 150 damage to nearby enemies within 5 yards
@@ -1619,6 +1633,7 @@ export class Engine {
     this.playerController.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(this.playerController, 'retard-strength'));
     this.playerController.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(this.playerController, 'full-retard'));
     this.playerController.setAbilityBuffActive('dumpster-diving', this.buffSystem.hasBuff(this.playerController, 'dumpster-diving'));
+    this.playerController.setAbilityBuffActive('overdosing', this.buffSystem.hasBuff(this.playerController, 'overdosing'));
 
     // Resting toggle
     const rKeyDown = this.input.isBindDown(keybindManager.getCode('rest'));

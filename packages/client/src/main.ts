@@ -483,7 +483,7 @@ function startMultiplayer(msg: S2C_GameStart): void {
     }
   };
   clientEngine.onAbilitySuccess = (abilityId) => {
-    if (abilityId === 'shank' || abilityId === 'pocket-sand' || abilityId === 'tweaker-sprint') {
+    if (abilityId === 'shank' || abilityId === 'pocket-sand' || abilityId === 'tweaker-sprint' || abilityId === 'gank') {
       const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
       if (mesh && mpCombatText) {
         mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
@@ -589,7 +589,7 @@ function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
     }
   };
   clientEngine.onAbilitySuccess = (abilityId) => {
-    if (abilityId === 'shank' || abilityId === 'pocket-sand' || abilityId === 'tweaker-sprint') {
+    if (abilityId === 'shank' || abilityId === 'pocket-sand' || abilityId === 'tweaker-sprint' || abilityId === 'gank') {
       const mesh = clientEngine!.getEntityMesh(clientEngine!.localId);
       if (mesh && mpCombatText) {
         mpCombatText.spawnText(mesh, '+15 Tweaking', '#3388ff', true);
@@ -828,6 +828,17 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (ability.range && dist > ability.range) return 'out-of-range';
       if (ability.minRange && dist < ability.minRange) return 'out-of-range';
+      // Line of sight check
+      const collision = clientEngine!.mapManager.collision;
+      if (!collision.hasLineOfSight(pos.x, pos.z, target.mesh.position.x, target.mesh.position.z, pos.y, target.mesh.position.y)) return 'not-in-los';
+      // Facing check (120° cone, matches server)
+      const hLen = Math.sqrt(dx * dx + dz * dz);
+      if (hLen > 0.001) {
+        const fwdX = Math.sin(player.mesh.rotation.y);
+        const fwdZ = Math.cos(player.mesh.rotation.y);
+        const dot = fwdX * ((target.mesh.position.x - pos.x) / hLen) + fwdZ * ((target.mesh.position.z - pos.z) / hLen);
+        if (dot <= 0.5) return 'not-facing';
+      }
     }
     if (ability.requiresTarget && !ability.requiresHostileTarget) {
       // Friendly-or-self targeted abilities (e.g. Chudmax channel)
@@ -842,6 +853,12 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
           const dy = pos.y - target.mesh.position.y;
           const dz = pos.z - target.mesh.position.z;
           if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range) return 'out-of-range';
+        }
+        // Line of sight check for friendly targets
+        if (ability.range) {
+          const pos = player.getPosition();
+          const collision = clientEngine!.mapManager.collision;
+          if (!collision.hasLineOfSight(pos.x, pos.z, target.mesh.position.x, target.mesh.position.z, pos.y, target.mesh.position.y)) return 'not-in-los';
         }
       }
     }
@@ -1839,7 +1856,7 @@ async function startPlayground(): Promise<void> {
   const { MapSelector } = await import('./ui/MapSelector');
   const { CharacterSelector } = await import('./ui/CharacterSelector');
   const { NpcSpawner } = await import('./ui/NpcSpawner');
-  const { DebugStun, DiscombobulateDebuff, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, yardsToUnits } = await import('./engine/combat/Ability');
+  const { DebugStun, DiscombobulateDebuff, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff, yardsToUnits } = await import('./engine/combat/Ability');
 
   const engine = new Engine(canvas);
   engine.isAdmin = isAdmin;
@@ -2004,7 +2021,7 @@ async function startPlayground(): Promise<void> {
   document.body.appendChild(castBarContainer);
 
   // Helper: apply post-cast effects
-  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank'];
+  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank', 'gank'];
 
   // Ground targeting state
   let pendingGroundAbility: Ability | null = null;
@@ -2054,12 +2071,24 @@ async function startPlayground(): Promise<void> {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
       }
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'dumpster-dive' || ability.id === 'tweaker-sprint') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'dumpster-dive' || ability.id === 'tweaker-sprint' || ability.id === 'gank') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
+      if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
+        engine.buffSystem.apply(engine.playerController, ParanoidDebuff);
+      }
     }
     if (ability.id === 'crack-rock') {
       engine.combatSystem.applyHeal(engine.playerController, 400);
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
+      if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
+        engine.buffSystem.apply(engine.playerController, ParanoidDebuff);
+      }
+    }
+    if (ability.id === 'gank') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && (target.dead || target.hp / target.maxHp < 0.30)) {
+        engine.combatSystem.clearCooldown('gank');
+      }
     }
     if (ability.id === 'tweaker-sprint') {
       const target = engine.targetingSystem.currentTarget;
@@ -2473,8 +2502,8 @@ async function startUISetup(): Promise<void> {
     }
   };
 
-  const { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot } = await import('./engine/combat/Ability');
-  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank'];
+  const { yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff } = await import('./engine/combat/Ability');
+  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank', 'gank'];
 
   function onAbilitySuccess(ability: Ability, groundPos?: import('three').Vector3): void {
     const targetPos = groundPos ?? engine.targetingSystem.currentTarget?.mesh.position.clone();
@@ -2489,12 +2518,24 @@ async function startUISetup(): Promise<void> {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
       }
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'dumpster-dive' || ability.id === 'tweaker-sprint') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'dumpster-dive' || ability.id === 'tweaker-sprint' || ability.id === 'gank') {
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
+      if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
+        engine.buffSystem.apply(engine.playerController, ParanoidDebuff);
+      }
     }
     if (ability.id === 'crack-rock') {
       engine.combatSystem.applyHeal(engine.playerController, 400);
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
+      if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
+        engine.buffSystem.apply(engine.playerController, ParanoidDebuff);
+      }
+    }
+    if (ability.id === 'gank') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && (target.dead || target.hp / target.maxHp < 0.30)) {
+        engine.combatSystem.clearCooldown('gank');
+      }
     }
     if (ability.id === 'tweaker-sprint') {
       const target = engine.targetingSystem.currentTarget;

@@ -416,7 +416,7 @@ export class PartyFrames {
       margin-top: 4px;
     ">${remaining} second${remaining !== 1 ? 's' : ''} remaining</div>`;
 
-    const stackLabel = aura.stacks !== undefined ? ` (${aura.stacks})` : '';
+    const stackLabel = aura.stacks != null ? ` (${aura.stacks})` : '';
     const desc = getBuffDescription(aura.definition, aura.stacks);
     const descHtml = desc.replace(/\n/g, '<br>');
 

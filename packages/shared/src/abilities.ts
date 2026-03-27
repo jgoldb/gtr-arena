@@ -673,6 +673,22 @@ export const DumpsterDive: Ability = {
   appliesSelfBuff: DumpsterDivingBuff,
 };
 
+export const Gank: Ability = {
+  id: 'gank',
+  name: 'Gank',
+  icon: '🗡️',
+  range: yardsToUnits(3),
+  manaCost: 100,
+  cooldown: 15,
+  damage: 0,
+  damageMin: 350,
+  damageMax: 420,
+  requiresHostileTarget: true,
+  isMelee: true,
+  description:
+    'Vicious attack dealing 350-420 damage. If the target is below 30% health, Gank\'s cooldown is instantly reset. +15 Tweaking.',
+};
+
 export const TweakerSprint: Ability = {
   id: 'tweaker-sprint',
   name: 'Tweaker Sprint',
@@ -687,6 +703,44 @@ export const TweakerSprint: Ability = {
   chargeMaxDamage: 100,
   description:
     'Dashes to the enemy, dealing 100 damage and reducing movement speed by 40% for 2 seconds to all enemies in your way. +15 Tweaking.',
+};
+
+export const OverdosingBuff: BuffDefinition = {
+  id: 'overdosing',
+  name: 'Overdosing',
+  icon: '💉',
+  duration: 6,
+  type: 'buff',
+  description: 'Overdosing! +50% damage dealt, +30% movement speed, abilities cost no mana.',
+  effects: [
+    { type: 'damageDealtPercent', value: 50 },
+    { type: 'movementSpeedPercent', value: 30 },
+    { type: 'manaCostPercent', value: -100 },
+  ],
+  unremovable: true,
+};
+
+export const ODStunDebuff: BuffDefinition = {
+  id: 'od-stun',
+  name: 'Stunned',
+  icon: '💉',
+  duration: 2,
+  type: 'debuff',
+  description: 'Stunned from overdosing.',
+  effects: [{ type: 'stun', value: 0 }],
+};
+
+export const OD: Ability = {
+  id: 'od',
+  name: 'OD',
+  icon: '💉',
+  manaCost: 200,
+  cooldown: 90,
+  damage: 0,
+  requiresHostileTarget: false,
+  description:
+    "It's an overdose! For 6 seconds: +50% damage dealt, +30% movement speed, abilities cost no mana. Afterwards, you are stunned for 2 seconds and Tweaking is set to 100 stacks.",
+  appliesSelfBuff: OverdosingBuff,
 };
 
 export const PvPTrinket: Ability = {

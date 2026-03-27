@@ -706,6 +706,7 @@ export class ClientEngine {
         this.playerController.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
         this.playerController.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
         this.playerController.setAbilityBuffActive('dumpster-diving', hasBuff('dumpster-diving'));
+        this.playerController.setAbilityBuffActive('overdosing', hasBuff('overdosing'));
         this.playerController.setDiscombobulated(this.localBuffs.some(b => b.id === 'discombobulate'));
 
         // Blind: activate/deactivate effect, clear target on first application
@@ -731,6 +732,7 @@ export class ClientEngine {
           (entity.model as any).dumpsterDiveHostile = dumpsterDiving && entity.team !== (this.playerController as any).team;
         }
         entity.model.setAbilityBuffActive('dumpster-diving', dumpsterDiving);
+        entity.model.setAbilityBuffActive('overdosing', hasBuff('overdosing'));
         entity.model.setResting(hasBuff('resting'));
       }
     }
@@ -769,7 +771,7 @@ export class ClientEngine {
       this.onAbilitySuccess?.(msg.abilityId);
       if (msg.manaStolen) this.onManaDrained?.(msg.manaStolen);
       // Optimistically update local buff stacks (server will confirm in next snapshot)
-      if (msg.abilityId === 'shank' || msg.abilityId === 'pocket-sand' || msg.abilityId === 'sticky-fingers' || msg.abilityId === 'tweaker-sprint') {
+      if (msg.abilityId === 'shank' || msg.abilityId === 'pocket-sand' || msg.abilityId === 'sticky-fingers' || msg.abilityId === 'tweaker-sprint' || msg.abilityId === 'gank') {
         const buff = this.localBuffs.find(b => b.id === 'tweaking');
         if (buff && buff.stacks !== undefined) {
           buff.stacks = Math.min(buff.stacks + 15, buff.maxStacks ?? Infinity);

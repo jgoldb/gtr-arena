@@ -40,6 +40,10 @@ export {
   TweakerSprint,
   ArenaPreparationBuff,
   RestingBuff,
+  OverdosingBuff,
+  ODStunDebuff,
+  OD,
+  ParanoidDebuff,
   PvPTrinket,
 } from '@gtr/shared';
 

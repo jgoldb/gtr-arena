@@ -61,6 +61,10 @@ export class Crackhead extends CharacterModel {
   private fullRetardActive = false;
   private fullRetardWeight = 0;
 
+  // OD (Overdosing) buff visual state
+  private overdosingActive = false;
+  private overdosingWeight = 0;
+
   // Twitch state
   private twitchTimer = 0;
   private twitchIntensity = 0;
@@ -693,6 +697,35 @@ export class Crackhead extends CharacterModel {
       });
     }
 
+    // Overdosing: intense purple/pink pulsating glow + slight body vibration
+    const odTarget = this.overdosingActive ? 1 : 0;
+    this.overdosingWeight += (odTarget - this.overdosingWeight) * Math.min(1, 10 * dt);
+    if (this.overdosingWeight > 0.01) {
+      const w = this.overdosingWeight;
+      const pulse = 0.5 + Math.sin(this.idleTime * 12) * 0.5;
+      const glow = w * (0.4 + pulse * 0.5);
+      // Body vibration — rapid subtle shaking
+      this.bodyGroup.rotation.z += Math.sin(this.idleTime * 40) * 0.02 * w;
+      this.headGroup.rotation.z += Math.sin(this.idleTime * 45) * 0.03 * w;
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.emissive) {
+            mat.emissive.setRGB(0.7 * w, 0.1 * w, 0.9 * w);
+            mat.emissiveIntensity = 1 + glow;
+          }
+        }
+      });
+    } else if (this.overdosingWeight > 0) {
+      this.overdosingWeight = 0;
+      this.group.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.emissive) { mat.emissive.setRGB(0, 0, 0); mat.emissiveIntensity = 1; }
+        }
+      });
+    }
+
     // Scratching (only when not running and not in combat)
     if (this.runWeight < 0.1 && this.combatStanceWeight < 0.1) {
       this.updateScratching(dt);
@@ -787,6 +820,8 @@ export class Crackhead extends CharacterModel {
     if (abilityId === 'sticky-fingers') return 0.6;
     if (abilityId === 'crack-rock') return 0.8;
     if (abilityId === 'dumpster-dive') return 0.3; // brief crouch at start; main visual is buff-driven
+    if (abilityId === 'od') return 0.8;
+    if (abilityId === 'gank') return 0.7;
     if (abilityId === 'pvp-trinket') return 0.5;
     return 0.6;
   }
@@ -797,6 +832,8 @@ export class Crackhead extends CharacterModel {
     else if (abilityId === 'sticky-fingers') this.animateStickyFingers(t);
     else if (abilityId === 'crack-rock') this.animateCrackRock(t);
     else if (abilityId === 'dumpster-dive') this.animateDumpsterDiveStart(t);
+    else if (abilityId === 'od') this.animateOD(t);
+    else if (abilityId === 'gank') this.animateGank(t);
     else if (abilityId === 'pvp-trinket') this.animatePvPTrinket(t);
   }
 
@@ -981,6 +1018,64 @@ export class Crackhead extends CharacterModel {
     }
   }
 
+  // ── Gank Ability Animation ───────────────────────────────────
+
+  private animateGank(t: number): void {
+    // Vicious overhead slash: wind up high, slam down hard, recover
+    // Knife is visible the whole time
+
+    if (t < 0.15) {
+      // Phase 1: Wind up — raise right arm high, lean back, coil body
+      const p = t / 0.15;
+      const ease = p * p;
+      this.knifeGroup.visible = true;
+      this.rightArmGroup.rotation.x -= 1.2 * ease;   // arm swings back/up
+      this.rightArmGroup.rotation.z -= 0.4 * ease;    // arm out slightly
+      this.bodyGroup.rotation.x -= 0.15 * ease;       // lean back
+      this.leftArmGroup.rotation.x += 0.3 * ease;     // left arm forward for balance
+      this.leftArmGroup.rotation.z += 0.2 * ease;     // left arm out
+    } else if (t < 0.35) {
+      // Phase 2: Vicious downward strike — explosive forward slam
+      const p = (t - 0.15) / 0.20;
+      const ease = 1 - Math.pow(1 - p, 3); // ease-out snap
+      this.knifeGroup.visible = true;
+      // Arm goes from raised (-1.2) to thrust forward (+1.0)
+      this.rightArmGroup.rotation.x += (-1.2 + 2.2 * ease);
+      this.rightArmGroup.rotation.z += (-0.4 + 0.2 * ease);
+      // Body lunges forward hard
+      this.bodyGroup.rotation.x += (-0.15 + 0.4 * ease);
+      // Left arm swings back as counterweight
+      this.leftArmGroup.rotation.x += (0.3 - 0.7 * ease);
+      this.leftArmGroup.rotation.z += (0.2 - 0.35 * ease);
+      // Head follows the strike
+      this.headGroup.rotation.x += 0.15 * ease;
+    } else if (t < 0.50) {
+      // Phase 3: Hold impact — slight twist for emphasis
+      const p = (t - 0.35) / 0.15;
+      const ease = p * p * (3 - 2 * p);
+      this.knifeGroup.visible = true;
+      this.rightArmGroup.rotation.x += 1.0 - 0.15 * ease;
+      this.rightArmGroup.rotation.z += -0.2;
+      this.bodyGroup.rotation.x += 0.25 - 0.05 * ease;
+      this.bodyGroup.rotation.y += 0.12 * ease;        // twist torso
+      this.leftArmGroup.rotation.x += -0.4;
+      this.leftArmGroup.rotation.z += -0.15;
+      this.headGroup.rotation.x += 0.15;
+    } else {
+      // Phase 4: Recovery — return to idle
+      const p = (t - 0.50) / 0.50;
+      const ease = p * p * (3 - 2 * p);
+      this.knifeGroup.visible = ease < 0.7;
+      this.rightArmGroup.rotation.x += (1.0 - 0.15) * (1 - ease);
+      this.rightArmGroup.rotation.z += -0.2 * (1 - ease);
+      this.bodyGroup.rotation.x += 0.20 * (1 - ease);
+      this.bodyGroup.rotation.y += 0.12 * (1 - ease);
+      this.leftArmGroup.rotation.x += -0.4 * (1 - ease);
+      this.leftArmGroup.rotation.z += -0.15 * (1 - ease);
+      this.headGroup.rotation.x += 0.15 * (1 - ease);
+    }
+  }
+
   // ── Sticky Fingers Ability Animation ─────────────────────────
 
   private animateStickyFingers(t: number): void {
@@ -1041,6 +1136,8 @@ export class Crackhead extends CharacterModel {
       this.retardStrengthActive = active;
     } else if (buffId === 'full-retard') {
       this.fullRetardActive = active;
+    } else if (buffId === 'overdosing') {
+      this.overdosingActive = active;
     } else if (buffId === 'dumpster-diving') {
       if (active && !this.dumpsterDiveActive) {
         this.dumpsterDiveActive = true;
@@ -1138,6 +1235,44 @@ export class Crackhead extends CharacterModel {
 
       scene.add(mesh);
       this.crackRockParticles.push({ mesh, vel, life: 0.6 + Math.random() * 0.4 });
+    }
+  }
+
+  // ── OD Ability Animation ────────────────────────────────────
+
+  private animateOD(t: number): void {
+    // Character jabs arm, body tenses and head snaps back
+    if (t < 0.2) {
+      // Phase 1: Left arm raises to inject
+      const p = t / 0.2;
+      const ease = p * p * (3 - 2 * p);
+      this.leftArmGroup.rotation.x += 0.7 * ease;
+      this.leftArmGroup.rotation.z += 0.4 * ease;
+      this.rightArmGroup.rotation.x += 0.3 * ease; // right hand steadies
+      this.rightArmGroup.rotation.z -= 0.2 * ease;
+    } else if (t < 0.5) {
+      // Phase 2: Body tenses, head snaps back — the rush hits
+      const p = (t - 0.2) / 0.3;
+      const ease = p * p * (3 - 2 * p);
+      this.leftArmGroup.rotation.x += 0.7;
+      this.leftArmGroup.rotation.z += 0.4;
+      this.rightArmGroup.rotation.x += 0.3;
+      this.rightArmGroup.rotation.z -= 0.2;
+      this.bodyGroup.rotation.x -= 0.25 * ease; // lean back
+      this.headGroup.rotation.x -= 0.3 * ease; // head snaps back
+      // Arms splay outward as the rush hits
+      this.leftArmGroup.rotation.z += 0.3 * ease;
+      this.rightArmGroup.rotation.z -= 0.3 * ease;
+    } else {
+      // Phase 3: Recovery — arms drop, body returns
+      const p = (t - 0.5) / 0.5;
+      const ease = p * p * (3 - 2 * p);
+      this.leftArmGroup.rotation.x += 0.7 * (1 - ease);
+      this.leftArmGroup.rotation.z += 0.7 * (1 - ease);
+      this.rightArmGroup.rotation.x += 0.3 * (1 - ease);
+      this.rightArmGroup.rotation.z -= 0.5 * (1 - ease);
+      this.bodyGroup.rotation.x -= 0.25 * (1 - ease);
+      this.headGroup.rotation.x -= 0.3 * (1 - ease);
     }
   }
 

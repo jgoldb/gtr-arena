@@ -8,7 +8,7 @@ export interface ActionBarSlot {
   keyCode: string; // KeyboardEvent.code ("Digit1", etc.)
 }
 
-export type AbilityUsabilityStatus = 'usable' | 'no-target' | 'out-of-range' | 'not-enough-resource' | 'locked';
+export type AbilityUsabilityStatus = 'usable' | 'no-target' | 'out-of-range' | 'not-facing' | 'not-in-los' | 'not-enough-resource' | 'locked';
 
 export interface ActionBarCallbacks {
   onActivate: (ability: Ability) => void;
@@ -214,7 +214,7 @@ export class ActionBar {
       const onCooldown = cdRemaining > 0 || gcdRemaining > 0;
 
       // Status tint: red for out-of-range, blue for not-enough-resource
-      if (status === 'out-of-range') {
+      if (status === 'out-of-range' || status === 'not-facing' || status === 'not-in-los') {
         statusOv.style.background = 'rgba(255, 40, 40, 0.35)';
       } else if (status === 'not-enough-resource') {
         statusOv.style.background = 'rgba(40, 80, 220, 0.4)';

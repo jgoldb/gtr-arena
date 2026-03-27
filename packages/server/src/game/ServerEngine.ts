@@ -8,7 +8,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { GLOBAL_COOLDOWN, yardsToUnits, MoveFlags, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
+import { GLOBAL_COOLDOWN, yardsToUnits, MoveFlags, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -284,6 +284,17 @@ export class ServerEngine {
       }
       if (definition.id === 'crotch-rot') {
         this.buffSystem.apply(target, RottenCrotchStun);
+      }
+      if (definition.id === 'overdosing') {
+        this.buffSystem.apply(target, ODStunDebuff);
+      }
+      if (definition.id === 'od-stun') {
+        // Set Tweaking to 100 stacks
+        this.buffSystem.removeStacks(target, 'tweaking', 100);
+        this.buffSystem.addStacks(target, 'tweaking', 100);
+        if (!this.buffSystem.hasDebuff(target, 'paranoid')) {
+          this.buffSystem.apply(target, ParanoidDebuff);
+        }
       }
       if (definition.id === 'dumpster-diving') {
         // AoE damage on emerge: 150 damage to nearby enemies within 5 yards
@@ -1326,6 +1337,7 @@ export class ServerEngine {
       }
       if (!this.combatSystem.hasLineOfSight(entity.x, entity.z, state.target.x, state.target.z, entity.y, state.target.y)) {
         state.timer = entity.autoAttackSpeed;
+        this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Not in line of sight' });
         return;
       }
       // Facing check
@@ -1337,6 +1349,7 @@ export class ServerEngine {
         const fwdZ = Math.cos(entity.rotationY);
         if (fwdX * (toX / len) + fwdZ * (toZ / len) <= 0.5) {
           state.timer = 0;
+          this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Not facing target' });
           return;
         }
       }
@@ -1417,7 +1430,7 @@ export class ServerEngine {
 
   // ── Ability success effects ─────────────────────────────────────────
 
-  private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank'];
+  private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank', 'gank'];
 
   private onAbilitySuccess(entity: ServerEntity, ability: Ability, groundTarget?: { x: number; z: number }): void {
     const abilityEvent: S2C_AbilityEffect = {
@@ -1453,10 +1466,22 @@ export class ServerEngine {
     if (ability.id === 'tweaker-sprint') {
       this.startTweakerSprintCharge(entity);
     }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'tweaker-sprint') {
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'tweaker-sprint' || ability.id === 'gank') {
       this.buffSystem.addStacks(entity, 'tweaking', 15);
       if (this.buffSystem.getStacks(entity, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(entity, 'paranoid')) {
         this.buffSystem.apply(entity, ParanoidDebuff);
+      }
+    }
+    if (ability.id === 'gank') {
+      const target = this.getTarget(entity.id);
+      if (target && (target.dead || target.hp / target.maxHp < 0.30)) {
+        this.combatSystem.clearCooldown(entity.id, 'gank');
+        this.onSendToPlayer?.(entity.id, {
+          type: 'cooldown_update',
+          abilityId: 'gank',
+          remaining: 0,
+          total: 0,
+        } as S2C_CooldownUpdate);
       }
     }
     if (ability.id === 'crack-rock') {
