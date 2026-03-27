@@ -470,12 +470,10 @@ export class ClientEngine {
       vx: 0, vz: 0, // keyframes don't carry velocity — entities re-acquire it on next delta
     })));
 
-    // Snap dead reckoning to keyframe positions (velocity unknown in keyframes)
-    for (const snap of msg.entities) {
-      if (snap.id !== this.localEntityId) {
-        this.deadReckoning.snapEntity(snap.id, snap.x, snap.y, snap.z, snap.rotationY);
-      }
-    }
+    // Don't snap dead reckoning from keyframes — the 30Hz position updates
+    // and position relays already keep DR state current with velocity and
+    // movement flags. Snapping resets all of that, causing a visible stutter
+    // every 5 seconds for moving entities.
 
     // Apply full entity state
     for (const snap of msg.entities) {
@@ -1406,9 +1404,6 @@ export class ClientEngine {
   }
 
   private update(dt: number): void {
-    // Feed latest RTT to dead reckoning for one-way latency compensation
-    this.deadReckoning.setRtt(this.network.rtt);
-
     // Compute movement speed modifier from local buffs + god mode
     let moveMult = 1;
     for (const b of this.localBuffs) {
@@ -1614,7 +1609,21 @@ export class ClientEngine {
       let interpVz = 0;
       if (dr) {
         entity.isMoving = dr.isMoving;
-        entity.mesh.position.set(dr.x, dr.y, dr.z);
+        // When grounded (vy=0), resolve Y against the client's collision system
+        // so remote players track animated surfaces like the Celestial Ballroom
+        // elevator. Between server updates, DR holds Y static for grounded
+        // entities, but the platform's collider centerY updates every frame.
+        // The 1-unit threshold prevents snapping to distant surfaces (e.g. when
+        // an entity walks off a ledge — vy is still 0 for the first frame).
+        let finalY = dr.y;
+        if (dr.vy === 0) {
+          const groundY = this.mapManager.collision.resolve(dr.x, dr.z, dr.y, 0.4).groundY;
+          const diff = groundY - dr.y;
+          if (diff > 0.1 || (diff < 0 && diff > -1)) {
+            finalY = groundY;
+          }
+        }
+        entity.mesh.position.set(dr.x, finalY, dr.z);
         entity.mesh.rotation.y = dr.rotationY;
         interpVx = dr.vx;
         interpVz = dr.vz;

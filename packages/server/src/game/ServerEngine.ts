@@ -8,7 +8,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { GLOBAL_COOLDOWN, yardsToUnits, MoveFlags, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
+import { GLOBAL_COOLDOWN, yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -1029,13 +1029,6 @@ export class ServerEngine {
     // Process queued abilities — fire any that are no longer blocked after GCD/cast updates
     this.processAbilityQueue(dt);
 
-    // Server-side movement simulation: extrapolate moving entities forward
-    // using their last known movement flags/velocity. This provides smoother
-    // position data in the broadcast when a client's update is delayed (TCP
-    // stall, Wi-Fi spike). The server predicts where the player IS based on
-    // their movement intent, rather than relaying a stale position.
-    this.simulateMovement(dt);
-
     // Build and broadcast state (events are bundled into delta updates)
     this.broadcastGameState();
 
@@ -1048,65 +1041,6 @@ export class ServerEngine {
 
     // Check win condition
     this.checkWinCondition();
-  }
-
-  // ── Server-side movement simulation ─────────────────────────────────
-  // Extrapolate moving entities forward by dt using their movement intent.
-  // This keeps broadcast positions fresh when a client's position update
-  // is delayed by network jitter. Only applies to entities whose last
-  // client update is stale (>1 tick old). The next client update will
-  // overwrite this predicted position with the ground truth.
-
-  private simulateMovement(dt: number): void {
-    const now = performance.now();
-    const staleThreshold = ServerEngine.TICK_MS * 1.5; // consider stale after 1.5 ticks
-
-    for (const entity of this.entities) {
-      if (!entity.isMoving || entity.dead || entity.stunned || entity.charging) continue;
-      if (this.frozenEntities.has(entity.id)) continue;
-      if (this.sweepCharges.has(entity.id)) continue;
-
-      // Only simulate if the client's last position update is stale
-      if (entity.lastPositionUpdateTime > 0 &&
-          (now - entity.lastPositionUpdateTime) < staleThreshold) continue;
-
-      // Reconstruct velocity from moveFlags + rotation (same as client dead reckoning)
-      let vx = entity.vx;
-      let vz = entity.vz;
-
-      if (entity.moveFlags !== 0 && entity.moveSpeed > 0) {
-        const sinR = Math.sin(entity.rotationY);
-        const cosR = Math.cos(entity.rotationY);
-        let dx = 0;
-        let dz = 0;
-        if (entity.moveFlags & MoveFlags.FORWARD)      { dx += sinR; dz += cosR; }
-        if (entity.moveFlags & MoveFlags.BACKWARD)     { dx -= sinR; dz -= cosR; }
-        if (entity.moveFlags & MoveFlags.STRAFE_RIGHT) { dx -= cosR; dz += sinR; }
-        if (entity.moveFlags & MoveFlags.STRAFE_LEFT)  { dx += cosR; dz -= sinR; }
-        const len = Math.sqrt(dx * dx + dz * dz);
-        if (len > 0.001) {
-          const scale = entity.moveSpeed / len;
-          vx = dx * scale;
-          vz = dz * scale;
-        }
-      }
-
-      // Apply simulated movement
-      const newX = entity.x + vx * dt;
-      const newZ = entity.z + vz * dt;
-
-      // Resolve against collision (prevent walking through walls)
-      const resolved = this.collision.resolve(newX, newZ, entity.y, entity.collisionRadius);
-      entity.x = resolved.x;
-      entity.z = resolved.z;
-      entity.vx = vx;
-      entity.vz = vz;
-
-      // Extrapolate rotation if turning
-      if (entity.turnSpeed !== 0) {
-        entity.rotationY += entity.turnSpeed * dt;
-      }
-    }
   }
 
   // ── Casting ──────────────────────────────────────────────────────────

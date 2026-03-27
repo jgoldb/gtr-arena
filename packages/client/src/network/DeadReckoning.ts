@@ -136,20 +136,8 @@ function arcExtrapolate(
 export class DeadReckoning {
   private entities = new Map<string, EntityDRState>();
 
-  // ── One-way latency compensation ─────────────────────────────────────
-  // When predicting remote entity positions, we add estimated one-way latency
-  // (RTT / 2) to the extrapolation time. This pushes the predicted position
-  // forward to where the entity actually IS NOW, rather than where it was when
-  // the server sent the packet. On a 60ms RTT connection this eliminates 30ms
-  // of visual lag — very noticeable in fast-paced combat.
-  private oneWayLatencyMs = 0;
-
   // How quickly position errors are blended out (seconds).
-  // Scales with RTT: higher latency means larger corrections (because we're
-  // predicting further ahead), so we need more time to blend them out smoothly.
-  private static readonly BASE_CORRECTION_TIME = 0.15;
-  private static readonly MIN_CORRECTION_TIME = 0.1;
-  private static readonly MAX_CORRECTION_TIME = 0.25;
+  private static readonly CORRECTION_TIME = 0.15;
 
   // Max time to extrapolate beyond latest server state (seconds).
   // Caps how far ahead we predict to prevent runaway drift on packet loss.
@@ -168,27 +156,6 @@ export class DeadReckoning {
 
   // Gravity for Y extrapolation (must match PlayerController/ServerEntity)
   private static readonly GRAVITY = 20;
-
-  /**
-   * Update network latency estimate. Call whenever RTT is updated (e.g. from ping/pong).
-   * Dead reckoning uses half-RTT to compensate for one-way transport delay.
-   */
-  setRtt(rttMs: number): void {
-    this.oneWayLatencyMs = rttMs / 2;
-  }
-
-  /** RTT-adaptive correction time — scales with latency for smoother blending. */
-  private get correctionTime(): number {
-    // Higher latency = predicting further ahead = larger errors = need more blend time
-    const rttFactor = Math.max(0, this.oneWayLatencyMs - 20) / 200; // 0 at 20ms, 1 at 220ms
-    return Math.min(
-      DeadReckoning.MAX_CORRECTION_TIME,
-      Math.max(
-        DeadReckoning.MIN_CORRECTION_TIME,
-        DeadReckoning.BASE_CORRECTION_TIME + rttFactor * 0.1,
-      ),
-    );
-  }
 
   /**
    * Feed new server position data for an entity.
@@ -223,9 +190,8 @@ export class DeadReckoning {
     }
 
     // Compute where we were displaying this entity right now (predicted + residual error).
-    // Add one-way latency so we predict from the actual send time, not receive time.
     const elapsed = Math.min(
-      (now - existing.receiveTime + this.oneWayLatencyMs) / 1000,
+      (now - existing.receiveTime) / 1000,
       DeadReckoning.MAX_EXTRAPOLATION,
     );
 
@@ -352,10 +318,8 @@ export class DeadReckoning {
     if (!state) return null;
 
     const now = performance.now();
-    // Add one-way latency to extrapolation so entities are rendered at their
-    // estimated current position, not where they were when the packet was sent.
     const elapsed = Math.min(
-      (now - state.receiveTime + this.oneWayLatencyMs) / 1000,
+      (now - state.receiveTime) / 1000,
       DeadReckoning.MAX_EXTRAPOLATION,
     );
 
@@ -373,10 +337,9 @@ export class DeadReckoning {
 
     // Decay position error exponentially.
     // Use faster correction during stop transitions to settle quickly without snapping.
-    // Base correction time scales with RTT for smoother blending on laggy connections.
     const correctionTime = state.stopBlendRemaining > 0
       ? DeadReckoning.STOP_CORRECTION_TIME
-      : this.correctionTime;
+      : DeadReckoning.CORRECTION_TIME;
     if (state.stopBlendRemaining > 0) {
       state.stopBlendRemaining = Math.max(0, state.stopBlendRemaining - dt);
     }

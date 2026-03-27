@@ -529,7 +529,8 @@ export class AuthScreen {
       "I'm chorgin' on em!",
       "It's a goon angle",
       "I don't care for the blacks",
-      "Tore open my dang scapuloid"
+      "Tore open my dang scapuloid",
+      "Only one more day til breakfast...",
     ];
     let shuffledThoughts: string[] = [];
     let thoughtIndex = 0;
