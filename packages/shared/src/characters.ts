@@ -7,7 +7,7 @@ import {
   TweakingBuff,
 } from './abilities.js';
 
-export type CharacterId = 'janitor' | 'dr-retardo' | 'crackhead' | 'rabbi-zehnwirth';
+export type CharacterId = 'janitor' | 'dr-retardo' | 'crackhead' | 'rabbi-zehnwirth' | 'brad-clemons' | 'gourd-of-war';
 
 export interface CharacterStats {
   id: CharacterId;
@@ -94,6 +94,38 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.15,
     hpRegen: 30,
     manaRegen: 20,
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
+    playgroundOnly: true,
+  },
+  'brad-clemons': {
+    id: 'brad-clemons',
+    displayName: 'Brad Clemons',
+    baseMaxHp: 3200,
+    baseMaxMana: 1200,
+    autoAttackDamageMin: 175,
+    autoAttackDamageMax: 220,
+    autoAttackSpeed: 2.4,
+    autoAttackRange: 2.0,
+    critChance: 0.18,
+    dodgeChance: 0.12,
+    hpRegen: 35,
+    manaRegen: 14,
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
+    playgroundOnly: true,
+  },
+  'gourd-of-war': {
+    id: 'gourd-of-war',
+    displayName: 'Gourd of War',
+    baseMaxHp: 3400,
+    baseMaxMana: 1000,
+    autoAttackDamageMin: 155,
+    autoAttackDamageMax: 195,
+    autoAttackSpeed: 2.3,
+    autoAttackRange: 2.4,
+    critChance: 0.15,
+    dodgeChance: 0.10,
+    hpRegen: 34,
+    manaRegen: 12,
     abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
     playgroundOnly: true,
   },

@@ -280,7 +280,7 @@ export abstract class CharacterModel {
     this.leftLegGroup.rotation.set(0, 0, 0);
     this.rightLegGroup.rotation.set(0, 0, 0);
     this.bodyGroup.rotation.set(0, 0, 0);
-    this.bodyGroup.position.y = 0;
+    this.bodyGroup.position.set(0, 0, 0);
     this.headGroup.rotation.set(0, 0, 0);
 
     // --- Idle layer (fades out during run) ---
@@ -738,7 +738,7 @@ export abstract class CharacterModel {
     this.leftLegGroup.rotation.set(0, 0, 0);
     this.rightLegGroup.rotation.set(0, 0, 0);
     this.bodyGroup.rotation.set(0, 0, 0);
-    this.bodyGroup.position.y = 0;
+    this.bodyGroup.position.set(0, 0, 0);
     this.headGroup.rotation.set(0, 0, 0);
 
     // Phase timing

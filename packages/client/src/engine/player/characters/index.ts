@@ -4,11 +4,15 @@ export { TheJanitor } from './TheJanitor';
 export { DrRetardo } from './DrRetardo';
 export { Crackhead } from './Crackhead';
 export { RabbiZehnwirth } from './RabbiZehnwirth';
+export { BradClemons } from './BradClemons';
+export { GourdOfWar } from './GourdOfWar';
 
 import { TheJanitor } from './TheJanitor';
 import { DrRetardo } from './DrRetardo';
 import { Crackhead } from './Crackhead';
 import { RabbiZehnwirth } from './RabbiZehnwirth';
+import { BradClemons } from './BradClemons';
+import { GourdOfWar } from './GourdOfWar';
 import type { CharacterModel } from './CharacterModel';
 import type { CharacterId } from '@gtr/shared';
 
@@ -27,6 +31,10 @@ export function createCharacter(id: CharacterId): CharacterModel {
       return new Crackhead();
     case 'rabbi-zehnwirth':
       return new RabbiZehnwirth();
+    case 'brad-clemons':
+      return new BradClemons();
+    case 'gourd-of-war':
+      return new GourdOfWar();
     default:
       return new TheJanitor();
   }
