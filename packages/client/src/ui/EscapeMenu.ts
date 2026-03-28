@@ -19,6 +19,8 @@ export interface EscapeMenuCallbacks {
   confirmExit?: boolean | (() => boolean);
   /** Called when the player clicks the Keybinds button. */
   onKeybinds?: () => void;
+  /** Called when the player clicks the Audio button. */
+  onAudio?: () => void;
   /** If provided, these buttons replace the default Exit Game button. */
   customButtons?: EscapeMenuButton[];
 }
@@ -96,6 +98,31 @@ export class EscapeMenu {
         callbacks.onKeybinds!();
       });
       this.box.appendChild(keybindsBtn);
+    }
+
+    // Audio button
+    if (callbacks.onAudio) {
+      const audioBtn = document.createElement('button');
+      audioBtn.textContent = 'Audio';
+      audioBtn.style.cssText = `
+        display: block; width: 100%;
+        padding: 10px 24px; font-size: 14px;
+        background: rgba(60, 60, 100, 0.8); color: #ddd;
+        border: 1px solid rgba(100, 100, 160, 0.3); border-radius: 4px;
+        cursor: pointer; outline: none;
+        font-family: inherit;
+        margin-bottom: 10px;
+      `;
+      audioBtn.addEventListener('mouseenter', () => {
+        audioBtn.style.background = 'rgba(70, 70, 120, 0.9)';
+      });
+      audioBtn.addEventListener('mouseleave', () => {
+        audioBtn.style.background = 'rgba(60, 60, 100, 0.8)';
+      });
+      audioBtn.addEventListener('click', () => {
+        callbacks.onAudio!();
+      });
+      this.box.appendChild(audioBtn);
     }
 
     if (callbacks.customButtons) {

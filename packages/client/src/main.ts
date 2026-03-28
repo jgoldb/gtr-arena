@@ -14,6 +14,8 @@ import { FloatingCombatText } from './ui/FloatingCombatText';
 import { Nameplates } from './ui/Nameplates';
 import { UnitTooltip } from './ui/UnitTooltip';
 import { EscapeMenu, type EscapeMenuButton } from './ui/EscapeMenu';
+import { AudioSettingsDialog } from './ui/AudioSettingsDialog';
+import { audioSettings } from './ui/AudioSettings';
 import { KeybindMenu } from './ui/KeybindMenu';
 import { DebugHUD } from './ui/DebugHUD';
 import { ReconnectOverlay } from './ui/ReconnectOverlay';
@@ -65,7 +67,7 @@ const lobbyMusic = {
   gainNode: null as GainNode | null,
   sourceNode: null as AudioBufferSourceNode | null,
   fadingOut: false,
-  volume: 0.25,
+  get volume(): number { return audioSettings.masterVolume; },
 
   onVisibilityChange(): void {
     if (this.fadingOut || !this.audioCtx || !this.gainNode) return;
@@ -97,6 +99,7 @@ const lobbyMusic = {
   _onUserGesture: null as (() => void) | null,
 
   async start(): Promise<void> {
+    if (!audioSettings.enableMusic) return;
     // Already playing — nothing to do
     if (this.audioCtx && !this.fadingOut) return;
     // Was fading out — wait for cleanup then restart
@@ -166,7 +169,27 @@ const lobbyMusic = {
       this.sourceNode = null;
     }, 1600);
   },
+
+  applyVolume(): void {
+    if (!this.audioCtx || !this.gainNode || this.fadingOut) return;
+    const ctx = this.audioCtx;
+    const gain = this.gainNode;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(this.volume, ctx.currentTime + 0.15);
+  },
 };
+
+// React to audio settings changes
+audioSettings.onChange((s) => {
+  if (!s.enableMusic) {
+    lobbyMusic.fadeOut();
+  } else if (lobbyMusic.audioCtx && !lobbyMusic.fadingOut) {
+    lobbyMusic.applyVolume();
+  } else if (currentState === 'lobby') {
+    lobbyMusic.start();
+  }
+});
 
 // MP game UI elements
 let mpActionBar: ActionBar | null = null;
@@ -210,7 +233,8 @@ let pgPositioner: UnitFramePositioner | null = null;
 let pgArenaFrames: ArenaFrames | null = null;
 let pgPartyFrames: PartyFrames | null = null;
 
-// Lobby escape menu
+// Auth & Lobby escape menus
+let authEscapeMenu: EscapeMenu | null = null;
 let lobbyEscapeMenu: EscapeMenu | null = null;
 
 // Shared keybind menu (persists across game modes)
@@ -268,6 +292,8 @@ function toggleGodModeOverlay(active: boolean): void {
 function cleanupCurrentState(): void {
   authScreen?.destroy();
   authScreen = null;
+  authEscapeMenu?.dispose();
+  authEscapeMenu = null;
   lobbyScreen?.destroy();
   lobbyScreen = null;
   lobbyEscapeMenu?.dispose();
@@ -395,7 +421,24 @@ function showAuth(): void {
     });
     network.connect();
   });
+  authScreen.onMenu = () => authEscapeMenu?.open();
   document.body.appendChild(authScreen.element);
+
+  // Auth escape menu
+  authEscapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {},
+    customButtons: [],
+    onKeybinds: () => {
+      authEscapeMenu?.close();
+      keybindMenu.open(() => authEscapeMenu?.open());
+    },
+    onAudio: () => {
+      authEscapeMenu?.close();
+      new AudioSettingsDialog(() => authEscapeMenu?.open()).open();
+    },
+  });
+  authEscapeMenu.element.style.zIndex = '1050';
+  document.body.appendChild(authEscapeMenu.element);
 }
 
 // ── Lobby Screen ───────────────────────────────────────────────────────
@@ -472,6 +515,10 @@ function showLobby(): void {
     onKeybinds: () => {
       lobbyEscapeMenu?.close();
       keybindMenu.open(() => lobbyEscapeMenu?.open());
+    },
+    onAudio: () => {
+      lobbyEscapeMenu?.close();
+      new AudioSettingsDialog(() => lobbyEscapeMenu?.open()).open();
     },
   });
   lobbyEscapeMenu.element.style.zIndex = '1050';
@@ -1136,6 +1183,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     onKeybinds: () => {
       mpEscapeMenu?.close();
       keybindMenu.open(() => mpEscapeMenu?.open());
+    },
+    onAudio: () => {
+      mpEscapeMenu?.close();
+      new AudioSettingsDialog(() => mpEscapeMenu?.open()).open();
     },
   });
   document.body.appendChild(mpEscapeMenu.element);
@@ -2413,6 +2464,10 @@ async function startPlayground(): Promise<void> {
       escapeMenu.close();
       keybindMenu.open(() => escapeMenu.open());
     },
+    onAudio: () => {
+      escapeMenu.close();
+      new AudioSettingsDialog(() => escapeMenu.open()).open();
+    },
   });
   pgEscapeMenu = escapeMenu;
   document.body.appendChild(escapeMenu.element);
@@ -2872,6 +2927,10 @@ async function startUISetup(): Promise<void> {
     onKeybinds: () => {
       escapeMenu.close();
       keybindMenu.open(() => escapeMenu.open());
+    },
+    onAudio: () => {
+      escapeMenu.close();
+      new AudioSettingsDialog(() => escapeMenu.open()).open();
     },
   });
   pgEscapeMenu = escapeMenu;

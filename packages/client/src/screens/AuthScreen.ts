@@ -1,3 +1,5 @@
+import { audioSettings } from '../ui/AudioSettings';
+
 export interface AuthResult {
   username: string;
   password: string;
@@ -6,6 +8,7 @@ export interface AuthResult {
 
 export class AuthScreen {
   readonly element: HTMLDivElement;
+  onMenu?: () => void;
   private onAuth: (result: AuthResult) => void;
   private errorEl: HTMLDivElement;
   private confirmPasswordInput: HTMLInputElement;
@@ -19,6 +22,7 @@ export class AuthScreen {
   private fadingOut = false;
   private readonly onVisibilityChange = () => this.handleVisibilityChange();
   private readonly onUserGesture = () => this.resumeAudioCtx();
+  private readonly onAudioSettingsChange = (s: { masterVolume: number; enableMusic: boolean }) => this.handleAudioSettingsChange(s);
 
   constructor(onAuth: (result: AuthResult) => void) {
     this.onAuth = onAuth;
@@ -531,6 +535,8 @@ export class AuthScreen {
       "I don't care for the blacks",
       "Tore open my dang scapuloid",
       "Only one more day til breakfast...",
+      "Even Steven!",
+      "Gotta get that bitrate goin",
     ];
     let shuffledThoughts: string[] = [];
     let thoughtIndex = 0;
@@ -1401,11 +1407,59 @@ export class AuthScreen {
     // Initial tab state
     updateTabs();
 
+    // ── Menu button (bottom-left) ───────────────────────────────────
+    const menuBtn = document.createElement('button');
+    menuBtn.textContent = 'Menu';
+    menuBtn.style.cssText = `
+      position: absolute; bottom: 20px; left: 20px;
+      padding: 8px 20px; font-size: 13px; font-weight: bold;
+      background: rgba(30, 30, 50, 0.7); color: #aab;
+      border: 1px solid rgba(100, 120, 200, 0.2); border-radius: 4px;
+      cursor: pointer; outline: none;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      transition: all 0.15s;
+    `;
+    menuBtn.addEventListener('mouseenter', () => {
+      menuBtn.style.background = 'rgba(40, 40, 70, 0.85)';
+      menuBtn.style.color = '#ccd';
+    });
+    menuBtn.addEventListener('mouseleave', () => {
+      menuBtn.style.background = 'rgba(30, 30, 50, 0.7)';
+      menuBtn.style.color = '#aab';
+    });
+    menuBtn.addEventListener('click', () => this.onMenu?.());
+    this.element.appendChild(menuBtn);
+
     // ── Background music with fade-in ──────────────────────────────
     this.startMusic();
+    audioSettings.onChange(this.onAudioSettingsChange);
+  }
+
+  private handleAudioSettingsChange(s: { masterVolume: number; enableMusic: boolean }): void {
+    if (!s.enableMusic) {
+      this.fadeOutMusic();
+    } else if (this.audioCtx && !this.fadingOut) {
+      // Live volume update
+      const ctx = this.audioCtx;
+      const gain = this.gainNode!;
+      gain.gain.cancelScheduledValues(ctx.currentTime);
+      gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(s.masterVolume * 2, ctx.currentTime + 0.15);
+    } else {
+      // Music was off, re-enable
+      this.startMusic();
+    }
   }
 
   private async startMusic(): Promise<void> {
+    if (!audioSettings.enableMusic) return;
+    // Already playing
+    if (this.audioCtx && !this.fadingOut) return;
+    // Was fading out — wait for cleanup then restart
+    if (this.fadingOut) {
+      await new Promise<void>(r => setTimeout(r, 1700));
+    }
+    this.fadingOut = false;
     try {
       const ctx = new AudioContext();
       this.audioCtx = ctx;
@@ -1430,14 +1484,13 @@ export class AuthScreen {
 
       document.addEventListener('visibilitychange', this.onVisibilityChange);
 
-      // If the browser suspended the context (no user gesture yet),
-      // wait for any interaction to resume it; otherwise fade in now.
+      const vol = audioSettings.masterVolume * 2; // Auth screen base was 0.5, so scale by 2x
       if (ctx.state === 'suspended') {
         for (const evt of ['pointerdown', 'keydown'] as const) {
           document.addEventListener(evt, this.onUserGesture, { once: false });
         }
       } else if (!document.hidden) {
-        gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 2);
+        gain.gain.linearRampToValueAtTime(vol, ctx.currentTime + 2);
       }
     } catch {
       // Audio playback not available — silent fail
@@ -1452,7 +1505,7 @@ export class AuthScreen {
         document.removeEventListener(evt, this.onUserGesture);
       }
       if (!this.fadingOut && this.gainNode && this.audioCtx && !document.hidden) {
-        this.gainNode.gain.linearRampToValueAtTime(0.5, this.audioCtx.currentTime + 2);
+        this.gainNode.gain.linearRampToValueAtTime(audioSettings.masterVolume * 2, this.audioCtx.currentTime + 2);
       }
     });
   }
@@ -1466,7 +1519,7 @@ export class AuthScreen {
     if (document.hidden) {
       gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
     } else {
-      gain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 0.5);
+      gain.gain.linearRampToValueAtTime(audioSettings.masterVolume * 2, ctx.currentTime + 0.5);
     }
   }
 
@@ -1486,6 +1539,7 @@ export class AuthScreen {
   destroy(): void {
     cancelAnimationFrame(this.animationFrameId);
     this.element.remove();
+    audioSettings.removeListener(this.onAudioSettingsChange);
     this.fadeOutMusic();
   }
 
