@@ -18,14 +18,6 @@ export class LobbyScreen {
   private profileOverlay: HTMLDivElement | null = null;
   private profileUsername: string | null = null;
 
-  // Audio
-  private audioCtx: AudioContext | null = null;
-  private gainNode: GainNode | null = null;
-  private sourceNode: AudioBufferSourceNode | null = null;
-  private fadingOut = false;
-  private readonly onVisibilityChange = () => this.handleVisibilityChange();
-  private readonly onUserGesture = () => this.resumeAudioCtx();
-
   onPlayground?: () => void;
   onUISetup?: () => void;
   onLogout?: () => void;
@@ -269,8 +261,6 @@ export class LobbyScreen {
     layout.appendChild(rightPanel);
     this.element.appendChild(layout);
 
-    // ── Background music with fade-in ──────────────────────────────
-    this.startMusic();
   }
 
   // ── Background animation ────────────────────────────────────────
@@ -1433,94 +1423,9 @@ export class LobbyScreen {
     this.element.appendChild(overlay);
   }
 
-  // ── Background music ──────────────────────────────────────────────
-
-  private async startMusic(): Promise<void> {
-    try {
-      const ctx = new AudioContext();
-      this.audioCtx = ctx;
-      const gain = ctx.createGain();
-      this.gainNode = gain;
-      gain.gain.value = 0;
-      gain.connect(ctx.destination);
-
-      const resp = await fetch('/GTR1.mp3');
-      const buf = await resp.arrayBuffer();
-      const audioBuf = await ctx.decodeAudioData(buf);
-
-      if (this.fadingOut) return;
-
-      const source = ctx.createBufferSource();
-      this.sourceNode = source;
-      source.buffer = audioBuf;
-      source.loop = true;
-      source.connect(gain);
-      source.start();
-
-      document.addEventListener('visibilitychange', this.onVisibilityChange);
-
-      if (ctx.state === 'suspended') {
-        for (const evt of ['pointerdown', 'keydown'] as const) {
-          document.addEventListener(evt, this.onUserGesture, { once: false });
-        }
-      } else if (!document.hidden) {
-        gain.gain.linearRampToValueAtTime(0.25, ctx.currentTime + 2);
-      }
-    } catch {
-      // Audio playback not available — silent fail
-    }
-  }
-
-  private resumeAudioCtx(): void {
-    if (!this.audioCtx || this.fadingOut) return;
-    this.audioCtx.resume().then(() => {
-      for (const evt of ['pointerdown', 'keydown'] as const) {
-        document.removeEventListener(evt, this.onUserGesture);
-      }
-      if (!this.fadingOut && this.gainNode && this.audioCtx && !document.hidden) {
-        this.gainNode.gain.linearRampToValueAtTime(0.25, this.audioCtx.currentTime + 2);
-      }
-    });
-  }
-
-  private handleVisibilityChange(): void {
-    if (this.fadingOut || !this.audioCtx || !this.gainNode) return;
-    const ctx = this.audioCtx;
-    const gain = this.gainNode;
-    gain.gain.cancelScheduledValues(ctx.currentTime);
-    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
-    if (document.hidden) {
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
-    } else {
-      gain.gain.linearRampToValueAtTime(0.25, ctx.currentTime + 0.5);
-    }
-  }
-
-  private fadeOutMusic(): void {
-    this.fadingOut = true;
-    document.removeEventListener('visibilitychange', this.onVisibilityChange);
-    for (const evt of ['pointerdown', 'keydown'] as const) {
-      document.removeEventListener(evt, this.onUserGesture);
-    }
-    if (!this.audioCtx || !this.gainNode) return;
-    const ctx = this.audioCtx;
-    const gain = this.gainNode;
-    gain.gain.cancelScheduledValues(ctx.currentTime);
-    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 1.5);
-    setTimeout(() => {
-      this.sourceNode?.stop();
-      ctx.close();
-      this.audioCtx = null;
-      this.gainNode = null;
-      this.sourceNode = null;
-    }, 1600);
-  }
-
   destroy(): void {
     this.dismissContextMenu();
     cancelAnimationFrame(this.animFrameId);
     this.element.remove();
-    this.fadeOutMusic();
   }
 }

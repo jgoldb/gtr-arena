@@ -59,6 +59,115 @@ let adminScreen: AdminScreen | null = null;
 let clientEngine: ClientEngine | null = null;
 const reconnectOverlay = new ReconnectOverlay();
 
+// ── Lobby Music (persists across lobby/game transitions) ──────────────
+const lobbyMusic = {
+  audioCtx: null as AudioContext | null,
+  gainNode: null as GainNode | null,
+  sourceNode: null as AudioBufferSourceNode | null,
+  fadingOut: false,
+  volume: 0.25,
+
+  onVisibilityChange(): void {
+    if (this.fadingOut || !this.audioCtx || !this.gainNode) return;
+    const ctx = this.audioCtx;
+    const gain = this.gainNode;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    if (document.hidden) {
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
+    } else {
+      gain.gain.linearRampToValueAtTime(this.volume, ctx.currentTime + 0.5);
+    }
+  },
+
+  resumeAudioCtx(): void {
+    if (!this.audioCtx || this.fadingOut) return;
+    this.audioCtx.resume().then(() => {
+      const handler = this._onUserGesture;
+      if (handler) for (const evt of ['pointerdown', 'keydown'] as const) {
+        document.removeEventListener(evt, handler);
+      }
+      if (!this.fadingOut && this.gainNode && this.audioCtx && !document.hidden) {
+        this.gainNode.gain.linearRampToValueAtTime(this.volume, this.audioCtx.currentTime + 2);
+      }
+    });
+  },
+
+  _onVisibilityChange: null as (() => void) | null,
+  _onUserGesture: null as (() => void) | null,
+
+  async start(): Promise<void> {
+    // Already playing — nothing to do
+    if (this.audioCtx && !this.fadingOut) return;
+    // Was fading out — wait for cleanup then restart
+    if (this.fadingOut) {
+      await new Promise<void>(r => setTimeout(r, 1700));
+    }
+    this.fadingOut = false;
+    try {
+      const ctx = new AudioContext();
+      this.audioCtx = ctx;
+      const gain = ctx.createGain();
+      this.gainNode = gain;
+      gain.gain.value = 0;
+      gain.connect(ctx.destination);
+
+      const resp = await fetch('/GTR1.mp3');
+      const buf = await resp.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(buf);
+
+      if (this.fadingOut) return;
+
+      const source = ctx.createBufferSource();
+      this.sourceNode = source;
+      source.buffer = audioBuf;
+      source.loop = true;
+      source.connect(gain);
+      source.start();
+
+      this._onVisibilityChange = () => this.onVisibilityChange();
+      this._onUserGesture = () => this.resumeAudioCtx();
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
+
+      if (ctx.state === 'suspended') {
+        for (const evt of ['pointerdown', 'keydown'] as const) {
+          document.addEventListener(evt, this._onUserGesture, { once: false });
+        }
+      } else if (!document.hidden) {
+        gain.gain.linearRampToValueAtTime(this.volume, ctx.currentTime + 2);
+      }
+    } catch {
+      // Audio playback not available — silent fail
+    }
+  },
+
+  fadeOut(): void {
+    this.fadingOut = true;
+    if (this._onVisibilityChange) {
+      document.removeEventListener('visibilitychange', this._onVisibilityChange);
+    }
+    if (this._onUserGesture) {
+      const handler = this._onUserGesture;
+      for (const evt of ['pointerdown', 'keydown'] as const) {
+        document.removeEventListener(evt, handler);
+      }
+    }
+    if (!this.audioCtx || !this.gainNode) return;
+    const ctx = this.audioCtx;
+    const gain = this.gainNode;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 1.5);
+    setTimeout(() => {
+      this.sourceNode?.stop();
+      ctx.close();
+      this.audioCtx = null;
+      this.gainNode = null;
+      this.sourceNode = null;
+    }, 1600);
+  },
+};
+
 // MP game UI elements
 let mpActionBar: ActionBar | null = null;
 let mpPlayerFrame: UnitFrame | null = null;
@@ -295,11 +404,13 @@ function showLobby(): void {
   cleanupCurrentState();
   currentState = 'lobby';
   hideGameUI();
+  lobbyMusic.start();
 
   lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin, localXp);
   lobbyScreen.onPlayground = () => startPlayground();
   lobbyScreen.onUISetup = () => startUISetup();
   lobbyScreen.onLogout = () => {
+    lobbyMusic.fadeOut();
     network?.disconnect();
     network = null;
     localUserId = '';
@@ -410,6 +521,7 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
 }
 
 function startMultiplayer(msg: S2C_GameStart): void {
+  lobbyMusic.fadeOut();
   cleanupCurrentState();
   currentState = 'multiplayer';
   showGameUI();
@@ -526,6 +638,7 @@ function startMultiplayer(msg: S2C_GameStart): void {
 }
 
 function startMultiplayerRejoin(msg: S2C_RejoinGame): void {
+  lobbyMusic.fadeOut();
   cleanupCurrentState();
   currentState = 'multiplayer';
   showGameUI();
@@ -1891,6 +2004,7 @@ function clearRematchOverlay(): void {
 // ── Playground Mode ────────────────────────────────────────────────────
 
 async function startPlayground(): Promise<void> {
+  lobbyMusic.fadeOut();
   cleanupCurrentState();
   currentState = 'playground';
 
@@ -2379,6 +2493,7 @@ async function startPlayground(): Promise<void> {
 // ── UI Setup (solo training room for UI customization) ────────────────
 
 async function startUISetup(): Promise<void> {
+  lobbyMusic.fadeOut();
   cleanupCurrentState();
   currentState = 'ui-setup';
 
