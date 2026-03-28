@@ -112,7 +112,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     hpRegen: 35,
     manaRegen: 14,
     abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
-    playgroundOnly: false,
+    playgroundOnly: true,
   },
   'gourd-of-war': {
     id: 'gourd-of-war',
