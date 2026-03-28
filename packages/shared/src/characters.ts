@@ -5,6 +5,7 @@ import {
   Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD,
   Attack, PvPTrinket,
   TweakingBuff,
+  yardsToUnits,
 } from './abilities.js';
 
 export type CharacterId = 'janitor' | 'dr-retardo' | 'crackhead' | 'rabbi-zehnwirth' | 'brad-clemons' | 'gourd-of-war';
@@ -105,13 +106,13 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     autoAttackDamageMin: 175,
     autoAttackDamageMax: 220,
     autoAttackSpeed: 2.4,
-    autoAttackRange: 2.0,
+    autoAttackRange: yardsToUnits(20),
     critChance: 0.18,
     dodgeChance: 0.12,
     hpRegen: 35,
     manaRegen: 14,
     abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
-    playgroundOnly: true,
+    playgroundOnly: false,
   },
   'gourd-of-war': {
     id: 'gourd-of-war',
@@ -139,6 +140,15 @@ export const CHARACTER_LIST: CharacterInfo[] = (Object.values(CHARACTERS) as Cha
 
 export function getCharacterStats(id: CharacterId): CharacterStats {
   return CHARACTERS[id];
+}
+
+// ── Ranged auto-attack constants ──
+/** Auto-attack ranges above this threshold are treated as ranged (projectile + travel time). */
+export const MELEE_RANGE_THRESHOLD = yardsToUnits(5);
+export const BULLET_SPEED = yardsToUnits(50);   // world units/sec (~0.4s at 20 yd)
+
+export function isRangedAutoAttack(stats: CharacterStats): boolean {
+  return stats.autoAttackRange > MELEE_RANGE_THRESHOLD;
 }
 
 // ── Regen constants (shared by client RegenSystem & ServerRegenSystem) ──

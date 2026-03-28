@@ -851,7 +851,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       const dy = pos.y - target.mesh.position.y;
       const dz = pos.z - target.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (ability.range && dist > ability.range) return 'out-of-range';
+      const effectiveRange = ability.isAutoAttack
+        ? getCharacterStats(player.characterId as CharacterId).autoAttackRange
+        : ability.range;
+      if (effectiveRange && dist > effectiveRange) return 'out-of-range';
       if (ability.minRange && dist < ability.minRange) return 'out-of-range';
       // Line of sight check
       const collision = clientEngine!.mapManager.collision;
@@ -2238,7 +2241,10 @@ async function startPlayground(): Promise<void> {
         const dy = player.mesh.position.y - target.mesh.position.y;
         const dz = player.mesh.position.z - target.mesh.position.z;
         const hostileDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (hostileDist > ability.range!) return 'out-of-range';
+        const effectiveRange = ability.isAutoAttack
+          ? getCharacterStats(player.characterId).autoAttackRange
+          : ability.range!;
+        if (hostileDist > effectiveRange) return 'out-of-range';
         if (ability.minRange && hostileDist < ability.minRange) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {
@@ -2695,7 +2701,10 @@ async function startUISetup(): Promise<void> {
         const dy = player.mesh.position.y - target.mesh.position.y;
         const dz = player.mesh.position.z - target.mesh.position.z;
         const hostileDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (hostileDist > ability.range!) return 'out-of-range';
+        const effectiveRange = ability.isAutoAttack
+          ? getCharacterStats(player.characterId).autoAttackRange
+          : ability.range!;
+        if (hostileDist > effectiveRange) return 'out-of-range';
         if (ability.minRange && hostileDist < ability.minRange) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {

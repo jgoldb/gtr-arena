@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { BULLET_SPEED } from '@gtr/shared';
 import { CharacterModel, AnimationInput } from './CharacterModel';
 
 // ── Colour palette ──
@@ -33,6 +34,12 @@ const TEDDY_EYE  = 0x111111;
 const TEDDY_BOW  = 0xcc2222;  // red bow tie on teddy
 const WATCH      = 0xffd700;  // gold watch
 const WATCH_FACE = 0x111111;
+const PISTOL_BODY = 0x222222; // dark gunmetal
+const PISTOL_SLIDE = 0x333333; // slightly lighter slide
+const PISTOL_GRIP = 0x1a1008; // dark wood/rubber grip
+const PISTOL_ACCENT = 0xffd700; // gold accents (matching Brad's bling)
+
+const BULLET_COLOR = 0xccaa00;
 
 export class BradClemons extends CharacterModel {
   // Swagger idle state
@@ -41,6 +48,22 @@ export class BradClemons extends CharacterModel {
 
   // Teddy bear group (left hand)
   private declare teddyGroup: THREE.Group;
+  // Pistol group (right hand)
+  private declare pistolGroup: THREE.Group;
+
+  // Bullet projectile + trail
+  private bulletGroup: THREE.Group | null = null;
+  private bulletHead: THREE.Mesh | null = null;
+  private bulletTrail: THREE.Mesh | null = null;
+  private trailSegments: { mesh: THREE.Mesh; life: number }[] = [];
+  private bulletActive = false;
+  private bulletLaunched = false; // reset per swing, ensures exactly one launch
+  private bulletVelocity = new THREE.Vector3();
+  private bulletTime = 0;
+  private bulletMaxTime = 0;
+  private static readonly TRAIL_SPAWN_INTERVAL = 0.015;
+  private trailSpawnTimer = 0;
+  private static readonly TRAIL_SEGMENT_LIFE = 0.15; // seconds each trail segment lingers
 
 
   constructor() {
@@ -62,6 +85,7 @@ export class BradClemons extends CharacterModel {
     this.buildLegs();
     this.buildChain();
     this.buildTeddyBear();
+    this.buildPistol();
   }
 
   // ── HEAD ──────────────────────────────────────────────────
@@ -452,22 +476,43 @@ export class BradClemons extends CharacterModel {
 
     // Fingers
     const fingerGeo = new THREE.CapsuleGeometry(0.013, 0.04, 3, 5);
-    for (let i = 0; i < 4; i++) {
-      const finger = this.createMesh(fingerGeo, SKIN_LIGHT);
-      const spread = (i - 1.5) * 0.017;
-      finger.position.set(spread, -0.61, -0.02);
-      finger.rotation.x = 0.35;
-      armGroup.add(finger);
+    if (side > 0) {
+      // Right hand — fingers curled around pistol grip
+      for (let i = 0; i < 4; i++) {
+        const finger = this.createMesh(fingerGeo, SKIN_LIGHT);
+        const spread = (i - 1.5) * 0.017;
+        finger.position.set(spread, -0.59, -0.03);
+        finger.rotation.x = 1.2; // tightly curled around grip
+        armGroup.add(finger);
+      }
+      // Thumb wraps on the opposite side of the grip
+      const thumb = this.createMesh(
+        new THREE.CapsuleGeometry(0.014, 0.035, 3, 5),
+        SKIN_LIGHT,
+      );
+      thumb.position.set(0.04, -0.56, -0.02);
+      thumb.rotation.x = 0.6;
+      thumb.rotation.z = -0.8;
+      armGroup.add(thumb);
+    } else {
+      // Left hand — open relaxed fingers (holding teddy)
+      for (let i = 0; i < 4; i++) {
+        const finger = this.createMesh(fingerGeo, SKIN_LIGHT);
+        const spread = (i - 1.5) * 0.017;
+        finger.position.set(spread, -0.61, -0.02);
+        finger.rotation.x = 0.35;
+        armGroup.add(finger);
+      }
+      // Thumb
+      const thumb = this.createMesh(
+        new THREE.CapsuleGeometry(0.014, 0.035, 3, 5),
+        SKIN_LIGHT,
+      );
+      thumb.position.set(side * 0.035, -0.57, -0.03);
+      thumb.rotation.x = 0.3;
+      thumb.rotation.z = -side * 0.5;
+      armGroup.add(thumb);
     }
-    // Thumb
-    const thumb = this.createMesh(
-      new THREE.CapsuleGeometry(0.014, 0.035, 3, 5),
-      SKIN_LIGHT,
-    );
-    thumb.position.set(side * 0.035, -0.57, -0.03);
-    thumb.rotation.x = 0.3;
-    thumb.rotation.z = -side * 0.5;
-    armGroup.add(thumb);
 
     // Gold watch on left wrist
     if (side < 0) {
@@ -755,6 +800,213 @@ export class BradClemons extends CharacterModel {
     this.leftArmGroup.add(this.teddyGroup);
   }
 
+  // ── PISTOL (right hand) ────────────────────────────────────
+  // Built grip-centric: (0,0,0) = center of where the hand grips.
+  // In arm-local space: -Y = down arm, -Z = forward (character facing).
+  // Slide/barrel sit above (+Y) and forward (-Z) of the grip.
+
+  private buildPistol(): void {
+    this.pistolGroup = new THREE.Group();
+
+    // ── Grip (origin = grip center, hand wraps around this) ──
+    const grip = this.createMesh(
+      new THREE.BoxGeometry(0.026, 0.07, 0.032),
+      PISTOL_GRIP, { roughness: 0.9 },
+    );
+    grip.position.set(0, 0, 0);
+    this.pistolGroup.add(grip);
+
+    // Grip texture lines
+    for (let i = 0; i < 3; i++) {
+      const line = this.createMesh(
+        new THREE.BoxGeometry(0.028, 0.003, 0.030),
+        0x0d0806,
+      );
+      line.position.set(0, 0.015 - i * 0.018, 0);
+      this.pistolGroup.add(line);
+    }
+
+    // ── Frame / lower receiver (sits above the grip) ──
+    const frame = this.createMesh(
+      new THREE.BoxGeometry(0.028, 0.028, 0.12),
+      PISTOL_BODY, { metalness: 0.6, roughness: 0.35 },
+    );
+    frame.position.set(0, 0.05, -0.03);
+    this.pistolGroup.add(frame);
+
+    // ── Slide (top of the gun, above frame) ──
+    const slide = this.createMesh(
+      new THREE.BoxGeometry(0.03, 0.03, 0.14),
+      PISTOL_SLIDE, { metalness: 0.7, roughness: 0.3 },
+    );
+    slide.position.set(0, 0.08, -0.04);
+    this.pistolGroup.add(slide);
+
+    // ── Barrel (extends forward from slide) ──
+    const barrel = this.createMesh(
+      new THREE.CylinderGeometry(0.008, 0.008, 0.03, 6),
+      PISTOL_BODY, { metalness: 0.8, roughness: 0.2 },
+    );
+    barrel.position.set(0, 0.08, -0.125);
+    barrel.rotation.x = Math.PI / 2;
+    this.pistolGroup.add(barrel);
+
+    // Barrel hole (dark)
+    const barrelHole = this.createMesh(
+      new THREE.CylinderGeometry(0.005, 0.005, 0.005, 6),
+      0x000000,
+    );
+    barrelHole.position.set(0, 0.08, -0.14);
+    barrelHole.rotation.x = Math.PI / 2;
+    this.pistolGroup.add(barrelHole);
+
+    // ── Trigger guard ──
+    const triggerGuard = this.createMesh(
+      new THREE.TorusGeometry(0.016, 0.004, 4, 8, Math.PI),
+      PISTOL_BODY, { metalness: 0.6, roughness: 0.35 },
+    );
+    triggerGuard.position.set(0, 0.025, -0.025);
+    triggerGuard.rotation.y = Math.PI / 2;
+    triggerGuard.rotation.x = Math.PI;
+    this.pistolGroup.add(triggerGuard);
+
+    // Trigger
+    const trigger = this.createMesh(
+      new THREE.BoxGeometry(0.005, 0.018, 0.006),
+      PISTOL_BODY, { metalness: 0.7, roughness: 0.3 },
+    );
+    trigger.position.set(0, 0.03, -0.025);
+    this.pistolGroup.add(trigger);
+
+    // ── Gold accent stripe along slide top ──
+    const accent = this.createMesh(
+      new THREE.BoxGeometry(0.032, 0.004, 0.06),
+      PISTOL_ACCENT, { metalness: 0.9, roughness: 0.1 },
+    );
+    accent.position.set(0, 0.098, -0.05);
+    this.pistolGroup.add(accent);
+
+    // Rear sight
+    const rearSight = this.createMesh(
+      new THREE.BoxGeometry(0.02, 0.008, 0.005),
+      PISTOL_BODY, { metalness: 0.7, roughness: 0.3 },
+    );
+    rearSight.position.set(0, 0.10, 0.02);
+    this.pistolGroup.add(rearSight);
+
+    // Front sight
+    const frontSight = this.createMesh(
+      new THREE.BoxGeometry(0.008, 0.007, 0.005),
+      PISTOL_BODY, { metalness: 0.7, roughness: 0.3 },
+    );
+    frontSight.position.set(0, 0.10, -0.10);
+    this.pistolGroup.add(frontSight);
+
+    // Position pistol in the curled fingers, rotated ~60° downward so
+    // barrel points toward the ground when the arm hangs at rest.
+    this.pistolGroup.position.set(0, -0.60, -0.02);
+    this.pistolGroup.rotation.x = -1.05; // ~60° barrel-down
+    this.rightArmGroup.add(this.pistolGroup);
+  }
+
+  // ── BULLET PROJECTILE ─────────────────────────────────────
+
+  private getScene(): THREE.Object3D {
+    // group → PlayerController.mesh → scene
+    return this.group.parent!.parent!;
+  }
+
+  private ensureBullet(): void {
+    if (this.bulletGroup) return;
+
+    this.bulletGroup = new THREE.Group();
+
+    // Bright tracer head
+    const headMat = new THREE.MeshStandardMaterial({
+      color: 0xffffcc,
+      emissive: 0xffeeaa,
+      emissiveIntensity: 4,
+    });
+    this.bulletHead = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 4), headMat);
+    this.bulletGroup.add(this.bulletHead);
+
+    // Elongated streak behind the head (cylinder rotated to lie along -Z local)
+    const streakMat = new THREE.MeshStandardMaterial({
+      color: BULLET_COLOR,
+      emissive: BULLET_COLOR,
+      emissiveIntensity: 2.5,
+      transparent: true,
+      opacity: 0.8,
+    });
+    this.bulletTrail = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.025, 0.01, 0.6, 5, 1),
+      streakMat,
+    );
+    // Rotate cylinder so it lies along -Z (behind the head in the group's local space)
+    this.bulletTrail.rotation.x = Math.PI / 2;
+    this.bulletTrail.position.set(0, 0, 0.3);
+    this.bulletGroup.add(this.bulletTrail);
+
+    this.bulletGroup.visible = false;
+  }
+
+  private spawnTrailSegment(): void {
+    const scene = this.getScene();
+    const mat = new THREE.MeshStandardMaterial({
+      color: BULLET_COLOR,
+      emissive: BULLET_COLOR,
+      emissiveIntensity: 1.5,
+      transparent: true,
+      opacity: 0.45,
+    });
+    const seg = new THREE.Mesh(new THREE.SphereGeometry(0.04, 4, 3), mat);
+    seg.position.copy(this.bulletGroup!.position);
+    scene.add(seg);
+    this.trailSegments.push({ mesh: seg, life: BradClemons.TRAIL_SEGMENT_LIFE });
+  }
+
+  launchBullet(targetWorldPos: THREE.Vector3): void {
+    this.ensureBullet();
+    const scene = this.getScene();
+
+    // Add to scene (world space) if not already parented
+    if (!this.bulletGroup!.parent) {
+      scene.add(this.bulletGroup!);
+    }
+
+    // Derive start position from parent mesh (per CLAUDE.md: derive forward
+    // from parent.rotation.y, not from getWorldDirection or model group).
+    const parentMesh = this.group.parent!; // PlayerController.mesh or RemoteEntity.mesh
+    const rotY = parentMesh.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+    // Start at shoulder height, slightly forward + right for gun hand
+    const right = new THREE.Vector3(forward.z, 0, -forward.x); // perpendicular
+    const startPos = parentMesh.position.clone();
+    startPos.y += 1.45;            // shoulder height
+    startPos.addScaledVector(forward, 0.4); // forward of body
+    startPos.addScaledVector(right, 0.2);   // offset to gun-hand side
+
+    this.bulletGroup!.position.copy(startPos);
+    this.bulletGroup!.visible = true;
+
+    // Aim at center-of-body, not feet (mesh.position is ground level)
+    const aimPos = targetWorldPos.clone();
+    aimPos.y += 1.1;
+
+    const dir = new THREE.Vector3().subVectors(aimPos, startPos);
+    const dist = dir.length();
+    if (dist > 0.01) dir.normalize();
+    // Orient bullet group so -Z points along travel direction
+    this.bulletGroup!.lookAt(aimPos);
+
+    this.bulletVelocity.copy(dir).multiplyScalar(BULLET_SPEED);
+    this.bulletTime = 0;
+    this.bulletMaxTime = dist / BULLET_SPEED + 0.05;
+    this.bulletActive = true;
+    this.trailSpawnTimer = 0;
+
+  }
+
   // ── ANIMATION ─────────────────────────────────────────────
 
   protected override onAnimate(dt: number, input: AnimationInput): void {
@@ -788,84 +1040,100 @@ export class BradClemons extends CharacterModel {
       this.bodyGroup.position.y += breathe;
     }
 
+    // ── Bullet flight + trail update ──
+    if (this.bulletActive && this.bulletGroup) {
+      this.bulletTime += dt;
+      this.bulletGroup.position.addScaledVector(this.bulletVelocity, dt);
+
+      // Spawn trail segments at intervals
+      this.trailSpawnTimer += dt;
+      if (this.trailSpawnTimer >= BradClemons.TRAIL_SPAWN_INTERVAL) {
+        this.trailSpawnTimer -= BradClemons.TRAIL_SPAWN_INTERVAL;
+        this.spawnTrailSegment();
+      }
+
+      if (this.bulletTime >= this.bulletMaxTime) {
+        this.bulletActive = false;
+        this.bulletGroup.visible = false;
+      }
+    }
+
+    // Fade and remove trail segments
+    for (let i = this.trailSegments.length - 1; i >= 0; i--) {
+      const seg = this.trailSegments[i];
+      seg.life -= dt;
+      const t = Math.max(0, seg.life / BradClemons.TRAIL_SEGMENT_LIFE);
+      (seg.mesh.material as THREE.MeshStandardMaterial).opacity = t * 0.5;
+      seg.mesh.scale.setScalar(t);
+      if (seg.life <= 0) {
+        seg.mesh.removeFromParent();
+        seg.mesh.geometry.dispose();
+        (seg.mesh.material as THREE.Material).dispose();
+        this.trailSegments.splice(i, 1);
+      }
+    }
+
   }
 
-  // ── Combat stance — fists up, street fighter ready ──
+  // ── Combat stance — gun drawn, ready to shoot ──
   protected override animateCombatStance(weight: number): void {
-    // Right fist up, guard position
-    this.rightArmGroup.rotation.x += 0.7 * weight;
-    this.rightArmGroup.rotation.z -= 0.3 * weight;
+    // Right arm raised forward aiming the pistol
+    this.rightArmGroup.rotation.x += 1.15 * weight;
+    this.rightArmGroup.rotation.z -= 0.15 * weight;
 
-    // Left arm — teddy tucked behind, fist forward
-    this.leftArmGroup.rotation.x += 0.5 * weight;
-    this.leftArmGroup.rotation.z += 0.2 * weight;
+    // Left arm — teddy tucked close, slightly forward
+    this.leftArmGroup.rotation.x += 0.3 * weight;
+    this.leftArmGroup.rotation.z += 0.15 * weight;
 
-    // Slight forward lean, chin tucked
-    this.bodyGroup.rotation.x += 0.06 * weight;
+    // Slight forward lean
+    this.bodyGroup.rotation.x += 0.04 * weight;
 
     // Wider stance
     this.leftLegGroup.rotation.z -= 0.04 * weight;
     this.rightLegGroup.rotation.z += 0.04 * weight;
   }
 
-  // ── Attack swing — big haymaker punches ──
-  protected override animateAttackSwing(t: number, alternateArm: boolean): void {
-    if (!alternateArm) {
-      // Right haymaker
-      if (t < 0.25) {
-        // Wind up — pull back, rotate torso
-        const p = t / 0.25;
-        this.rightArmGroup.rotation.x += 0.3 * p;
-        this.rightArmGroup.rotation.y -= 0.6 * p;
-        this.bodyGroup.rotation.y -= 0.25 * p;
-        this.bodyGroup.rotation.x += 0.05 * p;
-      } else if (t < 0.5) {
-        // SWING — explosive forward
-        const p = (t - 0.25) / 0.25;
-        const ease = p * p * (3 - 2 * p);
-        this.rightArmGroup.rotation.x += 0.8 * ease + 0.3 * (1 - ease);
-        this.rightArmGroup.rotation.y -= 0.6 * (1 - ease) + 1.0 * ease;
-        this.bodyGroup.rotation.y -= 0.25 * (1 - ease) + 0.4 * ease;
-        this.bodyGroup.rotation.x += 0.1 * ease;
-        // Lunge forward
-        this.bodyGroup.position.z -= 0.03 * ease;
-      } else {
-        // Recovery
-        const p = (t - 0.5) / 0.5;
-        const fade = 1 - p * p;
-        this.rightArmGroup.rotation.x += 0.8 * fade;
-        this.rightArmGroup.rotation.y += 0.4 * fade;
-        this.bodyGroup.rotation.y += 0.15 * fade;
-        this.bodyGroup.rotation.x += 0.1 * fade;
-        this.bodyGroup.position.z -= 0.03 * fade;
-      }
-    } else {
-      // Left hook (teddy bear as weapon, lol)
-      if (t < 0.2) {
-        const p = t / 0.2;
-        this.leftArmGroup.rotation.x += 0.4 * p;
-        this.leftArmGroup.rotation.y += 0.5 * p;
-        this.bodyGroup.rotation.y += 0.2 * p;
-      } else if (t < 0.45) {
-        const p = (t - 0.2) / 0.25;
-        const ease = p * p;
-        this.leftArmGroup.rotation.x += 0.4 + 0.5 * ease;
-        this.leftArmGroup.rotation.y += 0.5 - 1.2 * ease;
-        this.bodyGroup.rotation.y += 0.2 - 0.5 * ease;
-        this.bodyGroup.position.z -= 0.02 * ease;
-      } else {
-        const p = (t - 0.45) / 0.55;
-        const fade = 1 - p;
-        this.leftArmGroup.rotation.x += 0.9 * fade;
-        this.leftArmGroup.rotation.y -= 0.7 * fade;
-        this.bodyGroup.rotation.y -= 0.3 * fade;
-        this.bodyGroup.position.z -= 0.02 * fade;
-      }
+  // ── Attack swing — pistol shot ──
+  protected override animateAttackSwing(t: number, _alternateArm: boolean): void {
+    // Phase 1 (0–0.15): Quick raise — snap arm up to aim
+    if (t < 0.15) {
+      const p = t / 0.15;
+      const ease = p * p * (3 - 2 * p);
+      this.rightArmGroup.rotation.x += 1.35 * ease;
+      this.rightArmGroup.rotation.z -= 0.1 * ease;
+      this.bodyGroup.rotation.x += 0.03 * ease;
+    }
+    // Phase 2 (0.15–0.3): Fire + recoil kick
+    else if (t < 0.3) {
+      const p = (t - 0.15) / 0.15;
+      // Arm stays aimed, recoil kicks it up
+      this.rightArmGroup.rotation.x += 1.35 + 0.2 * p;
+      this.rightArmGroup.rotation.z -= 0.1;
+      this.bodyGroup.rotation.x += 0.03 - 0.04 * p; // body leans back from recoil
+    }
+    // Phase 3 (0.3–1.0): Recovery — return to ready
+    else {
+      const p = (t - 0.3) / 0.7;
+      const fade = 1 - p * p;
+      this.rightArmGroup.rotation.x += (1.35 + 0.2 * (1 - p)) * fade;
+      this.rightArmGroup.rotation.z -= 0.1 * fade;
+      this.bodyGroup.rotation.x += -0.01 * fade;
+    }
+
+    // Launch bullet once arm reaches aim position (t >= 0.15)
+    if (t >= 0.15 && !this.bulletLaunched && this.swingTargetWorldPos) {
+      this.bulletLaunched = true;
+      this.launchBullet(this.swingTargetWorldPos);
     }
   }
 
+  override triggerSwing(): void {
+    super.triggerSwing();
+    this.bulletLaunched = false;
+  }
+
   protected override getSwingDuration(): number {
-    return 0.45; // slightly slower, heavy hits
+    return 0.5; // full shoot cycle: raise, fire, recover
   }
 
   protected override getAbilityAnimDuration(abilityId: string): number {

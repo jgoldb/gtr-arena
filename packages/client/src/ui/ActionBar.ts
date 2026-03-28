@@ -1,4 +1,5 @@
 import { YARDS_TO_UNITS, type Ability } from '../engine/combat/Ability';
+import { getCharacterStats, type CharacterId } from '@gtr/shared';
 import type { CombatSystem } from '../engine/combat/CombatSystem';
 import { keybindManager, matchesKeybindEvent } from './KeybindManager';
 
@@ -225,19 +226,20 @@ export class ActionBar {
         const status = this.callbacks.getAbilityStatus(slot.ability);
         overlay.style.background = 'transparent';
         cdText.textContent = '';
-        if (aaActive) {
-          statusOv.style.animation = 'actionbar-aa-flash 1s ease-in-out infinite';
-          slotEl.style.opacity = '1';
-        } else {
+
+        // Status tint (out-of-range, facing, LOS)
+        if (status === 'out-of-range' || status === 'not-facing' || status === 'not-in-los') {
+          statusOv.style.background = 'rgba(255, 40, 40, 0.35)';
           statusOv.style.animation = '';
-          if (status === 'no-target') {
-            statusOv.style.background = 'transparent';
-            slotEl.style.opacity = '0.5';
-          } else {
-            statusOv.style.background = 'transparent';
-            slotEl.style.opacity = '1';
-          }
+        } else if (aaActive) {
+          statusOv.style.background = 'transparent';
+          statusOv.style.animation = 'actionbar-aa-flash 1s ease-in-out infinite';
+        } else {
+          statusOv.style.background = 'transparent';
+          statusOv.style.animation = '';
         }
+
+        slotEl.style.opacity = status === 'no-target' && !aaActive ? '0.5' : '1';
         continue;
       }
 
@@ -460,7 +462,13 @@ export class ActionBar {
     const hasCooldown = ability.cooldown > 0;
 
     let statsHtml = '';
-    if (hasRange) {
+    if (ability.isAutoAttack && this.currentCharacterId) {
+      // Show auto-attack range from character stats
+      const stats = getCharacterStats(this.currentCharacterId as CharacterId);
+      const rangeYards = Math.round(stats.autoAttackRange / YARDS_TO_UNITS);
+      const label = rangeYards <= 5 ? 'Melee Range' : `${rangeYards} yd range`;
+      statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${label}</div>`;
+    } else if (hasRange) {
       const rangeYards = Math.round(ability.range! / YARDS_TO_UNITS);
       const minRangeYards = ability.minRange ? Math.round(ability.minRange / YARDS_TO_UNITS) : 0;
       let label = rangeYards <= 5 ? 'Melee Range' : `${rangeYards} yd range`;

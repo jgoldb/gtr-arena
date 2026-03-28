@@ -828,12 +828,27 @@ export class ClientEngine {
   }
 
   handleAutoAttackSwing(msg: S2C_AutoAttackSwing): void {
+    // Resolve target position for ranged bullet visuals
+    const targetPos = this.getEntityWorldPos(msg.targetEntityId);
+
     if (msg.entityId === this.localEntityId) {
+      if (targetPos) this.playerController.model.swingTargetWorldPos = targetPos;
       this.playerController.triggerSwing();
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
-      if (entity) entity.model.triggerSwing();
+      if (entity) {
+        if (targetPos) entity.model.swingTargetWorldPos = targetPos;
+        entity.model.triggerSwing();
+      }
     }
+  }
+
+  private getEntityWorldPos(entityId: string): THREE.Vector3 | null {
+    if (entityId === this.localEntityId) {
+      return this.playerController.mesh.position.clone();
+    }
+    const remote = this.remoteEntities.get(entityId);
+    return remote ? remote.mesh.position.clone() : null;
   }
 
   handleCooldownUpdate(msg: S2C_CooldownUpdate): void {

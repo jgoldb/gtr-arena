@@ -177,6 +177,9 @@ export abstract class CharacterModel {
     this._autoAttacking = active;
   }
 
+  /** World-space position of the auto-attack target (set before triggerSwing for ranged characters). */
+  swingTargetWorldPos: THREE.Vector3 | null = null;
+
   triggerSwing(): void {
     this.attackAnimTime = 0;
   }

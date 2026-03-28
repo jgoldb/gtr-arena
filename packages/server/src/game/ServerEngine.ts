@@ -8,7 +8,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { GLOBAL_COOLDOWN, yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
+import { GLOBAL_COOLDOWN, yardsToUnits, BULLET_SPEED, isRangedAutoAttack, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -31,6 +31,15 @@ interface CastingState {
 interface AutoAttackState {
   target: ServerEntity;
   timer: number;
+  rangedResumeDelay: number; // GCD-length delay before first/resumed ranged shot
+  wasMoving: boolean; // tracks movement→stop transition for ranged delay
+}
+
+interface PendingAutoAttackProjectile {
+  attacker: ServerEntity;
+  target: ServerEntity;
+  damage: number;
+  remainingTime: number;
 }
 
 interface SweepCharge {
@@ -140,6 +149,7 @@ export class ServerEngine {
   private castingStates = new Map<string, CastingState>();
   private autoAttacks = new Map<string, AutoAttackState>();
   private swingTimers = new Map<string, number>(); // entityId -> time since last swing (persists across toggle)
+  private pendingAutoAttackProjectiles: PendingAutoAttackProjectile[] = [];
   private sweepCharges = new Map<string, SweepCharge>();
   private tweakerSprintCharges = new Map<string, TweakerSprintCharge>();
   private fullRetardAuras = new Map<string, FullRetardAura>();
@@ -764,7 +774,14 @@ export class ServerEngine {
 
     // Use persistent swing timer so toggling can't bypass the cooldown
     const timeSinceLastSwing = this.swingTimers.get(entityId) ?? Infinity;
-    this.autoAttacks.set(entityId, { target, timer: Math.min(timeSinceLastSwing, entity.autoAttackSpeed) });
+    const stats = getCharacterStats(entity.characterId);
+    const rangedDelay = isRangedAutoAttack(stats) ? GLOBAL_COOLDOWN : 0;
+    this.autoAttacks.set(entityId, {
+      target,
+      timer: Math.min(timeSinceLastSwing, entity.autoAttackSpeed),
+      rangedResumeDelay: rangedDelay,
+      wasMoving: entity.isMoving,
+    });
     entity.isAutoAttacking = true;
   }
 
@@ -1154,6 +1171,7 @@ export class ServerEngine {
     for (const entity of this.entities) {
       this.updateAutoAttack(entity, dt);
     }
+    this.updatePendingAutoAttackProjectiles(dt);
 
     // Update area effects
     this.updateGasClouds(dt);
@@ -1400,11 +1418,26 @@ export class ServerEngine {
       return;
     }
 
+    // Always tick swing timer (ranged movement check is at fire time)
     state.timer += dt;
     // Keep persistent swing timer in sync while auto-attacking
     this.swingTimers.set(entity.id, state.timer);
+
+    // Ranged: detect movement→stop transition and add GCD delay
+    const stats = getCharacterStats(entity.characterId);
+    const isRanged = isRangedAutoAttack(stats);
+    if (isRanged && state.wasMoving && !entity.isMoving) {
+      state.rangedResumeDelay = GLOBAL_COOLDOWN;
+    }
+    state.wasMoving = entity.isMoving;
+    if (state.rangedResumeDelay > 0) {
+      state.rangedResumeDelay = Math.max(0, state.rangedResumeDelay - dt);
+    }
+
     const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(entity) * (entity.godMode ? 6 : 1);
     if (state.timer >= entity.autoAttackSpeed / atkSpeedMult) {
+      // Ranged auto-attacks can't fire while moving, and have a GCD delay on start/resume
+      if (isRanged && (entity.isMoving || state.rangedResumeDelay > 0)) return;
       const dx = entity.x - state.target.x;
       const dy = entity.y - state.target.y;
       const dz = entity.z - state.target.z;
@@ -1437,13 +1470,41 @@ export class ServerEngine {
 
       state.timer = 0;
       this.swingTimers.set(entity.id, 0);
-      this.combatSystem.applyAutoAttackDamage(entity, state.target, entity.rollAutoAttackDamage());
+
+      if (isRangedAutoAttack(stats)) {
+        // Ranged: delay damage by bullet travel time
+        const travelTime = dist / BULLET_SPEED;
+        this.pendingAutoAttackProjectiles.push({
+          attacker: entity,
+          target: state.target,
+          damage: entity.rollAutoAttackDamage(),
+          remainingTime: travelTime,
+        });
+      } else {
+        // Melee: instant damage
+        this.combatSystem.applyAutoAttackDamage(entity, state.target, entity.rollAutoAttackDamage());
+      }
+
       // Notify clients to play swing animation
       this.emitEvent({
         type: 'auto_attack_swing',
         entityId: entity.id,
         targetEntityId: state.target.id,
       });
+    }
+  }
+
+  private updatePendingAutoAttackProjectiles(dt: number): void {
+    for (let i = this.pendingAutoAttackProjectiles.length - 1; i >= 0; i--) {
+      const p = this.pendingAutoAttackProjectiles[i];
+      p.remainingTime -= dt;
+      if (p.remainingTime <= 0) {
+        this.pendingAutoAttackProjectiles.splice(i, 1);
+        // Apply damage on impact (skip if target died or became untargetable mid-flight)
+        if (!p.target.dead && !this.buffSystem.isUntargetable(p.target)) {
+          this.combatSystem.applyAutoAttackDamage(p.attacker, p.target, p.damage);
+        }
+      }
     }
   }
 

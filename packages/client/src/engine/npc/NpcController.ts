@@ -3,6 +3,7 @@ import { CharacterModel, AnimationInput } from '../player/characters/CharacterMo
 import { createCharacter, CharacterId } from '../player/characters';
 import type { Targetable } from '../types';
 import { createTargetingHitArea } from '../targeting/targetingHitArea';
+import { getCharacterStats, isRangedAutoAttack, GLOBAL_COOLDOWN } from '@gtr/shared';
 
 const IDLE_INPUT: AnimationInput = {
   isMoving: false,
@@ -34,6 +35,7 @@ export class NpcController implements Targetable {
   private characterModel: CharacterModel;
 
   stunned = false;
+  isMoving = false;
 
   // NPC auto-attack
   autoAttackTarget: Targetable | null = null;
@@ -42,6 +44,8 @@ export class NpcController implements Targetable {
   resolveGround?: (x: number, z: number, y: number) => number;
   private autoAttackTimer = 0;
   private wasInCombat = false;
+  private rangedResumeDelay = 0;
+  private rangedWasMoving = false;
 
   constructor(characterId: CharacterId, position: THREE.Vector3, team = 1, name = 'NPC') {
     this.name = name;
@@ -119,6 +123,10 @@ export class NpcController implements Targetable {
       // Entered combat — begin auto-attacking
       this.characterModel.setAutoAttacking(true);
       this.autoAttackTimer = 0;
+      // Ranged NPCs get a GCD delay before first shot
+      if (isRangedAutoAttack(getCharacterStats(this.characterId))) {
+        this.rangedResumeDelay = GLOBAL_COOLDOWN;
+      }
     } else if (!this.inCombat && this.wasInCombat) {
       // Left combat — stop auto-attacking
       this.characterModel.setAutoAttacking(false);
@@ -139,12 +147,24 @@ export class NpcController implements Targetable {
       const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
       const facing = forward.dot(toTarget) > 0.5;
 
-      // Swing timer
+      // Swing timer (always ticks — ranged movement check is at fire time)
       this.autoAttackTimer += dt;
-      if (this.autoAttackTimer >= this.characterModel.autoAttackSpeed) {
+      const isRanged = isRangedAutoAttack(getCharacterStats(this.characterId));
+      // Ranged: detect movement→stop transition and add GCD delay
+      if (isRanged && this.rangedWasMoving && !this.isMoving) {
+        this.rangedResumeDelay = GLOBAL_COOLDOWN;
+      }
+      this.rangedWasMoving = isRanged && this.isMoving;
+      if (this.rangedResumeDelay > 0) {
+        this.rangedResumeDelay = Math.max(0, this.rangedResumeDelay - dt);
+      }
+      const rangedBlocked = isRanged && (this.isMoving || this.rangedResumeDelay > 0);
+      if (this.autoAttackTimer >= this.characterModel.autoAttackSpeed && !rangedBlocked) {
         const hasLos = !this.checkLineOfSight || this.checkLineOfSight(this.mesh.position, target.mesh.position);
         if (facing && dist <= this.characterModel.autoAttackRange && hasLos) {
           this.autoAttackTimer = 0;
+          // Set target pos for ranged bullet visual before triggering swing
+          this.characterModel.swingTargetWorldPos = target.mesh.position.clone();
           this.characterModel.triggerSwing();
           this.onAutoAttackHit?.(this, target, this.characterModel.rollAutoAttackDamage());
         } else {

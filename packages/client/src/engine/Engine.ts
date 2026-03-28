@@ -6,7 +6,7 @@ import { PlayerController } from './player/PlayerController';
 import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, ODStunDebuff, ParanoidDebuff, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
-import { getCharacterStats } from '@gtr/shared';
+import { getCharacterStats, isRangedAutoAttack, BULLET_SPEED } from '@gtr/shared';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
 import { TargetingSystem } from './targeting/TargetingSystem';
@@ -97,6 +97,13 @@ interface ActiveKnockback {
   elapsed: number;
 }
 
+interface PendingBullet {
+  attacker: Targetable;
+  target: Targetable;
+  damage: number;
+  remainingTime: number;
+}
+
 export class Engine {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
@@ -117,6 +124,7 @@ export class Engine {
   private readonly discombobEffects: DiscombobBubbles[] = [];
   private readonly pendingAoeImpacts: PendingAoeImpact[] = [];
   private readonly activeKnockbacks: ActiveKnockback[] = [];
+  private readonly pendingBullets: PendingBullet[] = [];
   private fullRetardAura: ActiveFullRetardAura | null = null;
   private crotchRotVisuals = new Map<Targetable, CrotchRotVisual & { elapsed: number }>();
   private channelBeam: THREE.Mesh | null = null;
@@ -125,6 +133,8 @@ export class Engine {
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
   private autoAttackTarget: Targetable | null = null;
+  private rangedResumeDelay = 0; // GCD-length delay before first/resumed ranged shot
+  private rangedWasMoving = false; // tracks movement→stop transition for ranged delay
   private dumpsterDiveAutoTarget: Targetable | null = null;
   private sweepCharge: {
     elapsed: number;
@@ -371,8 +381,17 @@ export class Engine {
 
   spawnNpc(characterId: CharacterId, position: THREE.Vector3, team?: number, name?: string): NpcController {
     const npc = new NpcController(characterId, position, team, name);
+    const stats = getCharacterStats(characterId);
     npc.onAutoAttackHit = (attacker, target, damage) => {
-      this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
+      if (isRangedAutoAttack(stats)) {
+        const dx = target.mesh.position.x - attacker.mesh.position.x;
+        const dy = target.mesh.position.y - attacker.mesh.position.y;
+        const dz = target.mesh.position.z - attacker.mesh.position.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        this.pendingBullets.push({ attacker, target, damage, remainingTime: dist / BULLET_SPEED });
+      } else {
+        this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
+      }
     };
     npc.checkLineOfSight = (a, b) => this.combatSystem.hasLineOfSight(a, b);
     npc.resolveGround = (x, z, y) => this.mapManager.collision.resolve(x, z, y, 0.5).groundY;
@@ -695,6 +714,10 @@ export class Engine {
     this.autoAttacking = true;
     this.autoAttackTarget = target;
     // Don't reset timer — it ticks continuously so toggling can't bypass the swing cooldown
+    // Ranged auto-attacks get a GCD-length delay before the first shot
+    if (isRangedAutoAttack(getCharacterStats(this.playerController.characterId))) {
+      this.rangedResumeDelay = GLOBAL_COOLDOWN;
+    }
     this.playerController.setAutoAttacking(true);
   }
 
@@ -1559,6 +1582,9 @@ export class Engine {
 
     const atkSpeedMult = this.buffSystem.getAutoAttackSpeedMultiplier(player) * (this.godMode ? 6 : 1);
     if (this.autoAttackTimer >= player.autoAttackSpeed / atkSpeedMult) {
+      // Ranged auto-attacks can't fire while moving, and have a GCD delay on start/resume
+      if (isRangedAutoAttack(getCharacterStats(player.characterId)) && (player.isMoving || this.rangedResumeDelay > 0)) return;
+
       // Check range (3D distance including Y)
       const dx = player.mesh.position.x - target.mesh.position.x;
       const dy = player.mesh.position.y - target.mesh.position.y;
@@ -1592,8 +1618,37 @@ export class Engine {
 
       // Swing!
       this.autoAttackTimer = 0;
-      player.triggerSwing();
-      this.combatSystem.applyAutoAttackDamage(player, target, player.rollAutoAttackDamage());
+      const stats = getCharacterStats(player.characterId);
+      if (isRangedAutoAttack(stats)) {
+        // Ranged: set target pos so model can launch visual bullet, then delay damage
+        player.model.swingTargetWorldPos = target.mesh.position.clone();
+        player.triggerSwing();
+        const travelTime = dist / BULLET_SPEED;
+        this.pendingBullets.push({
+          attacker: player,
+          target,
+          damage: player.rollAutoAttackDamage(),
+          remainingTime: travelTime,
+        });
+      } else {
+        // Melee: instant damage
+        player.triggerSwing();
+        this.combatSystem.applyAutoAttackDamage(player, target, player.rollAutoAttackDamage());
+      }
+    }
+  }
+
+  private updatePendingBullets(dt: number): void {
+    for (let i = this.pendingBullets.length - 1; i >= 0; i--) {
+      const b = this.pendingBullets[i];
+      b.remainingTime -= dt;
+      if (b.remainingTime <= 0) {
+        this.pendingBullets.splice(i, 1);
+        // Apply damage on impact (skip if target died or became untargetable mid-flight)
+        if (!b.target.dead && !this.buffSystem.isUntargetable(b.target)) {
+          this.combatSystem.applyAutoAttackDamage(b.attacker, b.target, b.damage);
+        }
+      }
     }
   }
 
@@ -1629,8 +1684,22 @@ export class Engine {
     // Update cursor for hover detection (only when pointer is unlocked)
     this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.isMouseButtonDown('right'));
 
-    this.autoAttackTimer += deltaTime; // always tick swing timer (even when not auto-attacking)
+    // Tick swing timer (always — ranged movement check is at fire time, not here)
+    this.autoAttackTimer += deltaTime;
+
+    // Ranged: detect movement→stop transition and add GCD delay before next shot
+    const isRanged = this.autoAttacking
+      && isRangedAutoAttack(getCharacterStats(this.playerController.characterId));
+    if (isRanged && this.rangedWasMoving && !this.playerController.isMoving) {
+      this.rangedResumeDelay = GLOBAL_COOLDOWN;
+    }
+    this.rangedWasMoving = isRanged && this.playerController.isMoving;
+    if (this.rangedResumeDelay > 0) {
+      this.rangedResumeDelay = Math.max(0, this.rangedResumeDelay - deltaTime);
+    }
+
     this.updateAutoAttack(deltaTime);
+    this.updatePendingBullets(deltaTime);
 
     // Update buff-driven modifiers before player update
     this.playerController.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(this.playerController)
