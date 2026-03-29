@@ -55,6 +55,7 @@ let localXp = 0;
 let pendingLevelUpFrom: number | null = null; // old XP before a level-up that happened while lobby was not visible
 let awaitingReconnectResult = false;
 let updatePending = false;
+let updateCheckPromise: Promise<void> | null = null;
 let updateSnackbarEl: HTMLElement | null = null;
 
 // Active screens / engines
@@ -473,13 +474,28 @@ function showAuth(): void {
     network.onConnectionStateChange((state) => {
       reconnectOverlay.update(state);
       if (state.status === 'reconnected') {
-        checkForUpdate();
+        updateCheckPromise = checkForUpdate();
       }
       if (state.status === 'failed') {
-        network?.disconnect();
-        network = null;
-        showAuth();
-        setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
+        if (currentState === 'multiplayer') {
+          // Stay in the game world — show failure on the overlay instead of
+          // tearing everything down. The player can see the arena behind it.
+          reconnectOverlay.showMessage('Connection lost');
+          // After a brief pause, transition to auth
+          setTimeout(() => {
+            reconnectOverlay.hide();
+            network?.disconnect();
+            network = null;
+            showAuth();
+            setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
+          }, 3000);
+        } else {
+          reconnectOverlay.hide();
+          network?.disconnect();
+          network = null;
+          showAuth();
+          setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
+        }
       }
     });
     network.connect();
@@ -1505,9 +1521,21 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'lobby_state':
       if (awaitingReconnectResult) {
-        // Server didn't send rejoin_game — no game to rejoin, go to lobby
+        // Server didn't send rejoin_game — no game to rejoin.
+        // Wait for the version check to complete before deciding whether
+        // to reload (update available) or show the lobby (no update).
         awaitingReconnectResult = false;
-        showLobby();
+        const pending = updateCheckPromise ?? Promise.resolve();
+        updateCheckPromise = null;
+        pending.then(() => {
+          if (updatePending) {
+            // Update detected — reload directly, skip the lobby flash
+            sessionStorage.setItem('gtr_updated', '1');
+            location.reload();
+          } else {
+            showLobby();
+          }
+        });
       }
       lobbyScreen?.updateUsers(msg.users);
       lobbyScreen?.updateGames(msg.games);
@@ -1702,6 +1730,7 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'rejoin_game':
       awaitingReconnectResult = false;
+      updateCheckPromise = null;
       startMultiplayerRejoin(msg);
       break;
 

@@ -43,17 +43,25 @@ export class ReconnectOverlay {
         this.show();
         break;
       case 'reconnected':
-      case 'failed':
         this.hide();
         break;
+      case 'failed':
+        // Don't hide — let main.ts decide what to show based on game state
+        break;
     }
+  }
+
+  /** Show a custom message on the overlay (e.g. for failed-while-in-game). */
+  showMessage(text: string): void {
+    this.textEl.textContent = text;
+    this.show();
   }
 
   private show(): void {
     this.element.style.opacity = '1';
   }
 
-  private hide(): void {
+  hide(): void {
     this.element.style.opacity = '0';
   }
 
