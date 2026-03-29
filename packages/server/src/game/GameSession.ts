@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { DataChannel } from 'node-datachannel';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_GateVoteUpdate, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_GateVoteUpdate, S2C_GameChat, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
 import { MAPS, MAP_LIST, xpToLevel, calculateXpGain, getMaxPlayers, encodeMessage } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
@@ -359,6 +359,14 @@ export class GameSession {
       case 'set_resting':
         this.engine.setResting(entityId, msg.resting);
         break;
+      case 'game_chat': {
+        const trimmed = msg.message.trim().substring(0, 500);
+        if (!trimmed) break;
+        const player = this.players.find(p => p.userId === userId);
+        if (!player) break;
+        this.broadcast({ type: 'game_chat', username: player.username, message: trimmed } as S2C_GameChat);
+        break;
+      }
       case 'toggle_god_mode':
         if (this.auth.getIsAdmin(userId)) {
           const active = this.engine.toggleGodMode(entityId);

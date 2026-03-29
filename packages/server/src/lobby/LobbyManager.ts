@@ -157,6 +157,7 @@ export class LobbyManager {
       case 'set_resting':
       case 'toggle_god_mode':
       case 'vote_open_gates':
+      case 'game_chat':
       case 'request_rematch':
       case 'accept_rematch':
       case 'decline_rematch':

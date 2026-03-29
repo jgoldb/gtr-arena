@@ -154,11 +154,11 @@ export function getCharacterStats(id: CharacterId): CharacterStats {
   return CHARACTERS[id];
 }
 
-/** Resolve short SFX filenames to full `/sfx/characters/{id}/` paths. */
+/** Resolve short SFX filenames to full `/audio/sfx/characters/{id}/` paths. */
 export function getCharacterSfx(id: CharacterId): CharacterStats['soundEffects'] {
   const sfx = CHARACTERS[id].soundEffects;
   if (!sfx) return undefined;
-  const base = `/sfx/characters/${id}/`;
+  const base = `/audio/sfx/characters/${id}/`;
   return {
     autoAttackHit: sfx.autoAttackHit ? base + sfx.autoAttackHit : undefined,
     autoAttackCrit: sfx.autoAttackCrit ? base + sfx.autoAttackCrit : undefined,

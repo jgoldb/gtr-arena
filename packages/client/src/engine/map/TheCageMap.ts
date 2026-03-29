@@ -40,5 +40,7 @@ export const THE_CAGE: MapConfig = {
     { x: 0, y: 0, z: -26 }, // Team 2 — north pen
   ],
   npcSpawnBounds: { minX: -18, maxX: 18, minZ: -18, maxZ: 18 },
+  ambientSound: '/audio/ambient/maps/cage/crowd.wav',
+  ambientSoundVolume: 2.5,
   createScript: () => new CageArenaScript(),
 };

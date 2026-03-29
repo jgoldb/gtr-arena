@@ -23,6 +23,7 @@ import { ArenaFrames } from './ui/ArenaFrames';
 import { PartyFrames } from './ui/PartyFrames';
 import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
+import { ChatWindow } from './ui/ChatWindow';
 import { renderPortraits } from './ui/PortraitRenderer';
 import { getCharacterStats, xpToLevel, CHARACTER_LIST, type CharacterId } from '@gtr/shared';
 import { GLOBAL_COOLDOWN, type Ability } from './engine/combat/Ability';
@@ -124,7 +125,7 @@ const lobbyMusic = {
       gain.gain.value = 0;
       gain.connect(ctx.destination);
 
-      const resp = await fetch('/music/lobby.mp3');
+      const resp = await fetch('/audio/music/lobby.mp3');
       const buf = await resp.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(buf);
 
@@ -226,6 +227,7 @@ let mpArenaFrames: ArenaFrames | null = null;
 let mpPartyFrames: PartyFrames | null = null;
 let mpPositioner: UnitFramePositioner | null = null;
 let mpDeathFrame: DeathFrame | null = null;
+let mpChatWindow: ChatWindow | null = null;
 let mpFrameLoopId: number | null = null;
 let mpSelectedTargetId: string | null = null;
 
@@ -359,6 +361,8 @@ function cleanupMultiplayerUI(): void {
   mpPartyFrames = null;
   mpDeathFrame?.element.remove();
   mpDeathFrame = null;
+  mpChatWindow?.dispose();
+  mpChatWindow = null;
   if (mpFrameLoopId !== null) {
     cancelAnimationFrame(mpFrameLoopId);
     mpFrameLoopId = null;
@@ -1033,6 +1037,15 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   mpDeathFrame = new DeathFrame();
   document.body.appendChild(mpDeathFrame.element);
 
+  // Chat window
+  mpChatWindow = new ChatWindow({
+    onSend: (message) => {
+      network?.send({ type: 'game_chat', message });
+    },
+    canOpen: () => !mpEscapeMenu?.isOpen && !keybindMenu.isOpen,
+  });
+  document.body.appendChild(mpChatWindow.element);
+
   // Action bar - abilities come from shared character data
   const abilities: readonly (Ability | null)[] = localCharStats.abilities;
 
@@ -1543,6 +1556,10 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'lobby_chat':
       lobbyScreen?.addChatMessage(msg.username, msg.message, msg.isAnnouncement);
+      break;
+
+    case 'game_chat':
+      mpChatWindow?.addMessage(msg.username, msg.message);
       break;
 
     case 'user_profile':

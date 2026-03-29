@@ -6,6 +6,7 @@ import { THE_CAGE } from './TheCageMap';
 import { CELESTIAL_BALLROOM } from './CelestialBallroomMap';
 import { UI_SETUP } from './UISetupMap';
 import type { MapScript } from './MapScript';
+import { audioSettings } from '../../ui/AudioSettings';
 
 export class MapManager {
   private scene: THREE.Scene;
@@ -14,6 +15,14 @@ export class MapManager {
   private currentConfig: MapConfig | null = null;
   private currentScript: MapScript | null = null;
   readonly collision = new CollisionSystem();
+
+  // Ambient sound
+  private ambientCtx: AudioContext | null = null;
+  private ambientGain: GainNode | null = null;
+  private ambientSource: AudioBufferSourceNode | null = null;
+  private ambientSoundVolume = 1;
+  private ambientSettingsListener: (() => void) | null = null;
+  private ambientVisibilityListener: (() => void) | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -29,6 +38,9 @@ export class MapManager {
       console.error(`Map "${id}" not found`);
       return;
     }
+
+    // Stop previous ambient sound
+    this.stopAmbientSound();
 
     // Dispose active map script before removing the scene group
     if (this.currentScript) {
@@ -63,6 +75,12 @@ export class MapManager {
     if (config.createScript) {
       this.currentScript = config.createScript();
       this.currentScript.init(this.scene, this.currentMap.group, this.collision);
+    }
+
+    // Start ambient sound if the map defines one
+    if (config.ambientSound) {
+      this.ambientSoundVolume = config.ambientSoundVolume ?? 1;
+      this.startAmbientSound(config.ambientSound);
     }
   }
 
@@ -129,7 +147,110 @@ export class MapManager {
     return this.currentConfig?.npcSpawnBounds ?? this.getBounds();
   }
 
+  private get ambientVolume(): number {
+    if (!audioSettings.enableAmbient || !audioSettings.windowFocused) return 0;
+    return audioSettings.masterVolume * audioSettings.ambientVolume * this.ambientSoundVolume;
+  }
+
+  private applyAmbientVolume(): void {
+    if (!this.ambientCtx || !this.ambientGain) return;
+    const ctx = this.ambientCtx;
+    const gain = this.ambientGain;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(this.ambientVolume, ctx.currentTime + 0.15);
+  }
+
+  private async startAmbientSound(url: string): Promise<void> {
+    try {
+      const ctx = new AudioContext();
+      this.ambientCtx = ctx;
+      const gain = ctx.createGain();
+      this.ambientGain = gain;
+      gain.gain.value = 0;
+      gain.connect(ctx.destination);
+
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(buf);
+
+      // Context may have been stopped while fetching
+      if (!this.ambientCtx || this.ambientCtx !== ctx) {
+        ctx.close();
+        return;
+      }
+
+      const source = ctx.createBufferSource();
+      this.ambientSource = source;
+      source.buffer = audioBuf;
+      source.loop = true;
+      source.connect(gain);
+      source.start();
+
+      // Fade in
+      if (ctx.state !== 'suspended' && !document.hidden) {
+        gain.gain.linearRampToValueAtTime(this.ambientVolume, ctx.currentTime + 2);
+      }
+
+      // Resume on user gesture if suspended
+      if (ctx.state === 'suspended') {
+        const resume = () => {
+          ctx.resume().then(() => {
+            document.removeEventListener('pointerdown', resume);
+            document.removeEventListener('keydown', resume);
+            if (this.ambientCtx === ctx && this.ambientGain && !document.hidden) {
+              this.ambientGain.gain.linearRampToValueAtTime(this.ambientVolume, ctx.currentTime + 2);
+            }
+          });
+        };
+        document.addEventListener('pointerdown', resume);
+        document.addEventListener('keydown', resume);
+      }
+
+      // React to settings changes (volume and enable/disable)
+      this.ambientSettingsListener = () => this.applyAmbientVolume();
+      audioSettings.onChange(this.ambientSettingsListener);
+
+      // React to visibility changes
+      this.ambientVisibilityListener = () => {
+        if (!this.ambientCtx || !this.ambientGain) return;
+        const g = this.ambientGain;
+        g.gain.cancelScheduledValues(this.ambientCtx.currentTime);
+        g.gain.setValueAtTime(g.gain.value, this.ambientCtx.currentTime);
+        if (document.hidden) {
+          g.gain.linearRampToValueAtTime(0, this.ambientCtx.currentTime + 0.3);
+        } else {
+          g.gain.linearRampToValueAtTime(this.ambientVolume, this.ambientCtx.currentTime + 0.5);
+        }
+      };
+      document.addEventListener('visibilitychange', this.ambientVisibilityListener);
+    } catch {
+      // Audio not available — silent fail
+    }
+  }
+
+  private stopAmbientSound(): void {
+    if (this.ambientSettingsListener) {
+      audioSettings.removeListener(this.ambientSettingsListener);
+      this.ambientSettingsListener = null;
+    }
+    if (this.ambientVisibilityListener) {
+      document.removeEventListener('visibilitychange', this.ambientVisibilityListener);
+      this.ambientVisibilityListener = null;
+    }
+    if (this.ambientSource) {
+      try { this.ambientSource.stop(); } catch { /* already stopped */ }
+      this.ambientSource = null;
+    }
+    if (this.ambientCtx) {
+      this.ambientCtx.close();
+      this.ambientCtx = null;
+    }
+    this.ambientGain = null;
+  }
+
   dispose(): void {
+    this.stopAmbientSound();
     if (this.currentScript) {
       this.currentScript.dispose();
       this.currentScript = null;

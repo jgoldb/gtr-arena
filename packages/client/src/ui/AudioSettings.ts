@@ -6,6 +6,8 @@ export interface AudioSettingsData {
   musicVolume: number;    // 0–1
   enableSfx: boolean;
   sfxVolume: number;      // 0–1
+  enableAmbient: boolean;
+  ambientVolume: number;  // 0–1
 }
 
 const defaults: AudioSettingsData = {
@@ -14,6 +16,8 @@ const defaults: AudioSettingsData = {
   musicVolume: 1.0,
   enableSfx: true,
   sfxVolume: 0.5,
+  enableAmbient: true,
+  ambientVolume: 0.5,
 };
 
 type Listener = (settings: AudioSettingsData) => void;
@@ -34,6 +38,8 @@ class AudioSettingsStore {
         if (typeof parsed.musicVolume === 'number') this.data.musicVolume = Math.max(0, Math.min(1, parsed.musicVolume));
         if (typeof parsed.enableSfx === 'boolean') this.data.enableSfx = parsed.enableSfx;
         if (typeof parsed.sfxVolume === 'number') this.data.sfxVolume = Math.max(0, Math.min(1, parsed.sfxVolume));
+        if (typeof parsed.enableAmbient === 'boolean') this.data.enableAmbient = parsed.enableAmbient;
+        if (typeof parsed.ambientVolume === 'number') this.data.ambientVolume = Math.max(0, Math.min(1, parsed.ambientVolume));
       }
     } catch { /* corrupt data — use defaults */ }
 
@@ -61,11 +67,19 @@ class AudioSettingsStore {
   get musicVolume(): number { return this.data.musicVolume; }
   get enableSfx(): boolean { return this.data.enableSfx; }
   get sfxVolume(): number { return this.data.sfxVolume; }
+  get enableAmbient(): boolean { return this.data.enableAmbient; }
+  get ambientVolume(): number { return this.data.ambientVolume; }
   get windowFocused(): boolean { return this._windowFocused; }
 
   update(partial: Partial<AudioSettingsData>): void {
     Object.assign(this.data, partial);
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data)); } catch { /* quota */ }
+    this.notify();
+  }
+
+  reset(): void {
+    this.data = { ...defaults };
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
     this.notify();
   }
 

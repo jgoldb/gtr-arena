@@ -19,5 +19,7 @@ export interface MapConfig {
   obstacles: ObstacleConfig[];
   spawnPoints?: { x: number; y: number; z: number }[];
   npcSpawnBounds?: { minX: number; maxX: number; minZ: number; maxZ: number };
+  ambientSound?: string;
+  ambientSoundVolume?: number;  // per-map multiplier, default 1
   createScript?: () => MapScript;
 }

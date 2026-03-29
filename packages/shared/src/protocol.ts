@@ -15,6 +15,11 @@ export interface C2S_LobbyChat {
   message: string;
 }
 
+export interface C2S_GameChat {
+  type: 'game_chat';
+  message: string;
+}
+
 export interface C2S_CreateGame {
   type: 'create_game';
   format: GameFormat;
@@ -192,6 +197,12 @@ export interface S2C_LobbyChat {
   message: string;
   timestamp: number;
   isAnnouncement?: boolean;
+}
+
+export interface S2C_GameChat {
+  type: 'game_chat';
+  username: string;
+  message: string;
 }
 
 export interface S2C_GameLobbyState {
@@ -752,6 +763,7 @@ export type ClientMessage =
   | C2S_ChangePassword
   | C2S_Ping
   | C2S_DebugAddXp
+  | C2S_GameChat
   | C2S_RtcAnswer
   | C2S_RtcCandidate;
 
@@ -759,6 +771,7 @@ export type ServerMessage =
   | S2C_AuthResult
   | S2C_LobbyState
   | S2C_LobbyChat
+  | S2C_GameChat
   | S2C_GameLobbyState
   | S2C_GameStart
   | S2C_GameState

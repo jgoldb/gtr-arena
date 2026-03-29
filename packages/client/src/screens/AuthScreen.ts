@@ -1477,7 +1477,7 @@ export class AuthScreen {
       gain.gain.value = 0;
       gain.connect(ctx.destination);
 
-      const resp = await fetch('/music/login.ogg');
+      const resp = await fetch('/audio/music/login.ogg');
       const buf = await resp.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(buf);
 

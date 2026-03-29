@@ -211,12 +211,98 @@ export class AudioSettingsDialog {
     sfxSliderRow.append(sfxSlider, sfxPctLabel);
     dialog.appendChild(sfxSliderRow);
 
-    // ── Close button ──
+    // ── Enable Ambient Sounds ──
+    const ambientRow = document.createElement('label');
+    ambientRow.style.cssText = `
+      display: flex; align-items: center; gap: 10px;
+      color: #bbc; font-size: 14px; cursor: pointer;
+      margin-bottom: 20px; user-select: none;
+    `;
+
+    const ambientCheckbox = document.createElement('input');
+    ambientCheckbox.type = 'checkbox';
+    ambientCheckbox.checked = audioSettings.enableAmbient;
+    ambientCheckbox.style.cssText = `
+      width: 16px; height: 16px; cursor: pointer;
+      accent-color: rgba(100, 140, 220, 0.9);
+    `;
+    ambientCheckbox.addEventListener('change', () => {
+      audioSettings.update({ enableAmbient: ambientCheckbox.checked });
+    });
+
+    const ambientLabel = document.createElement('span');
+    ambientLabel.textContent = 'Enable Ambient Sounds';
+
+    ambientRow.append(ambientCheckbox, ambientLabel);
+    dialog.appendChild(ambientRow);
+
+    // ── Ambient Sound Volume ──
+    const ambientVolLabel = document.createElement('div');
+    ambientVolLabel.style.cssText = 'color: #aab; font-size: 13px; font-weight: bold; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;';
+    ambientVolLabel.textContent = 'Ambient Sound Volume';
+    dialog.appendChild(ambientVolLabel);
+
+    const ambientSliderRow = document.createElement('div');
+    ambientSliderRow.style.cssText = 'display: flex; align-items: center; gap: 12px; margin-bottom: 28px;';
+
+    const ambientSlider = document.createElement('input');
+    ambientSlider.type = 'range';
+    ambientSlider.min = '0';
+    ambientSlider.max = '100';
+    ambientSlider.value = String(Math.round(audioSettings.ambientVolume * 100));
+    ambientSlider.style.cssText = `
+      flex: 1; height: 6px; -webkit-appearance: none; appearance: none;
+      background: rgba(60, 80, 140, 0.4); border-radius: 3px; outline: none;
+      cursor: pointer;
+    `;
+    ambientSlider.classList.add('gtr-audio-slider');
+
+    const ambientPctLabel = document.createElement('div');
+    ambientPctLabel.style.cssText = 'color: #99a; font-size: 13px; min-width: 36px; text-align: right;';
+    ambientPctLabel.textContent = ambientSlider.value + '%';
+
+    ambientSlider.addEventListener('input', () => {
+      const v = parseInt(ambientSlider.value, 10);
+      ambientPctLabel.textContent = v + '%';
+      audioSettings.update({ ambientVolume: v / 100 });
+    });
+
+    ambientSliderRow.append(ambientSlider, ambientPctLabel);
+    dialog.appendChild(ambientSliderRow);
+
+    // ── Button row ──
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display: flex; gap: 10px;';
+
+    const resetBtn = document.createElement('button');
+    resetBtn.textContent = 'Reset';
+    resetBtn.style.cssText = `
+      flex: 1; padding: 10px 24px; font-size: 14px;
+      background: rgba(120, 50, 50, 0.8); color: #ddd;
+      border: 1px solid rgba(160, 80, 80, 0.3); border-radius: 4px;
+      cursor: pointer; outline: none; font-family: inherit;
+    `;
+    resetBtn.addEventListener('mouseenter', () => { resetBtn.style.background = 'rgba(140, 60, 60, 0.9)'; });
+    resetBtn.addEventListener('mouseleave', () => { resetBtn.style.background = 'rgba(120, 50, 50, 0.8)'; });
+    resetBtn.addEventListener('click', () => {
+      audioSettings.reset();
+      slider.value = String(Math.round(audioSettings.masterVolume * 100));
+      pctLabel.textContent = slider.value + '%';
+      checkbox.checked = audioSettings.enableMusic;
+      musicSlider.value = String(Math.round(audioSettings.musicVolume * 100));
+      musicPctLabel.textContent = musicSlider.value + '%';
+      sfxCheckbox.checked = audioSettings.enableSfx;
+      sfxSlider.value = String(Math.round(audioSettings.sfxVolume * 100));
+      sfxPctLabel.textContent = sfxSlider.value + '%';
+      ambientCheckbox.checked = audioSettings.enableAmbient;
+      ambientSlider.value = String(Math.round(audioSettings.ambientVolume * 100));
+      ambientPctLabel.textContent = ambientSlider.value + '%';
+    });
+
     const closeBtn = document.createElement('button');
     closeBtn.textContent = 'Close';
     closeBtn.style.cssText = `
-      display: block; width: 100%;
-      padding: 10px 24px; font-size: 14px;
+      flex: 1; padding: 10px 24px; font-size: 14px;
       background: rgba(60, 60, 80, 0.8); color: #ddd;
       border: 1px solid rgba(100, 100, 160, 0.3); border-radius: 4px;
       cursor: pointer; outline: none; font-family: inherit;
@@ -224,7 +310,9 @@ export class AudioSettingsDialog {
     closeBtn.addEventListener('mouseenter', () => { closeBtn.style.background = 'rgba(80, 80, 100, 0.9)'; });
     closeBtn.addEventListener('mouseleave', () => { closeBtn.style.background = 'rgba(60, 60, 80, 0.8)'; });
     closeBtn.addEventListener('click', () => this.close());
-    dialog.appendChild(closeBtn);
+
+    btnRow.append(resetBtn, closeBtn);
+    dialog.appendChild(btnRow);
 
     this.overlay.appendChild(dialog);
     this.overlay.addEventListener('mousedown', (e) => {
