@@ -303,31 +303,18 @@ export class LobbyManager {
       return;
     }
 
-    const isHost = lobby.hostUserId === userId;
+    lobby.removePlayer(userId);
+    user.gameLobbyId = null;
+    this.send(user.socket, { type: 'game_cancelled', reason: 'You left the game lobby' } as S2C_GameCancelled);
 
-    if (isHost) {
-      // Host leaving cancels the entire lobby — notify and eject all other players
-      for (const p of lobby.getPlayers()) {
-        const u = this.users.get(p.userId);
-        if (u) {
-          u.gameLobbyId = null;
-          this.send(u.socket, { type: 'game_cancelled', reason: isHost && p.userId !== userId
-            ? 'The host left the game lobby'
-            : 'You left the game lobby' } as S2C_GameCancelled);
-        }
-      }
+    if (lobby.isEmpty()) {
       this.gameLobbies.delete(lobby.gameId);
     } else {
-      lobby.removePlayer(userId);
-      user.gameLobbyId = null;
-
-      if (lobby.isEmpty()) {
-        this.gameLobbies.delete(lobby.gameId);
-      } else {
-        this.broadcastGameLobbyState(lobby);
+      // If the host left, pass host to the longest-tenured remaining player
+      if (lobby.hostUserId === userId) {
+        lobby.transferHost();
       }
-
-      this.send(user.socket, { type: 'game_cancelled', reason: 'You left the game lobby' } as S2C_GameCancelled);
+      this.broadcastGameLobbyState(lobby);
     }
 
     this.broadcastLobbyState();

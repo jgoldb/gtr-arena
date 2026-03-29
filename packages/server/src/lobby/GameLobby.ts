@@ -15,7 +15,7 @@ export class GameLobby {
   readonly gameId: string;
   readonly format: GameFormat;
   readonly mapId: string;
-  readonly hostUserId: string;
+  hostUserId: string;
   private players: LobbyPlayer[] = [];
 
   constructor(gameId: string, format: GameFormat, mapId: string, hostUserId: string, hostUsername: string) {
@@ -42,8 +42,10 @@ export class GameLobby {
       return { success: false, error: 'Already in this game' };
     }
 
-    // Round-robin team assignment
-    const team = this.players.length % 2 === 0 ? 0 : 1;
+    // Assign to the team with fewer players (prefer team 0 if tied)
+    const team0Count = this.players.filter(p => p.team === 0).length;
+    const team1Count = this.players.filter(p => p.team === 1).length;
+    const team = team0Count <= team1Count ? 0 : 1;
 
     this.players.push({
       userId,
@@ -58,6 +60,13 @@ export class GameLobby {
 
   removePlayer(userId: string): void {
     this.players = this.players.filter(p => p.userId !== userId);
+  }
+
+  /** Transfer host to the next player in the list (longest-tenured). Returns the new host userId, or null if empty. */
+  transferHost(): string | null {
+    if (this.players.length === 0) return null;
+    this.hostUserId = this.players[0].userId;
+    return this.hostUserId;
   }
 
   selectCharacter(userId: string, characterId: CharacterId): void {
@@ -111,6 +120,12 @@ export class GameLobby {
     if (this.players.length !== maxPlayers) {
       return { success: false, error: `Need ${maxPlayers} players to start (have ${this.players.length})` };
     }
+    const perTeam = maxPlayers / 2;
+    const team0Count = this.players.filter(p => p.team === 0).length;
+    const team1Count = this.players.filter(p => p.team === 1).length;
+    if (team0Count !== perTeam || team1Count !== perTeam) {
+      return { success: false, error: `Teams must be balanced (${perTeam} per team)` };
+    }
     if (!this.players.every(p => p.lockedIn)) {
       return { success: false, error: 'All players must lock in their character' };
     }
@@ -151,7 +166,7 @@ export class GameLobby {
       format: this.format,
       mapId: this.mapId,
       mapName: mapInfo?.name ?? this.mapId,
-      hostUsername: this.players[0]?.username ?? 'Unknown',
+      hostUsername: this.players.find(p => p.userId === this.hostUserId)?.username ?? 'Unknown',
       playerCount: this.players.length,
       maxPlayers: getMaxPlayers(this.format),
     };
