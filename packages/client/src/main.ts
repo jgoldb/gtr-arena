@@ -415,7 +415,7 @@ function cleanupPlaygroundUI(): void {
 
 // ── Update Detection (production only) ────────────────────────────────
 
-function showUpdateSnackbar(message: string): void {
+function showUpdateSnackbar(message: string, autoDismissMs?: number): void {
   if (updateSnackbarEl) updateSnackbarEl.remove();
   updateSnackbarEl = document.createElement('div');
   updateSnackbarEl.style.cssText = `
@@ -423,7 +423,7 @@ function showUpdateSnackbar(message: string): void {
     background: rgba(20, 20, 20, 0.95); color: #4fc3f7; padding: 12px 24px;
     border-radius: 8px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     font-size: 14px; z-index: 10000; border: 1px solid rgba(79, 195, 247, 0.3);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5); transition: transform 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5); transition: transform 0.3s ease, opacity 0.3s ease;
     pointer-events: none;
   `;
   updateSnackbarEl.textContent = message;
@@ -431,6 +431,14 @@ function showUpdateSnackbar(message: string): void {
   requestAnimationFrame(() => {
     if (updateSnackbarEl) updateSnackbarEl.style.transform = 'translateX(-50%) translateY(0)';
   });
+  if (autoDismissMs) {
+    setTimeout(() => {
+      if (updateSnackbarEl) {
+        updateSnackbarEl.style.opacity = '0';
+        setTimeout(() => { updateSnackbarEl?.remove(); updateSnackbarEl = null; }, 300);
+      }
+    }, autoDismissMs);
+  }
 }
 
 async function checkForUpdate(): Promise<void> {
@@ -444,8 +452,8 @@ async function checkForUpdate(): Promise<void> {
         updatePending = true;
         showUpdateSnackbar('Game updated \u2014 will refresh after game');
       } else {
-        showUpdateSnackbar('Game updated \u2014 refreshing...');
-        setTimeout(() => location.reload(), 1500);
+        sessionStorage.setItem('gtr_updated', '1');
+        location.reload();
       }
     }
   } catch { /* network error — ignore */ }
@@ -500,6 +508,7 @@ function showAuth(): void {
 
 function showLobby(): void {
   if (updatePending) {
+    sessionStorage.setItem('gtr_updated', '1');
     location.reload();
     return;
   }
@@ -3103,5 +3112,11 @@ async function startUISetup(): Promise<void> {
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────
+
+if (sessionStorage.getItem('gtr_updated')) {
+  sessionStorage.removeItem('gtr_updated');
+  // Show after a brief delay so the DOM is ready
+  setTimeout(() => showUpdateSnackbar('Game has been updated!', 5000), 500);
+}
 
 showAuth();
