@@ -22,7 +22,7 @@ export class AuthScreen {
   private fadingOut = false;
   private readonly onVisibilityChange = () => this.handleVisibilityChange();
   private readonly onUserGesture = () => this.resumeAudioCtx();
-  private readonly onAudioSettingsChange = (s: { masterVolume: number; enableMusic: boolean }) => this.handleAudioSettingsChange(s);
+  private readonly onAudioSettingsChange = (s: { masterVolume: number; enableMusic: boolean; musicVolume: number }) => this.handleAudioSettingsChange(s);
 
   constructor(onAuth: (result: AuthResult) => void) {
     this.onAuth = onAuth;
@@ -454,7 +454,7 @@ export class AuthScreen {
 
     // ── Astronaut — tumbling spaceman on a windy path ────────────
     const astroEl = document.createElement('img');
-    astroEl.src = '/grib_astro.png';
+    astroEl.src = '/images/grib_astro.png';
     astroEl.style.cssText = 'position: absolute; pointer-events: none; display: none; z-index: 0;';
     this.element.appendChild(astroEl);
     let astroReady = false;
@@ -481,7 +481,7 @@ export class AuthScreen {
     `;
     nickBubbleEl.appendChild(nickHighlight);
     const nickImg = document.createElement('img');
-    nickImg.src = '/nick_sanders.png';
+    nickImg.src = '/images/nick_sanders.png';
     let nickReady = false;
     nickImg.onload = () => { nickReady = true; };
     nickImg.style.cssText = `
@@ -697,13 +697,18 @@ export class AuthScreen {
     const FRAME_INTERVAL = 66;
     let astroLastTime = 0;
 
+    let lastLoopTime = 0;
     const animateLoop = (now: number) => {
       this.animationFrameId = requestAnimationFrame(animateLoop);
       if (document.hidden) return;
+      // Throttle to ~10 FPS when tab is visible but not focused
+      const focused = document.hasFocus();
+      if (!focused && now - lastLoopTime < 100) return;
+      lastLoopTime = now;
 
       // ── Astronaut update (every frame for smooth DOM movement) ──
       if (astroReady || nickReady) {
-        const dt = astroLastTime ? Math.min((now - astroLastTime) / (1000 / 60), 3) : 1;
+        const dt = astroLastTime ? Math.min((now - astroLastTime) / (1000 / 60), focused ? 3 : 8) : 1;
         astroLastTime = now;
 
         if (astroSpawnTime === 0) astroSpawnTime = now + ASTRO_INTERVAL;
@@ -1435,16 +1440,20 @@ export class AuthScreen {
     audioSettings.onChange(this.onAudioSettingsChange);
   }
 
-  private handleAudioSettingsChange(s: { masterVolume: number; enableMusic: boolean }): void {
+  private get authMusicVolume(): number {
+    return audioSettings.windowFocused ? audioSettings.masterVolume * audioSettings.musicVolume * 2 : 0;
+  }
+
+  private handleAudioSettingsChange(s: { masterVolume: number; enableMusic: boolean; musicVolume: number }): void {
     if (!s.enableMusic) {
       this.fadeOutMusic();
     } else if (this.audioCtx && !this.fadingOut) {
-      // Live volume update
+      // Live volume update (also handles focus/blur)
       const ctx = this.audioCtx;
       const gain = this.gainNode!;
       gain.gain.cancelScheduledValues(ctx.currentTime);
       gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(s.masterVolume * 2, ctx.currentTime + 0.15);
+      gain.gain.linearRampToValueAtTime(this.authMusicVolume, ctx.currentTime + 0.15);
     } else {
       // Music was off, re-enable
       this.startMusic();
@@ -1468,7 +1477,7 @@ export class AuthScreen {
       gain.gain.value = 0;
       gain.connect(ctx.destination);
 
-      const resp = await fetch('/soundtrack1.ogg');
+      const resp = await fetch('/music/login.ogg');
       const buf = await resp.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(buf);
 
@@ -1484,13 +1493,12 @@ export class AuthScreen {
 
       document.addEventListener('visibilitychange', this.onVisibilityChange);
 
-      const vol = audioSettings.masterVolume * 2; // Auth screen base was 0.5, so scale by 2x
       if (ctx.state === 'suspended') {
         for (const evt of ['pointerdown', 'keydown'] as const) {
           document.addEventListener(evt, this.onUserGesture, { once: false });
         }
-      } else if (!document.hidden) {
-        gain.gain.linearRampToValueAtTime(vol, ctx.currentTime + 2);
+      } else if (audioSettings.windowFocused) {
+        gain.gain.linearRampToValueAtTime(this.authMusicVolume, ctx.currentTime + 2);
       }
     } catch {
       // Audio playback not available — silent fail
@@ -1504,8 +1512,8 @@ export class AuthScreen {
       for (const evt of ['pointerdown', 'keydown'] as const) {
         document.removeEventListener(evt, this.onUserGesture);
       }
-      if (!this.fadingOut && this.gainNode && this.audioCtx && !document.hidden) {
-        this.gainNode.gain.linearRampToValueAtTime(audioSettings.masterVolume * 2, this.audioCtx.currentTime + 2);
+      if (!this.fadingOut && this.gainNode && this.audioCtx && audioSettings.windowFocused) {
+        this.gainNode.gain.linearRampToValueAtTime(this.authMusicVolume, this.audioCtx.currentTime + 2);
       }
     });
   }
@@ -1519,7 +1527,7 @@ export class AuthScreen {
     if (document.hidden) {
       gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
     } else {
-      gain.gain.linearRampToValueAtTime(audioSettings.masterVolume * 2, ctx.currentTime + 0.5);
+      gain.gain.linearRampToValueAtTime(this.authMusicVolume, ctx.currentTime + 0.5);
     }
   }
 

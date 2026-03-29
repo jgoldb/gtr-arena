@@ -230,6 +230,7 @@ export interface S2C_CombatEvent {
   amount: number;
   combatType: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune';
   suppressAutoTarget?: boolean;
+  isAutoAttack?: boolean;
 }
 
 export interface S2C_Flinch {
@@ -286,6 +287,7 @@ export interface S2C_AutoAttackSwing {
   type: 'auto_attack_swing';
   entityId: string;
   targetEntityId: string;
+  isCrit?: boolean;
 }
 
 export interface S2C_Knockback {

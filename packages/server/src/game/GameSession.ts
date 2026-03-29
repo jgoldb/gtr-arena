@@ -143,8 +143,9 @@ export class GameSession {
     this.engine.onPositionRelayUnreliable = (senderEntityId, msg) => this.broadcastUnreliableExcept(senderEntityId, msg);
     this.engine.onGameOver = (winningTeam) => this.handleGameOver(winningTeam);
 
-    // Wire match stat tracking
+    // Wire match stat tracking (ignore stats during arena preparation)
     this.engine.onStatDamage = (sourceEntityId, _targetEntityId, amount) => {
+      if (this.arenaPreparationActive) return;
       const userId = this.userIdByEntityId.get(sourceEntityId);
       if (userId) {
         const stats = this.matchStats.get(userId);
@@ -152,6 +153,7 @@ export class GameSession {
       }
     };
     this.engine.onStatHeal = (sourceEntityId, _targetEntityId, amount) => {
+      if (this.arenaPreparationActive) return;
       const userId = this.userIdByEntityId.get(sourceEntityId);
       if (userId) {
         const stats = this.matchStats.get(userId);
@@ -159,6 +161,7 @@ export class GameSession {
       }
     };
     this.engine.onStatKill = (killerEntityId, victimEntityId) => {
+      if (this.arenaPreparationActive) return;
       const killerUserId = this.userIdByEntityId.get(killerEntityId);
       if (killerUserId) {
         const stats = this.matchStats.get(killerUserId);
@@ -587,12 +590,14 @@ export class GameSession {
     }
     for (const info of infos) {
       const won = info.team === winningTeam;
-      // Players removed before game end get no XP
+      // Players removed before game end or with no damage/healing contribution get no XP
       const removed = this.removedBeforeEnd.has(info.userId);
+      const pStats = this.matchStats.get(info.userId);
+      const contributed = pStats != null && (pStats.damageDealt > 0 || pStats.healingDone > 0);
       const highestOpponentLevel = infos
         .filter(o => o.team !== info.team)
         .reduce((max, o) => Math.max(max, o.level), 1);
-      const xpGained = removed ? 0 : calculateXpGain(info.level, highestOpponentLevel, won);
+      const xpGained = (removed || !contributed) ? 0 : calculateXpGain(info.level, highestOpponentLevel, won);
       playerInfos.set(info.userId, { level: info.level, xpGained });
     }
 
@@ -660,8 +665,10 @@ export class GameSession {
       const won = removed ? false : info.team === winningTeam;
       this.db.recordGameResult(info.dbId, info.characterId, won);
 
-      // Players removed before game end get no XP
-      if (!removed) {
+      // Players removed before game end or with no damage/healing contribution get no XP
+      const pStats = this.matchStats.get(info.userId);
+      const contributed = pStats != null && (pStats.damageDealt > 0 || pStats.healingDone > 0);
+      if (!removed && contributed) {
         const highestOpponentLevel = playerInfos
           .filter(o => o.team !== info.team)
           .reduce((max, o) => Math.max(max, o.level), 1);

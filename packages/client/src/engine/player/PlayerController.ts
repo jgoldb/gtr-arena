@@ -130,8 +130,8 @@ export class PlayerController implements Targetable {
     this.characterModel.setAutoAttacking(active);
   }
 
-  triggerSwing(): void {
-    this.characterModel.triggerSwing();
+  triggerSwing(isCrit = false): void {
+    this.characterModel.triggerSwing(isCrit);
   }
 
   triggerAbilityAnimation(abilityId: string, targetWorldPos?: THREE.Vector3): void {
@@ -140,6 +140,10 @@ export class PlayerController implements Targetable {
 
   triggerFlinch(): void {
     this.characterModel.triggerFlinch();
+  }
+
+  triggerDodge(): void {
+    this.characterModel.triggerDodge();
   }
 
   setAbilityBuffActive(buffId: string, active: boolean): void {

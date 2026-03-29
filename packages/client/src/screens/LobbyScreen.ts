@@ -1,6 +1,7 @@
 import type { NetworkManager } from '../network/NetworkManager';
 import type { LobbyUser, LobbyGameInfo, GameFormat, UserProfileData } from '@gtr/shared';
 import { MAP_LIST, CHARACTER_LIST, xpToLevel, xpProgress } from '@gtr/shared';
+import { keybindManager, matchesKeybindEvent } from '../ui/KeybindManager';
 
 export class LobbyScreen {
   readonly element: HTMLDivElement;
@@ -892,8 +893,13 @@ export class LobbyScreen {
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display: flex; gap: 10px; justify-content: flex-end;';
 
+    const closeDialog = (): void => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      overlay.remove();
+    };
+
     const cancelBtn = this.makeButton('Cancel', '#4a2a2a', '#5e3636');
-    cancelBtn.addEventListener('click', () => overlay.remove());
+    cancelBtn.addEventListener('click', () => closeDialog());
 
     const submitBtn = this.makeButton('Change', '#2a5090', '#3466b8');
     submitBtn.style.fontWeight = '600';
@@ -904,8 +910,16 @@ export class LobbyScreen {
       if (newPw.value.length < 3) { errorEl.textContent = 'New password must be at least 3 characters'; return; }
       if (newPw.value !== confirmPw.value) { errorEl.textContent = 'Passwords do not match'; return; }
       this.network.send({ type: 'change_password', currentPassword: currentPw.value, newPassword: newPw.value });
-      overlay.remove();
+      closeDialog();
     });
+
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (matchesKeybindEvent(keybindManager.getCode('toggle_game_menu'), e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDialog();
+      }
+    };
 
     btnRow.appendChild(cancelBtn);
     btnRow.appendChild(submitBtn);
@@ -918,8 +932,9 @@ export class LobbyScreen {
     dialog.appendChild(btnRow);
     overlay.appendChild(dialog);
 
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDialog(); });
     this.element.appendChild(overlay);
+    document.addEventListener('keydown', onKeyDown, true);
     currentPw.focus();
   }
 

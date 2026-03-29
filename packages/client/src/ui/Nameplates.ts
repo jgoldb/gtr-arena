@@ -46,6 +46,7 @@ export class Nameplates {
   private entries: Map<Targetable, NameplateEntry> = new Map();
   private worldPos = new THREE.Vector3();
   private onClickTarget?: (target: Targetable) => void;
+  private onRightClickTarget?: (target: Targetable) => void;
   private onHoverTarget?: (target: Targetable | null) => void;
 
   constructor(
@@ -53,11 +54,13 @@ export class Nameplates {
     scene: THREE.Scene,
     onClickTarget?: (target: Targetable) => void,
     onHoverTarget?: (target: Targetable | null) => void,
+    onRightClickTarget?: (target: Targetable) => void,
   ) {
     this.camera = camera;
     this.scene = scene;
     this.onClickTarget = onClickTarget;
     this.onHoverTarget = onHoverTarget;
+    this.onRightClickTarget = onRightClickTarget;
     this.element = document.createElement('div');
     this.element.style.cssText = `
       position: fixed;
@@ -212,6 +215,10 @@ export class Nameplates {
     `;
     plate.addEventListener('click', () => {
       this.onClickTarget?.(target);
+    });
+    plate.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this.onRightClickTarget?.(target);
     });
     plate.addEventListener('mouseenter', () => {
       this.onHoverTarget?.(target);

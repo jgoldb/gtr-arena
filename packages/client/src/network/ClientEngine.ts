@@ -32,10 +32,11 @@ import {
 import { BlindEffect } from '../engine/effects/BlindEffect';
 import { DeadReckoning } from './DeadReckoning';
 import { keybindManager } from '../ui/KeybindManager';
+import { soundEffects } from '../ui/SoundEffects';
 
 interface RemoteEntity {
   id: string;
-  characterId: string;
+  characterId: CharacterId;
   team: number;
   name: string;
   model: CharacterModel;
@@ -268,6 +269,9 @@ export class ClientEngine {
       id: e.id, x: e.x, y: e.y, z: e.z, rotationY: e.rotationY, isMoving: e.isMoving,
       vx: 0, vz: 0,
     })));
+
+    // Preload combat sound effects
+    soundEffects.init();
 
     // Track tab visibility so we can fast-forward client-side timers on restore
     this.onVisibilityChange = () => {
@@ -751,6 +755,34 @@ export class ClientEngine {
   handleCombatEvent(msg: S2C_CombatEvent): void {
     this.onCombatText?.(msg.sourceEntityId, msg.targetEntityId, msg.amount, msg.combatType);
 
+    // Play sound effects for auto-attack hits
+    if (msg.isAutoAttack && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
+      const charId = msg.sourceEntityId === this.localEntityId
+        ? this.playerController.characterId
+        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
+      if (charId) {
+        const sfx = getCharacterStats(charId).soundEffects;
+        const aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+        if (aaSfx) soundEffects.play(aaSfx, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId));
+      }
+    }
+
+    // Dodge animation on the target
+    if (msg.combatType === 'dodge') {
+      if (msg.targetEntityId === this.localEntityId) {
+        this.playerController.triggerDodge();
+        const localDodgeSfx = getCharacterStats(this.playerController.characterId).soundEffects?.dodge;
+        if (localDodgeSfx) soundEffects.play(localDodgeSfx);
+      } else {
+        const entity = this.remoteEntities.get(msg.targetEntityId);
+        if (entity) {
+          entity.model.triggerDodge();
+          const dodgeSfx = getCharacterStats(entity.characterId).soundEffects?.dodge;
+          if (dodgeSfx) soundEffects.play(dodgeSfx, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId));
+        }
+      }
+    }
+
     // Auto-target attacker when player has no target (not while blinded)
     if (msg.targetEntityId === this.localEntityId && !this.selectedTargetId && msg.combatType !== 'heal' && !this.blindEffect.isActive() && !msg.suppressAutoTarget) {
       const attacker = this.remoteEntities.get(msg.sourceEntityId);
@@ -821,24 +853,31 @@ export class ClientEngine {
   handleFlinch(msg: S2C_Flinch): void {
     if (msg.entityId === this.localEntityId) {
       this.playerController.triggerFlinch();
+      const localStruckSfx = getCharacterStats(this.playerController.characterId).soundEffects?.struck;
+      if (localStruckSfx) soundEffects.play(localStruckSfx);
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
-      if (entity) entity.model.triggerFlinch();
+      if (entity) {
+        entity.model.triggerFlinch();
+        const struckSfx = getCharacterStats(entity.characterId).soundEffects?.struck;
+        if (struckSfx) soundEffects.play(struckSfx, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId));
+      }
     }
   }
 
   handleAutoAttackSwing(msg: S2C_AutoAttackSwing): void {
     // Resolve target position for ranged bullet visuals
     const targetPos = this.getEntityWorldPos(msg.targetEntityId);
+    const isCrit = !!msg.isCrit;
 
     if (msg.entityId === this.localEntityId) {
       if (targetPos) this.playerController.model.swingTargetWorldPos = targetPos;
-      this.playerController.triggerSwing();
+      this.playerController.triggerSwing(isCrit);
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
       if (entity) {
         if (targetPos) entity.model.swingTargetWorldPos = targetPos;
-        entity.model.triggerSwing();
+        entity.model.triggerSwing(isCrit);
       }
     }
   }
@@ -849,6 +888,29 @@ export class ClientEngine {
     }
     const remote = this.remoteEntities.get(entityId);
     return remote ? remote.mesh.position.clone() : null;
+  }
+
+  /** Distance from local player to an entity (0 if it's the local player). */
+  private distToEntity(entityId: string): number {
+    if (entityId === this.localEntityId) return 0;
+    const remote = this.remoteEntities.get(entityId);
+    if (!remote) return 0;
+    return this.playerController.mesh.position.distanceTo(remote.mesh.position);
+  }
+
+  /** Stereo pan (-1 left, +1 right) for an entity relative to the player's facing. */
+  private panToEntity(entityId: string): number {
+    if (entityId === this.localEntityId) return 0;
+    const remote = this.remoteEntities.get(entityId);
+    if (!remote) return 0;
+    const pos = this.playerController.mesh.position;
+    const rotY = this.playerController.mesh.rotation.y;
+    const dx = remote.mesh.position.x - pos.x;
+    const dz = remote.mesh.position.z - pos.z;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 0.001) return 0;
+    // Dot product of normalized direction with player's right vector
+    return (Math.cos(rotY) * dx - Math.sin(rotY) * dz) / len;
   }
 
   handleCooldownUpdate(msg: S2C_CooldownUpdate): void {
@@ -1327,6 +1389,16 @@ export class ClientEngine {
     }
   }
 
+  /** Right-click target: select + engage auto-attack if hostile. */
+  rightClickTarget(target: Targetable): void {
+    this.selectTarget(target);
+    const targetId = this.findEntityIdByTargetable(target);
+    if (targetId && target.isHostileTo(this.playerController) && !target.dead) {
+      if (this.resting) this.stopResting();
+      this.sendAutoAttack(targetId);
+    }
+  }
+
   sendAutoAttack(targetEntityId: string): void {
     this.network.send({ type: 'auto_attack', targetEntityId });
   }
@@ -1381,7 +1453,12 @@ export class ClientEngine {
   private loop = (): void => {
     this.animationFrameId = requestAnimationFrame(this.loop);
     const now = performance.now();
-    const dt = Math.min((now - this.lastFrameTime) / 1000, 0.1);
+
+    // Throttle to ~10 FPS when tab is visible but not focused
+    const focused = document.hasFocus();
+    if (!focused && now - this.lastFrameTime < 100) return;
+
+    const dt = Math.min((now - this.lastFrameTime) / 1000, focused ? 0.1 : 0.2);
     this.lastFrameTime = now;
 
     // When the tab was backgrounded, RAF was paused and dt was clamped to 0.1s.

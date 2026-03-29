@@ -28,6 +28,8 @@ import { getCharacterStats, xpToLevel, CHARACTER_LIST, type CharacterId } from '
 import { GLOBAL_COOLDOWN, type Ability } from './engine/combat/Ability';
 import type { Targetable } from './engine/types';
 
+declare const __BUILD_VERSION__: string | undefined;
+
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 if (!canvas) throw new Error('Canvas element not found');
 
@@ -52,6 +54,8 @@ let isAdmin = false;
 let localXp = 0;
 let pendingLevelUpFrom: number | null = null; // old XP before a level-up that happened while lobby was not visible
 let awaitingReconnectResult = false;
+let updatePending = false;
+let updateSnackbarEl: HTMLElement | null = null;
 
 // Active screens / engines
 let authScreen: AuthScreen | null = null;
@@ -67,7 +71,8 @@ const lobbyMusic = {
   gainNode: null as GainNode | null,
   sourceNode: null as AudioBufferSourceNode | null,
   fadingOut: false,
-  get volume(): number { return audioSettings.masterVolume; },
+  _startId: 0,
+  get volume(): number { return audioSettings.windowFocused ? audioSettings.masterVolume * audioSettings.musicVolume : 0; },
 
   onVisibilityChange(): void {
     if (this.fadingOut || !this.audioCtx || !this.gainNode) return;
@@ -102,10 +107,13 @@ const lobbyMusic = {
     if (!audioSettings.enableMusic) return;
     // Already playing — nothing to do
     if (this.audioCtx && !this.fadingOut) return;
+    const id = ++this._startId;
     // Was fading out — wait for cleanup then restart
     if (this.fadingOut) {
       await new Promise<void>(r => setTimeout(r, 1700));
     }
+    // If fadeOut() or another start() was called during the wait, abort
+    if (id !== this._startId) return;
     this.fadingOut = false;
     try {
       const ctx = new AudioContext();
@@ -115,11 +123,16 @@ const lobbyMusic = {
       gain.gain.value = 0;
       gain.connect(ctx.destination);
 
-      const resp = await fetch('/GTR1.mp3');
+      const resp = await fetch('/music/lobby.mp3');
       const buf = await resp.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(buf);
 
-      if (this.fadingOut) return;
+      if (this.fadingOut || id !== this._startId) {
+        ctx.close();
+        this.audioCtx = null;
+        this.gainNode = null;
+        return;
+      }
 
       const source = ctx.createBufferSource();
       this.sourceNode = source;
@@ -145,6 +158,7 @@ const lobbyMusic = {
   },
 
   fadeOut(): void {
+    this._startId++;  // Cancel any in-progress start()
     this.fadingOut = true;
     if (this._onVisibilityChange) {
       document.removeEventListener('visibilitychange', this._onVisibilityChange);
@@ -399,6 +413,44 @@ function cleanupPlaygroundUI(): void {
   }
 }
 
+// ── Update Detection (production only) ────────────────────────────────
+
+function showUpdateSnackbar(message: string): void {
+  if (updateSnackbarEl) updateSnackbarEl.remove();
+  updateSnackbarEl = document.createElement('div');
+  updateSnackbarEl.style.cssText = `
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(100%);
+    background: rgba(20, 20, 20, 0.95); color: #4fc3f7; padding: 12px 24px;
+    border-radius: 8px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 14px; z-index: 10000; border: 1px solid rgba(79, 195, 247, 0.3);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5); transition: transform 0.3s ease;
+    pointer-events: none;
+  `;
+  updateSnackbarEl.textContent = message;
+  document.body.appendChild(updateSnackbarEl);
+  requestAnimationFrame(() => {
+    if (updateSnackbarEl) updateSnackbarEl.style.transform = 'translateX(-50%) translateY(0)';
+  });
+}
+
+async function checkForUpdate(): Promise<void> {
+  if (typeof __BUILD_VERSION__ === 'undefined') return;
+  try {
+    const resp = await fetch(`/version.json?_=${Date.now()}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.version && data.version !== __BUILD_VERSION__) {
+      if (currentState === 'multiplayer') {
+        updatePending = true;
+        showUpdateSnackbar('Game updated \u2014 will refresh after game');
+      } else {
+        showUpdateSnackbar('Game updated \u2014 refreshing...');
+        setTimeout(() => location.reload(), 1500);
+      }
+    }
+  } catch { /* network error — ignore */ }
+}
+
 // ── Auth Screen ────────────────────────────────────────────────────────
 
 function showAuth(): void {
@@ -412,6 +464,9 @@ function showAuth(): void {
     network.onMessage(handleServerMessage);
     network.onConnectionStateChange((state) => {
       reconnectOverlay.update(state);
+      if (state.status === 'reconnected') {
+        checkForUpdate();
+      }
       if (state.status === 'failed') {
         network?.disconnect();
         network = null;
@@ -444,6 +499,10 @@ function showAuth(): void {
 // ── Lobby Screen ───────────────────────────────────────────────────────
 
 function showLobby(): void {
+  if (updatePending) {
+    location.reload();
+    return;
+  }
   cleanupCurrentState();
   currentState = 'lobby';
   hideGameUI();
@@ -872,6 +931,7 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     clientEngine.camera, clientEngine.scene,
     (target) => { clientEngine!.selectTarget(target); },
     (target) => { clientEngine!.targetingSystem.setNameplateHover(target); },
+    (target) => { clientEngine!.rightClickTarget(target); },
   );
   document.body.appendChild(mpNameplates.element);
 
@@ -1020,12 +1080,14 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
       const collision = clientEngine!.mapManager.collision;
       if (!collision.hasLineOfSight(pos.x, pos.z, target.mesh.position.x, target.mesh.position.z, pos.y, target.mesh.position.y)) return 'not-in-los';
       // Facing check (120° cone, matches server)
-      const hLen = Math.sqrt(dx * dx + dz * dz);
-      if (hLen > 0.001) {
-        const fwdX = Math.sin(player.mesh.rotation.y);
-        const fwdZ = Math.cos(player.mesh.rotation.y);
-        const dot = fwdX * ((target.mesh.position.x - pos.x) / hLen) + fwdZ * ((target.mesh.position.z - pos.z) / hLen);
-        if (dot <= 0.5) return 'not-facing';
+      if (ability.requiresFacing !== false) {
+        const hLen = Math.sqrt(dx * dx + dz * dz);
+        if (hLen > 0.001) {
+          const fwdX = Math.sin(player.mesh.rotation.y);
+          const fwdZ = Math.cos(player.mesh.rotation.y);
+          const dot = fwdX * ((target.mesh.position.x - pos.x) / hLen) + fwdZ * ((target.mesh.position.z - pos.z) / hLen);
+          if (dot <= 0.5) return 'not-facing';
+        }
       }
     }
     if (ability.requiresTarget && !ability.requiresHostileTarget) {
@@ -1206,7 +1268,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   function mpUpdateFrames(): void {
     mpFrameLoopId = requestAnimationFrame(mpUpdateFrames);
     const now = performance.now();
-    const dt = Math.min((now - lastMpFrameTime) / 1000, 0.1);
+    // Throttle to ~10 FPS when tab is visible but not focused
+    const focused = document.hasFocus();
+    if (!focused && now - lastMpFrameTime < 100) return;
+    const dt = Math.min((now - lastMpFrameTime) / 1000, focused ? 0.1 : 0.2);
     lastMpFrameTime = now;
 
     if (!clientEngine) return;
@@ -2159,6 +2224,12 @@ async function startPlayground(): Promise<void> {
     engine.camera, engine.scene,
     (target) => { engine.targetingSystem.currentTarget = target; },
     (target) => { engine.targetingSystem.setNameplateHover(target); },
+    (target) => {
+      engine.targetingSystem.currentTarget = target;
+      if (target.isHostileTo(engine.playerController) && !target.dead) {
+        engine.startAutoAttack(target);
+      }
+    },
   );
   pgNameplates = nameplates;
   document.body.appendChild(nameplates.element);
@@ -2481,7 +2552,10 @@ async function startPlayground(): Promise<void> {
   function updateFrames(): void {
     pgFrameLoopId = requestAnimationFrame(updateFrames);
     const now = performance.now();
-    const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
+    // Throttle to ~10 FPS when tab is visible but not focused
+    const focused = document.hasFocus();
+    if (!focused && now - lastFrameTime < 100) return;
+    const dt = Math.min((now - lastFrameTime) / 1000, focused ? 0.1 : 0.2);
     lastFrameTime = now;
 
     const bs = engine.buffSystem;
@@ -2642,6 +2716,12 @@ async function startUISetup(): Promise<void> {
     engine.camera, engine.scene,
     (target) => { engine.targetingSystem.currentTarget = target; },
     (target) => { engine.targetingSystem.setNameplateHover(target); },
+    (target) => {
+      engine.targetingSystem.currentTarget = target;
+      if (target.isHostileTo(engine.playerController) && !target.dead) {
+        engine.startAutoAttack(target);
+      }
+    },
   );
   pgNameplates = nameplates;
   document.body.appendChild(nameplates.element);
@@ -2945,7 +3025,10 @@ async function startUISetup(): Promise<void> {
   function updateFrames(): void {
     pgFrameLoopId = requestAnimationFrame(updateFrames);
     const now = performance.now();
-    const dt = Math.min((now - lastFrameTime) / 1000, 0.1);
+    // Throttle to ~10 FPS when tab is visible but not focused
+    const focused = document.hasFocus();
+    if (!focused && now - lastFrameTime < 100) return;
+    const dt = Math.min((now - lastFrameTime) / 1000, focused ? 0.1 : 0.2);
     lastFrameTime = now;
 
     const bs = engine.buffSystem;

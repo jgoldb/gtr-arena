@@ -1,3 +1,5 @@
+import type { CharacterId } from './characters';
+
 // ── XP / Level utilities ──────────────────────────────────────────────────
 //
 // Formula:  xpForLevel(n) = 100 · (n − 1)^2.2
@@ -60,7 +62,7 @@ export function calculateXpGain(playerLevel: number, opponentLevel: number, won:
     adjusted = base + 10 * playerLevel;
   }
 
-  return Math.round(adjusted * 3);
+  return Math.round(adjusted * 5);
 }
 
 // ── Shared entity interface (no Three.js dependency) ──────────────────────
@@ -84,7 +86,7 @@ export interface Positionable {
 
 export interface EntitySnapshot {
   id: string;
-  characterId: string;
+  characterId: CharacterId;
   team: number;
   name: string;
   x: number;
@@ -158,7 +160,7 @@ export interface GameLobbyPlayer {
   userId: string;
   username: string;
   team: number;
-  characterId: string | null;
+  characterId: CharacterId | null;
   lockedIn: boolean;
 }
 

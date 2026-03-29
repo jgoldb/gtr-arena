@@ -29,7 +29,7 @@ export class ServerCombatSystem {
   private buffSystem: ServerBuffSystem;
   private collision: CollisionSystem;
 
-  onCombatText?: (source: ServerEntity, target: ServerEntity, amount: number, type: CombatTextType, ability?: Ability) => void;
+  onCombatText?: (source: ServerEntity, target: ServerEntity, amount: number, type: CombatTextType, ability?: Ability, isAutoAttack?: boolean) => void;
   onDirectDamageDealt?: (target: ServerEntity) => void;
   onFlinchDamage?: (target: ServerEntity) => void;
   onSleepApplied?: (attacker: ServerEntity, target: ServerEntity) => void;
@@ -230,7 +230,7 @@ export class ServerCombatSystem {
       if (ability.minRange && dist < ability.minRange) {
         return { success: false, error: 'out-of-range', errorMessage: 'Too close' };
       }
-      if (!this.isFacing(attacker.x, attacker.z, attacker.rotationY, tx, tz)) {
+      if (ability.requiresFacing !== false && !this.isFacing(attacker.x, attacker.z, attacker.rotationY, tx, tz)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
       }
     }
@@ -497,16 +497,17 @@ export class ServerCombatSystem {
     this.onCombatText?.(source, target, healAmount, 'heal');
   }
 
-  applyAutoAttackDamage(attacker: ServerEntity, target: ServerEntity, baseDamage: number): void {
-    if (attacker.dead || target.dead) return;
-    if (this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(attacker)) return;
+  /** Returns true if the auto-attack was a critical hit. */
+  applyAutoAttackDamage(attacker: ServerEntity, target: ServerEntity, baseDamage: number): boolean {
+    if (attacker.dead || target.dead) return false;
+    if (this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(attacker)) return false;
 
     const outcome = this.rollOutcome(attacker, target);
 
     if (outcome === 'miss') {
-      this.onCombatText?.(attacker, target, 0, 'miss');
+      this.onCombatText?.(attacker, target, 0, 'miss', undefined, true);
     } else if (outcome === 'dodge') {
-      this.onCombatText?.(attacker, target, 0, 'dodge');
+      this.onCombatText?.(attacker, target, 0, 'dodge', undefined, true);
     } else {
       const critMult = outcome === 'crit' ? 2 : 1;
       const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
@@ -520,7 +521,7 @@ export class ServerCombatSystem {
         this.onFlinchDamage?.(target);
       }
       if (actualDamage > 0) {
-        this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+        this.onCombatText?.(attacker, target, actualDamage, outcome === 'crit' ? 'crit' : 'damage', undefined, true);
       }
       if (target.hp <= 0 && !target.dead) {
         target.die();
@@ -531,5 +532,6 @@ export class ServerCombatSystem {
 
     this.enterCombat(attacker);
     this.enterCombat(target);
+    return outcome === 'crit';
   }
 }

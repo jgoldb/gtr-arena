@@ -26,6 +26,12 @@ export interface CharacterStats {
   abilities: readonly (Ability | null)[];
   startingBuffs?: readonly BuffDefinition[];
   playgroundOnly?: boolean;
+  soundEffects?: {
+    autoAttackHit?: string;
+    autoAttackCrit?: string;
+    struck?: string;
+    dodge?: string;
+  };
 }
 
 export interface CharacterInfo {
@@ -49,6 +55,12 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     hpRegen: 32,
     manaRegen: 12,
     abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket],
+    soundEffects: {
+      autoAttackHit: '/sfx/characters/janitor/auto-attack.wav',
+      autoAttackCrit: '/sfx/characters/janitor/crit.wav',
+      struck: '/sfx/characters/janitor/struck.wav',
+      dodge: '/sfx/characters/janitor/dodge.wav',
+    },
   },
   'dr-retardo': {
     id: 'dr-retardo',

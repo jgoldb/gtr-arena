@@ -305,7 +305,7 @@ export class ServerEngine {
     this.regenSystem.setBuffSystem(this.buffSystem);
     this.combatSystem = new ServerCombatSystem(this.regenSystem, this.buffSystem, this.collision);
 
-    this.combatSystem.onCombatText = (source, target, amount, type, ability) => {
+    this.combatSystem.onCombatText = (source, target, amount, type, ability, isAutoAttack) => {
       this.emitEvent({
         type: 'combat_event',
         sourceEntityId: source.id,
@@ -313,6 +313,7 @@ export class ServerEngine {
         amount,
         combatType: type,
         ...(ability?.suppressAutoTarget ? { suppressAutoTarget: true } : {}),
+        ...(isAutoAttack ? { isAutoAttack: true } : {}),
       } as S2C_CombatEvent);
       // Track match stats
       if (amount > 0) {
@@ -1471,6 +1472,7 @@ export class ServerEngine {
       state.timer = 0;
       this.swingTimers.set(entity.id, 0);
 
+      let isCrit = false;
       if (isRangedAutoAttack(stats)) {
         // Ranged: delay damage by bullet travel time
         const travelTime = dist / BULLET_SPEED;
@@ -1481,8 +1483,8 @@ export class ServerEngine {
           remainingTime: travelTime,
         });
       } else {
-        // Melee: instant damage
-        this.combatSystem.applyAutoAttackDamage(entity, state.target, entity.rollAutoAttackDamage());
+        // Melee: resolve damage first so we know if it crit
+        isCrit = this.combatSystem.applyAutoAttackDamage(entity, state.target, entity.rollAutoAttackDamage());
       }
 
       // Notify clients to play swing animation
@@ -1490,6 +1492,7 @@ export class ServerEngine {
         type: 'auto_attack_swing',
         entityId: entity.id,
         targetEntityId: state.target.id,
+        ...(isCrit && { isCrit: true }),
       });
     }
   }

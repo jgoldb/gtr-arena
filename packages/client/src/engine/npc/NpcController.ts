@@ -39,7 +39,7 @@ export class NpcController implements Targetable {
 
   // NPC auto-attack
   autoAttackTarget: Targetable | null = null;
-  onAutoAttackHit?: (attacker: Targetable, target: Targetable, damage: number) => void;
+  onAutoAttackHit?: (attacker: Targetable, target: Targetable, damage: number) => boolean;
   checkLineOfSight?: (a: THREE.Vector3, b: THREE.Vector3) => boolean;
   resolveGround?: (x: number, z: number, y: number) => number;
   private autoAttackTimer = 0;
@@ -90,6 +90,10 @@ export class NpcController implements Targetable {
 
   triggerFlinch(): void {
     this.characterModel.triggerFlinch();
+  }
+
+  triggerDodge(): void {
+    this.characterModel.triggerDodge();
   }
 
   die(): void {
@@ -165,8 +169,8 @@ export class NpcController implements Targetable {
           this.autoAttackTimer = 0;
           // Set target pos for ranged bullet visual before triggering swing
           this.characterModel.swingTargetWorldPos = target.mesh.position.clone();
-          this.characterModel.triggerSwing();
-          this.onAutoAttackHit?.(this, target, this.characterModel.rollAutoAttackDamage());
+          const isCrit = this.onAutoAttackHit?.(this, target, this.characterModel.rollAutoAttackDamage()) ?? false;
+          this.characterModel.triggerSwing(isCrit);
         } else {
           // Not facing or out of range — hold timer
           this.autoAttackTimer = this.characterModel.autoAttackSpeed;

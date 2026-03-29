@@ -1,8 +1,16 @@
 import { audioSettings } from './AudioSettings';
+import { keybindManager, matchesKeybindEvent } from './KeybindManager';
 
 export class AudioSettingsDialog {
   private overlay: HTMLDivElement;
   private onClose?: () => void;
+  private onKeyDown = (e: KeyboardEvent): void => {
+    if (matchesKeybindEvent(keybindManager.getCode('toggle_game_menu'), e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.close();
+    }
+  };
 
   constructor(onClose?: () => void) {
     this.onClose = onClose;
@@ -90,7 +98,7 @@ export class AudioSettingsDialog {
     musicRow.style.cssText = `
       display: flex; align-items: center; gap: 10px;
       color: #bbc; font-size: 14px; cursor: pointer;
-      margin-bottom: 28px; user-select: none;
+      margin-bottom: 20px; user-select: none;
     `;
 
     const checkbox = document.createElement('input');
@@ -109,6 +117,99 @@ export class AudioSettingsDialog {
 
     musicRow.append(checkbox, musicLabel);
     dialog.appendChild(musicRow);
+
+    // ── Music Volume ──
+    const musicVolLabel = document.createElement('div');
+    musicVolLabel.style.cssText = 'color: #aab; font-size: 13px; font-weight: bold; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;';
+    musicVolLabel.textContent = 'Music Volume';
+    dialog.appendChild(musicVolLabel);
+
+    const musicSliderRow = document.createElement('div');
+    musicSliderRow.style.cssText = 'display: flex; align-items: center; gap: 12px; margin-bottom: 20px;';
+
+    const musicSlider = document.createElement('input');
+    musicSlider.type = 'range';
+    musicSlider.min = '0';
+    musicSlider.max = '100';
+    musicSlider.value = String(Math.round(audioSettings.musicVolume * 100));
+    musicSlider.style.cssText = `
+      flex: 1; height: 6px; -webkit-appearance: none; appearance: none;
+      background: rgba(60, 80, 140, 0.4); border-radius: 3px; outline: none;
+      cursor: pointer;
+    `;
+    musicSlider.classList.add('gtr-audio-slider');
+
+    const musicPctLabel = document.createElement('div');
+    musicPctLabel.style.cssText = 'color: #99a; font-size: 13px; min-width: 36px; text-align: right;';
+    musicPctLabel.textContent = musicSlider.value + '%';
+
+    musicSlider.addEventListener('input', () => {
+      const v = parseInt(musicSlider.value, 10);
+      musicPctLabel.textContent = v + '%';
+      audioSettings.update({ musicVolume: v / 100 });
+    });
+
+    musicSliderRow.append(musicSlider, musicPctLabel);
+    dialog.appendChild(musicSliderRow);
+
+    // ── Enable Sound Effects ──
+    const sfxRow = document.createElement('label');
+    sfxRow.style.cssText = `
+      display: flex; align-items: center; gap: 10px;
+      color: #bbc; font-size: 14px; cursor: pointer;
+      margin-bottom: 20px; user-select: none;
+    `;
+
+    const sfxCheckbox = document.createElement('input');
+    sfxCheckbox.type = 'checkbox';
+    sfxCheckbox.checked = audioSettings.enableSfx;
+    sfxCheckbox.style.cssText = `
+      width: 16px; height: 16px; cursor: pointer;
+      accent-color: rgba(100, 140, 220, 0.9);
+    `;
+    sfxCheckbox.addEventListener('change', () => {
+      audioSettings.update({ enableSfx: sfxCheckbox.checked });
+    });
+
+    const sfxLabel = document.createElement('span');
+    sfxLabel.textContent = 'Enable Sound Effects';
+
+    sfxRow.append(sfxCheckbox, sfxLabel);
+    dialog.appendChild(sfxRow);
+
+    // ── Sound Effects Volume ──
+    const sfxVolLabel = document.createElement('div');
+    sfxVolLabel.style.cssText = 'color: #aab; font-size: 13px; font-weight: bold; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;';
+    sfxVolLabel.textContent = 'Sound Effects Volume';
+    dialog.appendChild(sfxVolLabel);
+
+    const sfxSliderRow = document.createElement('div');
+    sfxSliderRow.style.cssText = 'display: flex; align-items: center; gap: 12px; margin-bottom: 28px;';
+
+    const sfxSlider = document.createElement('input');
+    sfxSlider.type = 'range';
+    sfxSlider.min = '0';
+    sfxSlider.max = '100';
+    sfxSlider.value = String(Math.round(audioSettings.sfxVolume * 100));
+    sfxSlider.style.cssText = `
+      flex: 1; height: 6px; -webkit-appearance: none; appearance: none;
+      background: rgba(60, 80, 140, 0.4); border-radius: 3px; outline: none;
+      cursor: pointer;
+    `;
+    sfxSlider.classList.add('gtr-audio-slider');
+
+    const sfxPctLabel = document.createElement('div');
+    sfxPctLabel.style.cssText = 'color: #99a; font-size: 13px; min-width: 36px; text-align: right;';
+    sfxPctLabel.textContent = sfxSlider.value + '%';
+
+    sfxSlider.addEventListener('input', () => {
+      const v = parseInt(sfxSlider.value, 10);
+      sfxPctLabel.textContent = v + '%';
+      audioSettings.update({ sfxVolume: v / 100 });
+    });
+
+    sfxSliderRow.append(sfxSlider, sfxPctLabel);
+    dialog.appendChild(sfxSliderRow);
 
     // ── Close button ──
     const closeBtn = document.createElement('button');
@@ -133,9 +234,11 @@ export class AudioSettingsDialog {
 
   open(): void {
     document.body.appendChild(this.overlay);
+    document.addEventListener('keydown', this.onKeyDown, true);
   }
 
   close(): void {
+    document.removeEventListener('keydown', this.onKeyDown, true);
     this.overlay.remove();
     this.onClose?.();
   }

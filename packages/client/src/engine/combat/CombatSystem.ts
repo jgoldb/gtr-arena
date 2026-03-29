@@ -30,11 +30,13 @@ export class CombatSystem {
   onCombatText?: (target: Targetable, amount: number, type: CombatTextType) => void;
   onDirectDamageDealt?: (target: Targetable) => void;
   onFlinchDamage?: (target: Targetable) => void;
+  onDodge?: (target: Targetable) => void;
   onSleepApplied?: (attacker: Targetable, target: Targetable) => void;
   onBlindApplied?: (attacker: Targetable, target: Targetable) => void;
   onHostileAction?: (attacker: Targetable, target: Targetable, ability?: Ability) => void;
   onEnterCombat?: (entity: Targetable) => void;
   onLeaveCombat?: (entity: Targetable) => void;
+  onAutoAttackDamageDealt?: (attacker: Targetable, isCrit: boolean) => void;
 
   constructor(regenSystem: RegenSystem, buffSystem: BuffSystem, collisionSystem: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -251,7 +253,7 @@ export class CombatSystem {
       if (ability.minRange && dist < ability.minRange) {
         return { success: false, error: 'out-of-range', errorMessage: 'Too close' };
       }
-      if (!this.isFacing(attacker.mesh.position, attackerRotY, target.mesh.position)) {
+      if (ability.requiresFacing !== false && !this.isFacing(attacker.mesh.position, attackerRotY, target.mesh.position)) {
         return { success: false, error: 'not-facing', errorMessage: 'Not facing target' };
       }
     }
@@ -298,6 +300,7 @@ export class CombatSystem {
 
       if (outcome === 'miss' || outcome === 'dodge') {
         this.onCombatText?.(target, 0, outcome);
+        if (outcome === 'dodge') this.onDodge?.(target);
       } else {
         // Calculate base damage (variable or flat)
         let baseDamage: number;
@@ -400,6 +403,7 @@ export class CombatSystem {
     const outcome = this.rollOutcome(attacker, target, true);
     if (outcome === 'miss' || outcome === 'dodge') {
       this.onCombatText?.(target, 0, outcome);
+      if (outcome === 'dodge') this.onDodge?.(target);
       this.enterCombat(attacker);
       this.enterCombat(target);
       return;
@@ -440,6 +444,7 @@ export class CombatSystem {
     const outcome = this.rollOutcome(attacker, target, !!ability.isMelee);
     if (outcome === 'miss' || outcome === 'dodge') {
       this.onCombatText?.(target, 0, outcome);
+      if (outcome === 'dodge') this.onDodge?.(target);
       this.enterCombat(attacker);
       this.enterCombat(target);
       return;
@@ -552,9 +557,10 @@ export class CombatSystem {
     this.onCombatText?.(target, healAmount, 'heal');
   }
 
-  applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): void {
-    if (attacker.dead || target.dead) return;
-    if (this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(attacker)) return;
+  /** Returns true if the auto-attack was a critical hit. */
+  applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): boolean {
+    if (attacker.dead || target.dead) return false;
+    if (this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(attacker)) return false;
 
     this.onHostileAction?.(attacker, target);
     const outcome = this.rollOutcome(attacker, target);
@@ -563,6 +569,7 @@ export class CombatSystem {
       this.onCombatText?.(target, 0, 'miss');
     } else if (outcome === 'dodge') {
       this.onCombatText?.(target, 0, 'dodge');
+      this.onDodge?.(target);
     } else {
       const critMult = outcome === 'crit' ? 2 : 1;
       const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
@@ -577,6 +584,7 @@ export class CombatSystem {
       }
       if (actualDamage > 0) {
         this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+        this.onAutoAttackDamageDealt?.(attacker, outcome === 'crit');
       }
       if (target.hp <= 0 && !target.dead) {
         target.die();
@@ -587,5 +595,6 @@ export class CombatSystem {
     // Auto-attacks are always hostile actions — both parties enter combat
     this.enterCombat(attacker);
     this.enterCombat(target);
+    return outcome === 'crit';
   }
 }

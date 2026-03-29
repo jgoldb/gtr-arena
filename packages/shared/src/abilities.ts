@@ -84,6 +84,7 @@ export interface Ability {
   readonly groundTargeted?: boolean; // ability targets a ground location (click-to-place AoE)
   readonly aoeRadius?: number; // world units — radius of the AoE effect
   readonly suppressAutoTarget?: boolean; // if true, target does NOT auto-target the caster when hit
+  readonly requiresFacing?: boolean; // if false, ability can be used without facing the target (default true)
   readonly isMelee?: boolean; // melee attacks can be dodged; spells cannot
   readonly usableWhileCCd?: boolean; // if true, ability can be used while stunned/slept/blinded/etc.
   readonly isAutoAttack?: boolean; // if true, this is the Attack toggle — not a real ability, just toggles auto-attack

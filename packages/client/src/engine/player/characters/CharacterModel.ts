@@ -54,6 +54,7 @@ export abstract class CharacterModel {
   protected combatStanceWeight = 0;
   protected attackAnimTime = -1; // -1 = not swinging
   protected attackArmToggle = false; // for alternating arms
+  protected attackIsCrit = false; // current swing is a critical hit
 
   // Ability animation state
   protected abilityAnimTime = -1; // -1 = not playing
@@ -84,6 +85,11 @@ export abstract class CharacterModel {
   // Flinch animation state (hit reaction)
   private static readonly FLINCH_DURATION = 0.25;
   protected flinchTime = -1; // -1 = not playing
+
+  // Dodge animation state
+  private static readonly DODGE_DURATION = 0.35;
+  protected dodgeTime = -1; // -1 = not playing
+  private dodgeSide = 1; // 1 = lean right, -1 = lean left (alternates)
 
   // PvP Trinket burst particles + shockwave ring
   private trinketParticles: { mesh: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number }[] = [];
@@ -180,8 +186,9 @@ export abstract class CharacterModel {
   /** World-space position of the auto-attack target (set before triggerSwing for ranged characters). */
   swingTargetWorldPos: THREE.Vector3 | null = null;
 
-  triggerSwing(): void {
+  triggerSwing(isCrit = false): void {
     this.attackAnimTime = 0;
+    this.attackIsCrit = isCrit;
   }
 
   protected abilityTargetPos: THREE.Vector3 | null = null;
@@ -200,6 +207,11 @@ export abstract class CharacterModel {
 
   triggerFlinch(): void {
     this.flinchTime = 0;
+  }
+
+  triggerDodge(): void {
+    this.dodgeTime = 0;
+    this.dodgeSide = -this.dodgeSide; // alternate sides
   }
 
   get isSwinging(): boolean {
@@ -352,9 +364,13 @@ export abstract class CharacterModel {
     // --- Attack swing layer ---
     if (this.attackAnimTime >= 0) {
       this.attackAnimTime += dt;
-      const swingDuration = this.getSwingDuration();
+      const swingDuration = this.attackIsCrit ? this.getCritSwingDuration() : this.getSwingDuration();
       const t = Math.min(1, this.attackAnimTime / swingDuration);
-      this.animateAttackSwing(t, this.attackArmToggle);
+      if (this.attackIsCrit) {
+        this.animateCritSwing(t, this.attackArmToggle);
+      } else {
+        this.animateAttackSwing(t, this.attackArmToggle);
+      }
       if (t >= 1) {
         this.attackAnimTime = -1;
         this.attackArmToggle = !this.attackArmToggle;
@@ -380,6 +396,16 @@ export abstract class CharacterModel {
       this.animateFlinch(t);
       if (t >= 1) {
         this.flinchTime = -1;
+      }
+    }
+
+    // --- Dodge layer (additive, quick lateral lean) ---
+    if (this.dodgeTime >= 0) {
+      this.dodgeTime += dt;
+      const t = Math.min(1, this.dodgeTime / CharacterModel.DODGE_DURATION);
+      this.animateDodge(t, this.dodgeSide);
+      if (t >= 1) {
+        this.dodgeTime = -1;
       }
     }
 
@@ -472,6 +498,10 @@ export abstract class CharacterModel {
     return 0.4;
   }
 
+  protected getCritSwingDuration(): number {
+    return 0.5;
+  }
+
   setCastAnimation(abilityId: string | null, progress: number): void {
     if (abilityId) {
       this.castAnimId = abilityId;
@@ -496,6 +526,38 @@ export abstract class CharacterModel {
   protected animateAttackSwing(_t: number, _alternateArm: boolean): void {}
   protected getAbilityAnimDuration(_abilityId: string): number { return 0.6; }
   protected animateAbilityUse(_abilityId: string, _t: number): void {}
+
+  /** Default crit auto-attack: exaggerated two-handed overhead slam. Subclasses can override. */
+  protected animateCritSwing(t: number, _alternateArm: boolean): void {
+    // Phases: wind-up (0–0.25), slam (0.25–0.5), recovery (0.5–1.0)
+    const windUp = t < 0.25 ? t / 0.25 : 1;
+    const slam = t < 0.25 ? 0 : t < 0.5 ? (t - 0.25) / 0.25 : 1;
+    const recover = t < 0.5 ? 0 : (t - 0.5) / 0.5;
+    const easeWindUp = windUp * windUp;
+    const easeSlam = slam * slam * (3 - 2 * slam);
+    const easeRecover = recover * recover * (3 - 2 * recover);
+
+    // Wind-up: pull both arms back overhead, lean back
+    const windUpFade = 1 - easeSlam;
+    this.leftArmGroup.rotation.x -= 1.2 * easeWindUp * windUpFade;
+    this.rightArmGroup.rotation.x -= 1.2 * easeWindUp * windUpFade;
+    this.leftArmGroup.rotation.z -= 0.2 * easeWindUp * windUpFade;
+    this.rightArmGroup.rotation.z += 0.2 * easeWindUp * windUpFade;
+    this.bodyGroup.rotation.x -= 0.2 * easeWindUp * windUpFade;
+    this.headGroup.rotation.x += 0.15 * easeWindUp * windUpFade;
+
+    // Slam: arms crash forward, body lunges
+    const slamFade = 1 - easeRecover;
+    this.leftArmGroup.rotation.x += 1.8 * easeSlam * slamFade;
+    this.rightArmGroup.rotation.x += 1.8 * easeSlam * slamFade;
+    this.bodyGroup.rotation.x += 0.3 * easeSlam * slamFade;
+    this.bodyGroup.position.y -= 0.1 * easeSlam * slamFade;
+    this.headGroup.rotation.x += 0.1 * easeSlam * slamFade;
+
+    // Legs brace on impact
+    this.leftLegGroup.rotation.x += 0.15 * easeSlam * slamFade;
+    this.rightLegGroup.rotation.x += 0.15 * easeSlam * slamFade;
+  }
 
   /** Shared PvP Trinket animation — "break free" burst with particles + shockwave. */
   protected animatePvPTrinket(t: number): void {
@@ -670,6 +732,43 @@ export abstract class CharacterModel {
     this.rightArmGroup.rotation.z += ease * 0.15;
     this.leftArmGroup.rotation.x -= ease * 0.1;
     this.rightArmGroup.rotation.x -= ease * 0.1;
+  }
+
+  protected animateDodge(t: number, side: number): void {
+    // Quick lateral lean: sharp peak at ~25% then ease out
+    const impact = t < 0.25 ? t / 0.25 : Math.max(0, 1 - (t - 0.25) / 0.75);
+    const ease = impact * impact * (3 - 2 * impact); // smoothstep
+
+    // Body leans sideways (away from attacker)
+    this.bodyGroup.rotation.z += ease * 0.3 * side;
+    // Slight backward lean
+    this.bodyGroup.rotation.x -= ease * 0.1;
+
+    // Head turns away
+    this.headGroup.rotation.y += ease * 0.25 * side;
+    this.headGroup.rotation.x -= ease * 0.1;
+
+    // Lead arm raises defensively, trailing arm swings out
+    if (side > 0) {
+      // Leaning right: left arm up to guard, right arm trails
+      this.leftArmGroup.rotation.x += ease * 0.4;
+      this.leftArmGroup.rotation.z += ease * 0.3;
+      this.rightArmGroup.rotation.z += ease * 0.4;
+    } else {
+      // Leaning left: right arm up to guard, left arm trails
+      this.rightArmGroup.rotation.x += ease * 0.4;
+      this.rightArmGroup.rotation.z -= ease * 0.3;
+      this.leftArmGroup.rotation.z -= ease * 0.4;
+    }
+
+    // Legs: weight shifts to the side being leaned toward
+    if (side > 0) {
+      this.rightLegGroup.rotation.z += ease * 0.15;
+      this.leftLegGroup.rotation.x += ease * 0.1;
+    } else {
+      this.leftLegGroup.rotation.z -= ease * 0.15;
+      this.rightLegGroup.rotation.x += ease * 0.1;
+    }
   }
 
   protected animateResting(time: number, weight: number): void {

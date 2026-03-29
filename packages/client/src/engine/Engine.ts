@@ -26,6 +26,7 @@ import {
 } from './effects/VisualEffects';
 import { BlindEffect } from './effects/BlindEffect';
 import { keybindManager } from '../ui/KeybindManager';
+import { soundEffects } from '../ui/SoundEffects';
 
 interface ActiveGasCloud extends GasCloudVisual {
   center: THREE.Vector3;
@@ -277,6 +278,27 @@ export class Engine {
           if (npc === target) { npc.triggerFlinch(); break; }
         }
       }
+      const struckSfx = getCharacterStats(target.characterId).soundEffects?.struck;
+      if (struckSfx) soundEffects.play(struckSfx, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position));
+    };
+
+    // Dodge animation
+    this.combatSystem.onDodge = (target) => {
+      if (target === this.playerController) {
+        this.playerController.triggerDodge();
+      } else {
+        for (const npc of this.npcs) {
+          if (npc === target) { npc.triggerDodge(); break; }
+        }
+      }
+      const dodgeSfx = getCharacterStats(target.characterId).soundEffects?.dodge;
+      if (dodgeSfx) soundEffects.play(dodgeSfx, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position));
+    };
+
+    this.combatSystem.onAutoAttackDamageDealt = (attacker, isCrit) => {
+      const sfx = getCharacterStats(attacker.characterId).soundEffects;
+      const aaSfx = (isCrit && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+      if (aaSfx) soundEffects.play(aaSfx, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position));
     };
 
     // Auto-target attacker when player has no target (not while blinded)
@@ -289,6 +311,9 @@ export class Engine {
         target.autoAttackTarget = attacker;
       }
     };
+
+    // Preload combat sound effects
+    soundEffects.init();
 
     // Fall damage (WoW-style: no damage below threshold, then scales with distance)
     this.playerController.onFallDamage = (fallDistance: number) => {
@@ -349,6 +374,17 @@ export class Engine {
     }
   }
 
+  /** Stereo pan (-1 left, +1 right) for a world position relative to the player's facing. */
+  private sfxPan(sourcePos: THREE.Vector3): number {
+    const pos = this.playerController.mesh.position;
+    const rotY = this.playerController.mesh.rotation.y;
+    const dx = sourcePos.x - pos.x;
+    const dz = sourcePos.z - pos.z;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 0.001) return 0;
+    return (Math.cos(rotY) * dx - Math.sin(rotY) * dz) / len;
+  }
+
   private applyStartingBuffs(): void {
     const stats = getCharacterStats(this.playerController.characterId);
     if (stats.startingBuffs) {
@@ -389,8 +425,9 @@ export class Engine {
         const dz = target.mesh.position.z - attacker.mesh.position.z;
         const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
         this.pendingBullets.push({ attacker, target, damage, remainingTime: dist / BULLET_SPEED });
+        return false;
       } else {
-        this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
+        return this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
       }
     };
     npc.checkLineOfSight = (a, b) => this.combatSystem.hasLineOfSight(a, b);
@@ -1631,9 +1668,9 @@ export class Engine {
           remainingTime: travelTime,
         });
       } else {
-        // Melee: instant damage
-        player.triggerSwing();
-        this.combatSystem.applyAutoAttackDamage(player, target, player.rollAutoAttackDamage());
+        // Melee: resolve damage first so we know if it crit, then play the swing
+        const isCrit = this.combatSystem.applyAutoAttackDamage(player, target, player.rollAutoAttackDamage());
+        player.triggerSwing(isCrit);
       }
     }
   }
@@ -1652,10 +1689,18 @@ export class Engine {
     }
   }
 
+  private lastLoopTime = 0;
+
   private loop = (): void => {
     this.animationFrameId = requestAnimationFrame(this.loop);
 
-    const deltaTime = Math.min(this.clock.getDelta(), 0.1); // Cap at 100ms to prevent huge jumps
+    // Throttle to ~10 FPS when tab is visible but not focused
+    const now = performance.now();
+    const focused = document.hasFocus();
+    if (!focused && now - this.lastLoopTime < 100) return;
+    this.lastLoopTime = now;
+
+    const deltaTime = Math.min(this.clock.getDelta(), focused ? 0.1 : 0.2);
 
     // Process targeting clicks before movement updates
     const click = this.input.getLeftClick();

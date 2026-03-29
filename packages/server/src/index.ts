@@ -55,7 +55,13 @@ const server = http.createServer((req, res) => {
       res.end('Not found');
       return;
     }
-    res.writeHead(200, { 'Content-Type': contentType });
+    const headers: Record<string, string> = { 'Content-Type': contentType };
+    const basename = path.basename(filePath);
+    // Prevent caching of index.html and version.json so deploys are detected immediately
+    if (basename === 'index.html' || basename === 'version.json') {
+      headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+    }
+    res.writeHead(200, headers);
     res.end(data);
   });
 });
