@@ -1,5 +1,6 @@
 import { audioSettings } from './AudioSettings';
-import { CHARACTERS } from '@gtr/shared';
+import { CHARACTERS, getCharacterSfx } from '@gtr/shared';
+import type { CharacterId } from '@gtr/shared';
 
 // Distance-based volume falloff (world units, 1 yard = 0.6 units)
 const SFX_FULL_VOLUME_DIST = 3;   // ~5 yards — full volume within melee range
@@ -60,7 +61,7 @@ class SoundEffectsManager {
   /** Preload all game sound effects. Safe to call multiple times. */
   init(): void {
     for (const char of Object.values(CHARACTERS)) {
-      const sfx = char.soundEffects;
+      const sfx = getCharacterSfx(char.id as CharacterId);
       if (!sfx) continue;
       if (sfx.autoAttackHit) this.load(sfx.autoAttackHit);
       if (sfx.autoAttackCrit) this.load(sfx.autoAttackCrit);

@@ -498,11 +498,11 @@ export class ServerCombatSystem {
   }
 
   /** Returns true if the auto-attack was a critical hit. */
-  applyAutoAttackDamage(attacker: ServerEntity, target: ServerEntity, baseDamage: number): boolean {
+  applyAutoAttackDamage(attacker: ServerEntity, target: ServerEntity, baseDamage: number, canDodge = true): boolean {
     if (attacker.dead || target.dead) return false;
     if (this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(attacker)) return false;
 
-    const outcome = this.rollOutcome(attacker, target);
+    const outcome = this.rollOutcome(attacker, target, canDodge);
 
     if (outcome === 'miss') {
       this.onCombatText?.(attacker, target, 0, 'miss', undefined, true);

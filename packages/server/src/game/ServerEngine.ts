@@ -1505,7 +1505,7 @@ export class ServerEngine {
         this.pendingAutoAttackProjectiles.splice(i, 1);
         // Apply damage on impact (skip if target died or became untargetable mid-flight)
         if (!p.target.dead && !this.buffSystem.isUntargetable(p.target)) {
-          this.combatSystem.applyAutoAttackDamage(p.attacker, p.target, p.damage);
+          this.combatSystem.applyAutoAttackDamage(p.attacker, p.target, p.damage, false);
         }
       }
     }

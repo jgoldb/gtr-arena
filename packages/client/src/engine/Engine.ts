@@ -6,7 +6,7 @@ import { PlayerController } from './player/PlayerController';
 import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, ODStunDebuff, ParanoidDebuff, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
-import { getCharacterStats, isRangedAutoAttack, BULLET_SPEED } from '@gtr/shared';
+import { getCharacterStats, getCharacterSfx, isRangedAutoAttack, BULLET_SPEED } from '@gtr/shared';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
 import { TargetingSystem } from './targeting/TargetingSystem';
@@ -278,7 +278,7 @@ export class Engine {
           if (npc === target) { npc.triggerFlinch(); break; }
         }
       }
-      const struckSfx = getCharacterStats(target.characterId).soundEffects?.struck;
+      const struckSfx = getCharacterSfx(target.characterId)?.struck;
       if (struckSfx) soundEffects.play(struckSfx, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position));
     };
 
@@ -291,12 +291,12 @@ export class Engine {
           if (npc === target) { npc.triggerDodge(); break; }
         }
       }
-      const dodgeSfx = getCharacterStats(target.characterId).soundEffects?.dodge;
+      const dodgeSfx = getCharacterSfx(target.characterId)?.dodge;
       if (dodgeSfx) soundEffects.play(dodgeSfx, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position));
     };
 
     this.combatSystem.onAutoAttackDamageDealt = (attacker, isCrit) => {
-      const sfx = getCharacterStats(attacker.characterId).soundEffects;
+      const sfx = getCharacterSfx(attacker.characterId);
       const aaSfx = (isCrit && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
       if (aaSfx) soundEffects.play(aaSfx, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position));
     };
@@ -1683,7 +1683,7 @@ export class Engine {
         this.pendingBullets.splice(i, 1);
         // Apply damage on impact (skip if target died or became untargetable mid-flight)
         if (!b.target.dead && !this.buffSystem.isUntargetable(b.target)) {
-          this.combatSystem.applyAutoAttackDamage(b.attacker, b.target, b.damage);
+          this.combatSystem.applyAutoAttackDamage(b.attacker, b.target, b.damage, false);
         }
       }
     }

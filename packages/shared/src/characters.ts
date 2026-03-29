@@ -51,15 +51,15 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     autoAttackSpeed: 2.5,
     autoAttackRange: 1.8,
     critChance: 0.25,
-    dodgeChance: 0.17,
+    dodgeChance: 0.99,
     hpRegen: 32,
     manaRegen: 12,
     abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket],
     soundEffects: {
-      autoAttackHit: '/sfx/characters/janitor/auto-attack.wav',
-      autoAttackCrit: '/sfx/characters/janitor/crit.wav',
-      struck: '/sfx/characters/janitor/struck.wav',
-      dodge: '/sfx/characters/janitor/dodge.wav',
+      autoAttackHit: 'auto-attack.wav',
+      autoAttackCrit: 'crit.wav',
+      struck: 'struck.wav',
+      dodge: 'dodge.wav',
     },
   },
   'dr-retardo': {
@@ -152,6 +152,19 @@ export const CHARACTER_LIST: CharacterInfo[] = (Object.values(CHARACTERS) as Cha
 
 export function getCharacterStats(id: CharacterId): CharacterStats {
   return CHARACTERS[id];
+}
+
+/** Resolve short SFX filenames to full `/sfx/characters/{id}/` paths. */
+export function getCharacterSfx(id: CharacterId): CharacterStats['soundEffects'] {
+  const sfx = CHARACTERS[id].soundEffects;
+  if (!sfx) return undefined;
+  const base = `/sfx/characters/${id}/`;
+  return {
+    autoAttackHit: sfx.autoAttackHit ? base + sfx.autoAttackHit : undefined,
+    autoAttackCrit: sfx.autoAttackCrit ? base + sfx.autoAttackCrit : undefined,
+    struck: sfx.struck ? base + sfx.struck : undefined,
+    dodge: sfx.dodge ? base + sfx.dodge : undefined,
+  };
 }
 
 // ── Ranged auto-attack constants ──

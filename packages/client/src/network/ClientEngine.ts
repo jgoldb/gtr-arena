@@ -7,7 +7,7 @@ import type {
   S2C_EntityDied, S2C_PositionRelay, S2C_PositionUpdate,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits, getCharacterStats, Sweep, TweakerSprint, GLOBAL_COOLDOWN } from '@gtr/shared';
+import { yardsToUnits, getCharacterStats, getCharacterSfx, Sweep, TweakerSprint, GLOBAL_COOLDOWN } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -761,7 +761,7 @@ export class ClientEngine {
         ? this.playerController.characterId
         : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
       if (charId) {
-        const sfx = getCharacterStats(charId).soundEffects;
+        const sfx = getCharacterSfx(charId);
         const aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
         if (aaSfx) soundEffects.play(aaSfx, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId));
       }
@@ -771,13 +771,13 @@ export class ClientEngine {
     if (msg.combatType === 'dodge') {
       if (msg.targetEntityId === this.localEntityId) {
         this.playerController.triggerDodge();
-        const localDodgeSfx = getCharacterStats(this.playerController.characterId).soundEffects?.dodge;
+        const localDodgeSfx = getCharacterSfx(this.playerController.characterId)?.dodge;
         if (localDodgeSfx) soundEffects.play(localDodgeSfx);
       } else {
         const entity = this.remoteEntities.get(msg.targetEntityId);
         if (entity) {
           entity.model.triggerDodge();
-          const dodgeSfx = getCharacterStats(entity.characterId).soundEffects?.dodge;
+          const dodgeSfx = getCharacterSfx(entity.characterId)?.dodge;
           if (dodgeSfx) soundEffects.play(dodgeSfx, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId));
         }
       }
@@ -853,13 +853,13 @@ export class ClientEngine {
   handleFlinch(msg: S2C_Flinch): void {
     if (msg.entityId === this.localEntityId) {
       this.playerController.triggerFlinch();
-      const localStruckSfx = getCharacterStats(this.playerController.characterId).soundEffects?.struck;
+      const localStruckSfx = getCharacterSfx(this.playerController.characterId)?.struck;
       if (localStruckSfx) soundEffects.play(localStruckSfx);
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
       if (entity) {
         entity.model.triggerFlinch();
-        const struckSfx = getCharacterStats(entity.characterId).soundEffects?.struck;
+        const struckSfx = getCharacterSfx(entity.characterId)?.struck;
         if (struckSfx) soundEffects.play(struckSfx, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId));
       }
     }

@@ -558,12 +558,12 @@ export class CombatSystem {
   }
 
   /** Returns true if the auto-attack was a critical hit. */
-  applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number): boolean {
+  applyAutoAttackDamage(attacker: Targetable, target: Targetable, baseDamage: number, canDodge = true): boolean {
     if (attacker.dead || target.dead) return false;
     if (this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(attacker)) return false;
 
     this.onHostileAction?.(attacker, target);
-    const outcome = this.rollOutcome(attacker, target);
+    const outcome = this.rollOutcome(attacker, target, canDodge);
 
     if (outcome === 'miss') {
       this.onCombatText?.(target, 0, 'miss');
