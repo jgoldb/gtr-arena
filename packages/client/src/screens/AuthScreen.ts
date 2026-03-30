@@ -23,6 +23,7 @@ export class AuthScreen {
   private readonly onVisibilityChange = () => this.handleVisibilityChange();
   private readonly onUserGesture = () => this.resumeAudioCtx();
   private readonly onAudioSettingsChange = (s: { masterVolume: number; enableMusic: boolean; musicVolume: number }) => this.handleAudioSettingsChange(s);
+  private initialFocusTarget: HTMLInputElement | null = null;
 
   constructor(onAuth: (result: AuthResult) => void) {
     this.onAuth = onAuth;
@@ -1394,8 +1395,13 @@ export class AuthScreen {
     this.confirmPasswordInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
 
     // Pre-fill username if saved
-    const savedName = sessionStorage.getItem('gtr_username');
-    if (savedName) usernameInput.value = savedName;
+    const savedName = sessionStorage.getItem('gtr_username') || localStorage.getItem('gtr_last_username');
+    if (savedName) {
+      usernameInput.value = savedName;
+      this.initialFocusTarget = passwordInput;
+    } else {
+      this.initialFocusTarget = usernameInput;
+    }
 
     form.appendChild(usernameInput);
     form.appendChild(passwordInput);
@@ -1542,6 +1548,10 @@ export class AuthScreen {
     this.submitBtn.textContent = on ? 'Connecting...' : 'Enter Arena';
     this.submitBtn.style.opacity = on ? '0.6' : '1';
     this.submitBtn.style.cursor = on ? 'default' : 'pointer';
+  }
+
+  focus(): void {
+    this.initialFocusTarget?.focus();
   }
 
   destroy(): void {

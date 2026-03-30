@@ -511,6 +511,7 @@ function showAuth(): void {
   });
   authScreen.onMenu = () => authEscapeMenu?.open();
   document.body.appendChild(authScreen.element);
+  authScreen.focus();
 
   // Auth escape menu
   authEscapeMenu = new EscapeMenu({
@@ -1518,6 +1519,7 @@ function handleServerMessage(msg: ServerMessage): void {
         // Update stored username to the original registered casing from the server
         if (msg.username) {
           sessionStorage.setItem('gtr_username', msg.username);
+          localStorage.setItem('gtr_last_username', msg.username);
         }
         authScreen?.destroy();
         authScreen = null;
