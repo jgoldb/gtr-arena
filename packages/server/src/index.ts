@@ -39,8 +39,9 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Serve static client files
-  let filePath = path.join(CLIENT_DIR, req.url === '/' ? 'index.html' : req.url!);
+  // Strip query string before resolving file path (cache-busting params like ?_=123)
+  const pathname = new URL(req.url!, `http://${req.headers.host}`).pathname;
+  let filePath = path.join(CLIENT_DIR, pathname === '/' ? 'index.html' : pathname);
   if (!fs.existsSync(filePath)) {
     // SPA fallback — serve index.html for client-side routes
     filePath = path.join(CLIENT_DIR, 'index.html');

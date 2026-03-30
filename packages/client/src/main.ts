@@ -424,7 +424,7 @@ function showUpdateSnackbar(message: string, autoDismissMs?: number): void {
   if (updateSnackbarEl) updateSnackbarEl.remove();
   updateSnackbarEl = document.createElement('div');
   updateSnackbarEl.style.cssText = `
-    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(100%);
+    position: fixed; top: 24px; right: 24px; transform: translateY(-100%);
     background: rgba(20, 20, 20, 0.95); color: #4fc3f7; padding: 12px 24px;
     border-radius: 8px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     font-size: 14px; z-index: 10000; border: 1px solid rgba(79, 195, 247, 0.3);
@@ -434,7 +434,7 @@ function showUpdateSnackbar(message: string, autoDismissMs?: number): void {
   updateSnackbarEl.textContent = message;
   document.body.appendChild(updateSnackbarEl);
   requestAnimationFrame(() => {
-    if (updateSnackbarEl) updateSnackbarEl.style.transform = 'translateX(-50%) translateY(0)';
+    if (updateSnackbarEl) updateSnackbarEl.style.transform = 'translateY(0)';
   });
   if (autoDismissMs) {
     setTimeout(() => {
@@ -455,7 +455,6 @@ async function checkForUpdate(): Promise<void> {
     if (data.version && data.version !== __BUILD_VERSION__) {
       if (currentState === 'multiplayer') {
         updatePending = true;
-        showUpdateSnackbar('Game updated \u2014 will refresh after game');
       } else {
         sessionStorage.setItem('gtr_updated', '1');
         location.reload();
@@ -464,7 +463,40 @@ async function checkForUpdate(): Promise<void> {
   } catch { /* network error — ignore */ }
 }
 
-// ── Auth Screen ────────────────────────────────────────────────────────
+// ── Connection & Auth ──────────────────────────────────────────────────
+
+function connectWithCredentials(username: string, password: string, mode: 'login' | 'register'): void {
+  network = new NetworkManager(username, password, mode);
+  network.onMessage(handleServerMessage);
+  network.onConnectionStateChange((state) => {
+    reconnectOverlay.update(state);
+    if (state.status === 'reconnected') {
+      updateCheckPromise = checkForUpdate();
+    }
+    if (state.status === 'failed') {
+      if (currentState === 'multiplayer') {
+        // Stay in the game world — show failure on the overlay instead of
+        // tearing everything down. The player can see the arena behind it.
+        reconnectOverlay.showMessage('Connection lost');
+        // After a brief pause, transition to auth
+        setTimeout(() => {
+          reconnectOverlay.hide();
+          network?.disconnect();
+          network = null;
+          showAuth();
+          setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
+        }, 3000);
+      } else {
+        reconnectOverlay.hide();
+        network?.disconnect();
+        network = null;
+        showAuth();
+        setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
+      }
+    }
+  });
+  network.connect();
+}
 
 function showAuth(): void {
   cleanupCurrentState();
@@ -473,36 +505,8 @@ function showAuth(): void {
 
   authScreen = new AuthScreen((result) => {
     sessionStorage.setItem('gtr_username', result.username);
-    network = new NetworkManager(result.username, result.password, result.mode);
-    network.onMessage(handleServerMessage);
-    network.onConnectionStateChange((state) => {
-      reconnectOverlay.update(state);
-      if (state.status === 'reconnected') {
-        updateCheckPromise = checkForUpdate();
-      }
-      if (state.status === 'failed') {
-        if (currentState === 'multiplayer') {
-          // Stay in the game world — show failure on the overlay instead of
-          // tearing everything down. The player can see the arena behind it.
-          reconnectOverlay.showMessage('Connection lost');
-          // After a brief pause, transition to auth
-          setTimeout(() => {
-            reconnectOverlay.hide();
-            network?.disconnect();
-            network = null;
-            showAuth();
-            setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
-          }, 3000);
-        } else {
-          reconnectOverlay.hide();
-          network?.disconnect();
-          network = null;
-          showAuth();
-          setTimeout(() => authScreen?.showError('Unable to connect to server. Please try again.'), 0);
-        }
-      }
-    });
-    network.connect();
+    sessionStorage.setItem('gtr_password', result.password);
+    connectWithCredentials(result.username, result.password, result.mode);
   });
   authScreen.onMenu = () => authEscapeMenu?.open();
   document.body.appendChild(authScreen.element);
@@ -527,14 +531,14 @@ function showAuth(): void {
 // ── Lobby Screen ───────────────────────────────────────────────────────
 
 function showLobby(): void {
+  cleanupCurrentState();
+  currentState = 'lobby';
+  hideGameUI();
   if (updatePending) {
     sessionStorage.setItem('gtr_updated', '1');
     location.reload();
     return;
   }
-  cleanupCurrentState();
-  currentState = 'lobby';
-  hideGameUI();
   lobbyMusic.start();
 
   lobbyScreen = new LobbyScreen(network!, localUserId, isAdmin, localXp);
@@ -548,6 +552,7 @@ function showLobby(): void {
     isAdmin = false;
     localXp = 0;
     sessionStorage.removeItem('gtr_username');
+    sessionStorage.removeItem('gtr_password');
     showAuth();
   };
   lobbyScreen.onAdmin = () => showAdmin();
@@ -1521,11 +1526,12 @@ function handleServerMessage(msg: ServerMessage): void {
         }
         network?.disconnect();
         network = null;
+        sessionStorage.removeItem('gtr_password');
         if (authScreen) {
           // Already on the auth screen — just show the error without rebuilding
           authScreen.showError(errorMsg);
         } else {
-          // Re-auth failed during gameplay — need to rebuild the auth screen
+          // Re-auth failed (auto-login or reconnect) — rebuild the auth screen
           showAuth();
           setTimeout(() => authScreen?.showError(errorMsg), 0);
         }
@@ -1535,16 +1541,16 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'lobby_state':
       if (awaitingReconnectResult) {
         // Server didn't send rejoin_game — no game to rejoin.
-        // Wait for the version check to complete before deciding whether
-        // to reload (update available) or show the lobby (no update).
+        // Wait for the version check before deciding how to transition.
         awaitingReconnectResult = false;
         const pending = updateCheckPromise ?? Promise.resolve();
         updateCheckPromise = null;
         pending.then(() => {
           if (updatePending) {
-            // Update detected — reload directly, skip the lobby flash
-            sessionStorage.setItem('gtr_updated', '1');
-            location.reload();
+            // Update detected while in game — don't force a transition.
+            // The snackbar is already showing; the user can exit via
+            // the escape menu → "Return to Lobby", which calls showLobby()
+            // and will reload at that point.
           } else {
             showLobby();
           }
@@ -1731,6 +1737,7 @@ function handleServerMessage(msg: ServerMessage): void {
       isAdmin = false;
       localXp = 0;
       sessionStorage.removeItem('gtr_username');
+      sessionStorage.removeItem('gtr_password');
       showAuth();
       // Show the reason on the auth screen after it renders
       setTimeout(() => authScreen?.showError(msg.reason), 0);
@@ -3165,4 +3172,12 @@ if (sessionStorage.getItem('gtr_updated')) {
   setTimeout(() => showUpdateSnackbar('Game has been updated!', 5000), 500);
 }
 
-showAuth();
+// Auto-login if credentials exist from a previous session (e.g., page refresh)
+const savedUsername = sessionStorage.getItem('gtr_username');
+const savedPassword = sessionStorage.getItem('gtr_password');
+if (savedUsername && savedPassword) {
+  currentState = 'auth';
+  connectWithCredentials(savedUsername, savedPassword, 'login');
+} else {
+  showAuth();
+}

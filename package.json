@@ -12,6 +12,7 @@
     "dev": "npm run dev:client",
     "dev:client": "npm run dev -w @gtr/client",
     "dev:server": "npm run dev -w @gtr/server",
-    "build": "npm run build -w @gtr/shared && npm run build -w @gtr/server && npm run build -w @gtr/client"
+    "build": "npm run build -w @gtr/shared && npm run build -w @gtr/server && npm run build -w @gtr/client",
+    "preview": "npm run build && npm run dev:server"
   }
 }
