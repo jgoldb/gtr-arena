@@ -56,10 +56,10 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     manaRegen: 12,
     abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket],
     soundEffects: {
-      autoAttackHit: 'auto-attack.wav',
-      autoAttackCrit: 'crit.wav',
-      struck: 'struck.wav',
-      dodge: 'dodge.wav',
+      autoAttackHit: 'auto-attack.ogg',
+      autoAttackCrit: 'crit.ogg',
+      struck: 'struck.ogg',
+      dodge: 'dodge.ogg',
     },
   },
   'dr-retardo': {

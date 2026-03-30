@@ -125,7 +125,7 @@ const lobbyMusic = {
       gain.gain.value = 0;
       gain.connect(ctx.destination);
 
-      const resp = await fetch('/audio/music/lobby.mp3');
+      const resp = await fetch('/audio/music/lobby.ogg');
       const buf = await resp.arrayBuffer();
       const audioBuf = await ctx.decodeAudioData(buf);
 
