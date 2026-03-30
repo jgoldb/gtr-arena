@@ -210,6 +210,12 @@ export class ServerCombatSystem {
         return { success: false, error: 'no-target', errorMessage: 'No hostile target' };
       }
     }
+    if (ability.requiresFriendlyTarget && target && target !== attacker && target.isHostileTo(attacker)) {
+      return { success: false, error: 'no-target', errorMessage: 'Must target a friendly player' };
+    }
+    if (ability.blockedByTargetDebuff && target && this.buffSystem.hasDebuff(target, ability.blockedByTargetDebuff)) {
+      return { success: false, error: 'no-target', errorMessage: 'Target has Recently Bandaged' };
+    }
     if (!attacker.godMode) {
       const effectiveManaCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
       if (attacker.mana < effectiveManaCost) {

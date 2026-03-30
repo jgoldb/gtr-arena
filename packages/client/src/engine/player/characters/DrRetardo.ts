@@ -1159,6 +1159,8 @@ export class DrRetardo extends CharacterModel {
   protected override animateChanneling(abilityId: string, t: number): void {
     if (abilityId === 'chudmax') {
       this.animateChudmaxChannel(t);
+    } else {
+      super.animateChanneling(abilityId, t);
     }
   }
 

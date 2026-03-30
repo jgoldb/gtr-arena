@@ -3,7 +3,7 @@ import {
   Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper,
   BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom,
   Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD,
-  Attack, PvPTrinket,
+  Attack, PvPTrinket, Bandage,
   TweakingBuff,
   yardsToUnits,
 } from './abilities.js';
@@ -54,7 +54,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.17,
     hpRegen: 32,
     manaRegen: 12,
-    abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket],
+    abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket, Bandage],
     soundEffects: {
       autoAttackHit: 'auto-attack.ogg',
       autoAttackCrit: 'crit.ogg',
@@ -75,7 +75,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.05,
     hpRegen: 24,
     manaRegen: 48,
-    abilities: [Attack, BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket],
+    abilities: [Attack, BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket, Bandage],
   },
   'crackhead': {
     id: 'crackhead',
@@ -90,7 +90,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.10,
     hpRegen: 28,
     manaRegen: 16,
-    abilities: [Attack, Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD, PvPTrinket],
+    abilities: [Attack, Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD, PvPTrinket, Bandage],
     startingBuffs: [TweakingBuff],
     playgroundOnly: false,
   },
@@ -107,7 +107,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.15,
     hpRegen: 30,
     manaRegen: 20,
-    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage],
     playgroundOnly: true,
   },
   'brad-clemons': {
@@ -123,7 +123,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.12,
     hpRegen: 35,
     manaRegen: 14,
-    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage],
     playgroundOnly: true,
   },
   'gourd-of-war': {
@@ -139,7 +139,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.10,
     hpRegen: 34,
     manaRegen: 12,
-    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket],
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage],
     playgroundOnly: true,
   },
 };

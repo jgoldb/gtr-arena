@@ -343,6 +343,82 @@ export function removeChannelBeam(scene: THREE.Scene, beam: THREE.Mesh): void {
   scene.remove(beam);
 }
 
+// ── Bandage Heal Effect ──────────────────────────────────────────────────
+
+export interface BandageHealVisual {
+  group: THREE.Group;
+  particles: THREE.Mesh[];
+  glow: THREE.Mesh;
+}
+
+export function createBandageHealEffect(scene: THREE.Scene): BandageHealVisual {
+  const group = new THREE.Group();
+
+  // Ground glow ring
+  const glowGeo = new THREE.RingGeometry(0.25, 0.6, 24);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x66ff88, transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const glow = new THREE.Mesh(glowGeo, glowMat);
+  glow.rotation.x = -Math.PI / 2;
+  glow.position.y = 0.03;
+  group.add(glow);
+
+  // Rising heal particles — small plus-shaped crosses
+  const particles: THREE.Mesh[] = [];
+  for (let i = 0; i < 10; i++) {
+    const geo = new THREE.PlaneGeometry(0.08, 0.08);
+    const mat = new THREE.MeshBasicMaterial({
+      color: i % 3 === 0 ? 0xffffff : 0x88ffaa,
+      transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const particle = new THREE.Mesh(geo, mat);
+    particle.userData.phase = (i / 10) * Math.PI * 2;
+    particle.userData.speed = 0.4 + Math.random() * 0.3;
+    particle.userData.radius = 0.2 + Math.random() * 0.35;
+    group.add(particle);
+    particles.push(particle);
+  }
+
+  scene.add(group);
+  return { group, particles, glow };
+}
+
+export function updateBandageHealEffect(visual: BandageHealVisual, targetPos: THREE.Vector3, elapsed: number): void {
+  visual.group.position.set(targetPos.x, targetPos.y, targetPos.z);
+
+  // Pulse ground glow
+  (visual.glow.material as THREE.MeshBasicMaterial).opacity = 0.2 + Math.sin(elapsed * 4) * 0.1;
+  visual.glow.scale.setScalar(1 + Math.sin(elapsed * 3) * 0.08);
+
+  // Animate particles: rise in a gentle spiral, fade and reset
+  for (const p of visual.particles) {
+    const phase = p.userData.phase;
+    const speed = p.userData.speed;
+    const r = p.userData.radius;
+    // Each particle loops on its own cycle (rises then resets)
+    const cycle = ((elapsed * speed + phase) % 1.5);
+    const yPos = cycle * 1.4; // rise up to ~2 units
+    const fade = cycle < 0.2 ? cycle / 0.2 : Math.max(0, 1 - (cycle - 0.8) / 0.7);
+
+    p.position.x = Math.cos(phase + elapsed * 1.2) * r;
+    p.position.z = Math.sin(phase + elapsed * 1.2) * r;
+    p.position.y = yPos;
+    p.rotation.z = elapsed * 2 + phase;
+    (p.material as THREE.MeshBasicMaterial).opacity = 0.7 * fade;
+  }
+}
+
+export function removeBandageHealEffect(scene: THREE.Scene, visual: BandageHealVisual): void {
+  visual.group.traverse(child => {
+    if (child instanceof THREE.Mesh) {
+      child.geometry.dispose();
+      (child.material as THREE.Material).dispose();
+    }
+  });
+  scene.remove(visual.group);
+}
+
 // ── Crotch Rot Cloud ─────────────────────────────────────────────────────
 
 /** Create dense black cloud puffs that cling to a character's midsection. */

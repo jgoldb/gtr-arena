@@ -80,7 +80,7 @@ export class MapManager {
     // Start ambient sound if the map defines one
     if (config.ambientSound) {
       this.ambientSoundVolume = config.ambientSoundVolume ?? 1;
-      this.startAmbientSound(config.ambientSound);
+      this.startAmbientSound(config.ambientSound, config.id);
     }
   }
 
@@ -161,8 +161,9 @@ export class MapManager {
     gain.gain.linearRampToValueAtTime(this.ambientVolume, ctx.currentTime + 0.15);
   }
 
-  private async startAmbientSound(url: string): Promise<void> {
+  private async startAmbientSound(filename: string, mapId: string): Promise<void> {
     try {
+      const url = `/audio/ambient/maps/${mapId}/${filename}`;
       const ctx = new AudioContext();
       this.ambientCtx = ctx;
       const gain = ctx.createGain();
@@ -224,8 +225,8 @@ export class MapManager {
         }
       };
       document.addEventListener('visibilitychange', this.ambientVisibilityListener);
-    } catch {
-      // Audio not available — silent fail
+    } catch (e) {
+      console.warn('Ambient audio failed to load:', e);
     }
   }
 

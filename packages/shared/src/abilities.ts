@@ -88,6 +88,8 @@ export interface Ability {
   readonly isMelee?: boolean; // melee attacks can be dodged; spells cannot
   readonly usableWhileCCd?: boolean; // if true, ability can be used while stunned/slept/blinded/etc.
   readonly isAutoAttack?: boolean; // if true, this is the Attack toggle — not a real ability, just toggles auto-attack
+  readonly requiresFriendlyTarget?: boolean; // if true, ability can only be used on self or friendly targets (rejects hostile targets)
+  readonly blockedByTargetDebuff?: string; // if set, ability fails when target has this debuff id
 }
 
 // ── Buff definitions ────────────────────────────────────────────────────
@@ -743,6 +745,37 @@ export const OD: Ability = {
   description:
     "It's an overdose! For 6 seconds: +50% damage dealt, +30% movement speed, abilities cost no mana. Afterwards, you are stunned for 2 seconds and Tweaking is set to 100 stacks.",
   appliesSelfBuff: OverdosingBuff,
+};
+
+export const RecentlyBandagedDebuff: BuffDefinition = {
+  id: 'recently-bandaged',
+  name: 'Recently Bandaged',
+  icon: '🩹',
+  duration: 60,
+  type: 'debuff',
+  description: 'Cannot be bandaged.',
+  effects: [],
+  unremovable: true,
+};
+
+export const Bandage: Ability = {
+  id: 'bandage',
+  name: 'Bandage',
+  icon: '🩹',
+  range: yardsToUnits(10),
+  manaCost: 0,
+  cooldown: 0,
+  castTime: 8,
+  damage: 0,
+  healAmount: 1000,
+  requiresHostileTarget: false,
+  requiresTarget: true,
+  requiresFriendlyTarget: true,
+  isChannel: true,
+  channelTicks: 8,
+  blockedByTargetDebuff: 'recently-bandaged',
+  description:
+    'Bandage yourself or a friendly target, healing for 1000 over 8 seconds. Cannot be used on a target that has been recently bandaged.',
 };
 
 export const Attack: Ability = {

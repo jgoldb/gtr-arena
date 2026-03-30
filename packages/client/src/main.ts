@@ -1136,7 +1136,21 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     if (ability.requiresTarget && !ability.requiresHostileTarget) {
       // Friendly-or-self targeted abilities (e.g. Chudmax channel)
       // Auto self-cast if no target, but check range to non-self targets
-      const targetId = mpSelectedTargetId;
+      let targetId = mpSelectedTargetId;
+      // Friendly-only abilities self-cast when targeting a hostile
+      if (ability.requiresFriendlyTarget && targetId && targetId !== clientEngine!.localId) {
+        const t = clientEngine!.getRemoteEntity(targetId);
+        if (t && t.team !== player.team) targetId = null;
+      }
+      // Check blockedByTargetDebuff on resolved target
+      if (ability.blockedByTargetDebuff) {
+        if (!targetId || targetId === clientEngine!.localId) {
+          if (clientEngine!.getLocalBuffs().some(b => b.id === ability.blockedByTargetDebuff)) return 'no-target';
+        } else {
+          const t = clientEngine!.getRemoteEntity(targetId);
+          if (t && t.buffs.some(b => b.id === ability.blockedByTargetDebuff)) return 'no-target';
+        }
+      }
       if (targetId && targetId !== clientEngine!.localId) {
         const target = clientEngine!.getRemoteEntity(targetId);
         if (!target || target.dead) return 'no-target';
@@ -2503,6 +2517,7 @@ async function startPlayground(): Promise<void> {
       }
       cancelGroundTargeting();
       let target: Targetable | null = engine.targetingSystem.currentTarget;
+      if (ability.requiresFriendlyTarget && target && target.isHostileTo(engine.playerController)) target = engine.playerController;
       if (!target && ability.requiresTarget && !ability.requiresHostileTarget) target = engine.playerController;
       if (ability.castTime) {
         const result = engine.startCasting(ability, engine.playerController.mesh.rotation.y, target);
@@ -2536,8 +2551,10 @@ async function startPlayground(): Promise<void> {
         if (ability.minRange && hostileDist < ability.minRange) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {
-        const target = engine.targetingSystem.currentTarget ?? player;
+        let target: Targetable = engine.targetingSystem.currentTarget ?? player;
+        if (ability.requiresFriendlyTarget && target !== player && target.isHostileTo(player)) target = player;
         if (target.dead) return 'no-target';
+        if (ability.blockedByTargetDebuff && engine.buffSystem.hasDebuff(target, ability.blockedByTargetDebuff)) return 'no-target';
         if (ability.range && target !== player) {
           const dx = player.mesh.position.x - target.mesh.position.x;
           const dy = player.mesh.position.y - target.mesh.position.y;
@@ -2977,6 +2994,7 @@ async function startUISetup(): Promise<void> {
       }
       cancelGroundTargeting();
       let target: Targetable | null = engine.targetingSystem.currentTarget;
+      if (ability.requiresFriendlyTarget && target && target.isHostileTo(engine.playerController)) target = engine.playerController;
       if (!target && ability.requiresTarget && !ability.requiresHostileTarget) target = engine.playerController;
       if (ability.castTime) {
         const result = engine.startCasting(ability, engine.playerController.mesh.rotation.y, target);
@@ -3010,8 +3028,10 @@ async function startUISetup(): Promise<void> {
         if (ability.minRange && hostileDist < ability.minRange) return 'out-of-range';
       }
       if (ability.requiresTarget && !ability.requiresHostileTarget) {
-        const target = engine.targetingSystem.currentTarget ?? player;
+        let target: Targetable = engine.targetingSystem.currentTarget ?? player;
+        if (ability.requiresFriendlyTarget && target !== player && target.isHostileTo(player)) target = player;
         if (target.dead) return 'no-target';
+        if (ability.blockedByTargetDebuff && engine.buffSystem.hasDebuff(target, ability.blockedByTargetDebuff)) return 'no-target';
         if (ability.range && target !== player) {
           const dx = player.mesh.position.x - target.mesh.position.x;
           const dy = player.mesh.position.y - target.mesh.position.y;

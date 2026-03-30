@@ -8,7 +8,7 @@ import type {
   EntityPositionData, EntityStateDelta,
   ServerMessage,
 } from '@gtr/shared';
-import { GLOBAL_COOLDOWN, yardsToUnits, BULLET_SPEED, isRangedAutoAttack, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
+import { GLOBAL_COOLDOWN, yardsToUnits, BULLET_SPEED, isRangedAutoAttack, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, RecentlyBandagedDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -836,6 +836,9 @@ export class ServerEngine {
     if (targetEntityId) {
       target = this.getEntity(targetEntityId) ?? null;
     }
+    if (ability.requiresFriendlyTarget && target && target.isHostileTo(entity)) {
+      target = entity;
+    }
     if (!target && ability.requiresTarget && !ability.requiresHostileTarget) {
       target = entity;
     }
@@ -1300,6 +1303,11 @@ export class ServerEngine {
       ticksDelivered: 0,
       damageMultiplier: isChannel ? this.buffSystem.getDamageDealtMultiplier(entity) : 1,
     });
+
+    // Apply blockedByTargetDebuff at channel start (e.g. Recently Bandaged)
+    if (isChannel && target && ability.id === 'bandage') {
+      this.buffSystem.apply(target, RecentlyBandagedDebuff);
+    }
 
     if (isChannel && target) {
       const isFriendly = !target.isHostileTo(entity);

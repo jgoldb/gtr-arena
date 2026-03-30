@@ -798,6 +798,7 @@ export class CelestialBallroomScript extends ArenaScript {
     const mat = new THREE.ShaderMaterial({
       uniforms: { uTime: { value: 0 } },
       vertexShader: `
+        uniform float uTime;
         attribute float aPhase;
         varying float vAlpha;
         void main() {

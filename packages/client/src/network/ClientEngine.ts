@@ -7,7 +7,7 @@ import type {
   S2C_EntityDied, S2C_PositionRelay, S2C_PositionUpdate,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits, getCharacterStats, getCharacterSfx, Sweep, TweakerSprint, GLOBAL_COOLDOWN } from '@gtr/shared';
+import { yardsToUnits, getCharacterStats, getCharacterSfx, Sweep, TweakerSprint, Bandage, GLOBAL_COOLDOWN } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -27,6 +27,7 @@ import {
   createFullRetardAura, updateFullRetardAura as updateFullRetardAuraVisual,
   createCrotchRotCloud, updateCrotchRotCloud,
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
+  type BandageHealVisual, createBandageHealEffect, updateBandageHealEffect, removeBandageHealEffect,
   disposeGroup,
 } from '../engine/effects/VisualEffects';
 import { BlindEffect } from '../engine/effects/BlindEffect';
@@ -162,6 +163,10 @@ export class ClientEngine {
   // Channel beam visual
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamElapsed = 0;
+
+  // Bandage heal visual
+  private bandageHealVisual: BandageHealVisual | null = null;
+  private bandageHealElapsed = 0;
 
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
@@ -1911,6 +1916,9 @@ export class ClientEngine {
     // Update channel beam visual
     this.updateChannelBeam(dt);
 
+    // Update bandage heal visual
+    this.updateBandageHeal(dt);
+
     // Update Full Retard aura visuals
     this.updateFullRetardAuras(dt);
 
@@ -2154,7 +2162,9 @@ export class ClientEngine {
     let targetPos: THREE.Vector3 | null = null;
 
     // Check local player — use server-authoritative target, not current UI selection
-    if (this.localCastingAbilityId && this.localCastingIsChannel && this.localTargetEntityId) {
+    // Skip beam for friendly-only channels (e.g., Bandage)
+    if (this.localCastingAbilityId && this.localCastingIsChannel && this.localTargetEntityId
+        && this.localCastingAbilityId !== Bandage.id) {
       casterPos = this.playerController.mesh.position;
       const targetMesh = this.getEntityMesh(this.localTargetEntityId);
       if (targetMesh) targetPos = targetMesh.position;
@@ -2163,7 +2173,8 @@ export class ClientEngine {
     // Check remote entities (find first channeling remote)
     if (!casterPos) {
       for (const entity of this.remoteEntities.values()) {
-        if (entity.castingAbilityId && entity.castingIsChannel && entity.targetEntityId) {
+        if (entity.castingAbilityId && entity.castingIsChannel && entity.targetEntityId
+            && entity.castingAbilityId !== Bandage.id) {
           casterPos = entity.mesh.position;
           const targetMesh = this.getEntityMesh(entity.targetEntityId);
           if (targetMesh) targetPos = targetMesh.position;
@@ -2186,6 +2197,45 @@ export class ClientEngine {
       this.channelBeam = createChannelBeam(this.scene);
     }
     updateChannelBeamVisual(this.channelBeam, casterPos, targetPos, this.channelBeamElapsed);
+  }
+
+  // ── Bandage heal visual ─────────────────────────────────────────────
+
+  private updateBandageHeal(dt: number): void {
+    // Find the target position of any entity channeling bandage
+    let targetPos: THREE.Vector3 | null = null;
+
+    // Check local player
+    if (this.localCastingAbilityId === Bandage.id && this.localCastingIsChannel && this.localTargetEntityId) {
+      const targetMesh = this.getEntityMesh(this.localTargetEntityId);
+      if (targetMesh) targetPos = targetMesh.position;
+    }
+
+    // Check remote entities
+    if (!targetPos) {
+      for (const entity of this.remoteEntities.values()) {
+        if (entity.castingAbilityId === Bandage.id && entity.castingIsChannel && entity.targetEntityId) {
+          const targetMesh = this.getEntityMesh(entity.targetEntityId);
+          if (targetMesh) targetPos = targetMesh.position;
+          break;
+        }
+      }
+    }
+
+    if (!targetPos) {
+      if (this.bandageHealVisual) {
+        removeBandageHealEffect(this.scene, this.bandageHealVisual);
+        this.bandageHealVisual = null;
+      }
+      this.bandageHealElapsed = 0;
+      return;
+    }
+
+    this.bandageHealElapsed += dt;
+    if (!this.bandageHealVisual) {
+      this.bandageHealVisual = createBandageHealEffect(this.scene);
+    }
+    updateBandageHealEffect(this.bandageHealVisual, targetPos, this.bandageHealElapsed);
   }
 
   // ── Full Retard aura visuals ────────────────────────────────────────
@@ -2291,6 +2341,7 @@ export class ClientEngine {
     for (const pool of this.chemPools.values()) disposeGroup(this.scene, pool.group);
     this.chemPools.clear();
     if (this.channelBeam) removeChannelBeam(this.scene, this.channelBeam);
+    if (this.bandageHealVisual) removeBandageHealEffect(this.scene, this.bandageHealVisual);
     for (const aura of this.fullRetardAuras.values()) disposeGroup(this.scene, aura.group);
     this.fullRetardAuras.clear();
     for (const visual of this.crotchRotVisuals.values()) {

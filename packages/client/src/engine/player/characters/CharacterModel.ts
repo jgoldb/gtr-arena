@@ -713,7 +713,32 @@ export abstract class CharacterModel {
     }
   }
   protected animateCasting(_abilityId: string, _t: number): void {}
-  protected animateChanneling(_abilityId: string, _t: number): void {}
+  protected animateChanneling(abilityId: string, t: number): void {
+    if (abilityId === 'bandage') this.animateBandageChannel(t);
+  }
+
+  /** Bandage channel: kneeling wrap motion with alternating arms */
+  private animateBandageChannel(t: number): void {
+    const blend = Math.min(1, t / 0.08);
+
+    // Kneel down slightly
+    this.bodyGroup.rotation.x += 0.25 * blend;
+
+    // Alternating arm wrap motion (one cycle per second over 8 seconds)
+    const cycle = (t * 8) % 1; // 0-1 per tick
+    const wrap = Math.sin(cycle * Math.PI * 2);
+
+    // Right arm wraps inward then outward
+    this.rightArmGroup.rotation.x += 0.6 * blend;
+    this.rightArmGroup.rotation.z += wrap * 0.3 * blend;
+
+    // Left arm mirrors with opposite phase
+    this.leftArmGroup.rotation.x += 0.6 * blend;
+    this.leftArmGroup.rotation.z -= wrap * 0.3 * blend;
+
+    // Subtle body sway
+    this.bodyGroup.rotation.y += Math.sin(cycle * Math.PI) * 0.05 * blend;
+  }
 
   protected animateFlinch(t: number): void {
     // Quick recoil: sharp peak at ~20% then ease out

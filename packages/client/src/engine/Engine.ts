@@ -3,7 +3,7 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, ODStunDebuff, ParanoidDebuff, type Ability } from './combat/Ability';
+import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, ODStunDebuff, ParanoidDebuff, RecentlyBandagedDebuff, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { getCharacterStats, getCharacterSfx, isRangedAutoAttack, BULLET_SPEED } from '@gtr/shared';
@@ -22,6 +22,7 @@ import {
   createFullRetardAura, updateFullRetardAura as updateFullRetardAuraVisual,
   createCrotchRotCloud, updateCrotchRotCloud,
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
+  type BandageHealVisual, createBandageHealEffect, updateBandageHealEffect, removeBandageHealEffect,
   disposeGroup,
 } from './effects/VisualEffects';
 import { BlindEffect } from './effects/BlindEffect';
@@ -130,6 +131,7 @@ export class Engine {
   private crotchRotVisuals = new Map<Targetable, CrotchRotVisual & { elapsed: number }>();
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamTarget: Targetable | null = null;
+  private bandageHealVisual: BandageHealVisual | null = null;
   private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
@@ -546,6 +548,11 @@ export class Engine {
       ticksDelivered: 0,
       damageMultiplier: isChannel ? this.buffSystem.getDamageDealtMultiplier(this.playerController) : 1,
     };
+
+    // Apply blockedByTargetDebuff at channel start (e.g. Recently Bandaged)
+    if (isChannel && target && ability.id === 'bandage') {
+      this.buffSystem.apply(target, RecentlyBandagedDebuff);
+    }
 
     // Apply channel aura to target
     if (isChannel && target) {
@@ -1293,7 +1300,7 @@ export class Engine {
 
   // ── Channel beam ───────────────────────────────────────
   private updateChannelBeam(): void {
-    if (!this.casting || !this.casting.isChannel || !this.casting.target) {
+    if (!this.casting || !this.casting.isChannel || !this.casting.target || this.casting.ability.requiresFriendlyTarget) {
       if (this.channelBeam) {
         removeChannelBeam(this.scene, this.channelBeam);
         this.channelBeam = null;
@@ -1313,6 +1320,27 @@ export class Engine {
       this.clock.elapsedTime,
     );
     this.channelBeamTarget = this.casting.target;
+  }
+
+  // ── Bandage heal visual ────────────────────────────────
+  private updateBandageHeal(): void {
+    if (!this.casting || !this.casting.isChannel || !this.casting.target || !this.casting.ability.requiresFriendlyTarget) {
+      if (this.bandageHealVisual) {
+        removeBandageHealEffect(this.scene, this.bandageHealVisual);
+        this.bandageHealVisual = null;
+      }
+      return;
+    }
+
+    if (!this.bandageHealVisual) {
+      this.bandageHealVisual = createBandageHealEffect(this.scene);
+    }
+
+    updateBandageHealEffect(
+      this.bandageHealVisual,
+      this.casting.target.mesh.position,
+      this.casting.elapsed,
+    );
   }
 
   startSweepCharge(): void {
@@ -1991,6 +2019,7 @@ export class Engine {
     this.updateCrotchRotVisuals(deltaTime);
     this.updateDiscombobEffects(deltaTime);
     this.updateChannelBeam();
+    this.updateBandageHeal();
     this.combatSystem.update(deltaTime);
     this.buffSystem.update(deltaTime);
     // Update channel aura remaining AFTER buff system tick (overrides its decrement)
@@ -2017,6 +2046,11 @@ export class Engine {
     if (this.channelBeam) {
       removeChannelBeam(this.scene, this.channelBeam);
       this.channelBeam = null;
+    }
+    // Clean up bandage heal visual
+    if (this.bandageHealVisual) {
+      removeBandageHealEffect(this.scene, this.bandageHealVisual);
+      this.bandageHealVisual = null;
     }
     this.mapManager.dispose();
     this.playerController.dispose();

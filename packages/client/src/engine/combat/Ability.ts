@@ -45,6 +45,8 @@ export {
   OD,
   ParanoidDebuff,
   PvPTrinket,
+  Bandage,
+  RecentlyBandagedDebuff,
 } from '@gtr/shared';
 
 export type { Ability, BuffDefinition, BuffEffect } from '@gtr/shared';

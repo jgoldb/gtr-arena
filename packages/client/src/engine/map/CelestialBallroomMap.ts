@@ -26,5 +26,7 @@ export const CELESTIAL_BALLROOM: MapConfig = {
     { x: 0, y: 0, z: -32 },  // Team 2 — north bubble
   ],
   npcSpawnBounds: { minX: -40, maxX: 40, minZ: -30, maxZ: 30 },
+  ambientSound: 'sci-fi-sounds.ogg',
+  ambientSoundVolume: 5,
   createScript: () => new CelestialBallroomScript(),
 };
