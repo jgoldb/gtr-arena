@@ -139,24 +139,41 @@ export class ActionBar {
     this.currentCharacterId = characterId;
     this.clearAllSlots();
 
-    const nonNullAbilities = abilities.filter((ab): ab is Ability => ab !== null);
-    const savedOrder = this.getSavedLayout(characterId);
-    if (savedOrder && savedOrder.length === nonNullAbilities.length) {
-      // Reorder abilities to match saved layout
-      const abilityMap = new Map(nonNullAbilities.map(ab => [ab.id, ab]));
-      // Verify all saved IDs still exist in the ability list
-      const allValid = savedOrder.every(id => abilityMap.has(id));
-      if (allValid) {
-        savedOrder.forEach((id, i) => this.setSlotAbility(i, abilityMap.get(id)!));
-        return;
+    const availableAbilities = new Map(
+      abilities.filter((ab): ab is Ability => ab !== null).map(ab => [ab.id, ab])
+    );
+
+    const savedLayout = this.getSavedLayout(characterId);
+    if (savedLayout) {
+      // Place saved abilities that still exist; null out removed ones
+      const placed = new Set<string>();
+      for (let i = 0; i < savedLayout.length && i < this.slots.length; i++) {
+        const id = savedLayout[i];
+        if (id !== null && availableAbilities.has(id)) {
+          this.setSlotAbility(i, availableAbilities.get(id)!);
+          placed.add(id);
+        }
+        // else: slot stays null (ability was removed or slot was empty)
       }
+
+      // Insert any new abilities into the first available empty slots
+      for (const [id, ability] of availableAbilities) {
+        if (placed.has(id)) continue;
+        const emptyIndex = this.slots.findIndex(s => s.ability === null);
+        if (emptyIndex !== -1) {
+          this.setSlotAbility(emptyIndex, ability);
+        }
+      }
+
+      this.saveCurrentLayout();
+      return;
     }
 
-    // Default: use the natural order (nulls create gaps)
+    // No saved layout: use the natural order (nulls create gaps)
     abilities.forEach((ab, i) => this.setSlotAbility(i, ab));
   }
 
-  private getSavedLayout(characterId: string): string[] | null {
+  private getSavedLayout(characterId: string): (string | null)[] | null {
     try {
       const json = localStorage.getItem(LAYOUT_STORAGE_KEY);
       if (!json) return null;
@@ -173,8 +190,7 @@ export class ActionBar {
       const json = localStorage.getItem(LAYOUT_STORAGE_KEY);
       const layouts = json ? JSON.parse(json) : {};
       layouts[this.currentCharacterId] = this.slots
-        .map(s => s.ability?.id ?? null)
-        .filter((id): id is string => id !== null);
+        .map(s => s.ability?.id ?? null);
       localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layouts));
     } catch {
       // localStorage unavailable — silently ignore
