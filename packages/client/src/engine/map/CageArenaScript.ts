@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ArenaScript } from './ArenaScript';
 import type { Collider, BoxCollider, CircleCollider } from '../physics/CollisionSystem';
+import { audioSettings } from '../../ui/AudioSettings';
 
 export class CageArenaScript extends ArenaScript {
   // Doors
@@ -28,6 +29,13 @@ export class CageArenaScript extends ArenaScript {
   private northBannerTexture: THREE.CanvasTexture | null = null;
   private bannerTimer = 0;
   private bannerActive = false;
+
+  // Cheer sound (one-shot ambient effect on killing blow)
+  private cheerAudioCtx: AudioContext | null = null;
+  private cheerBuffer: AudioBuffer | null = null;
+
+  // Game over state (-1 = game in progress)
+  private gameOverWinningTeam = -1;
   private bannerKillerTeam = -1;
   private readonly BANNER_DURATION = 4;
 
@@ -53,6 +61,7 @@ export class CageArenaScript extends ArenaScript {
   // ArenaScript hooks
   // ---------------------------------------------------------------------------
   protected initArena(): void {
+    this.preloadCheerSound();
     this.createRingFloor();
     this.createPenFloors();
     this.createCageBars();
@@ -134,6 +143,11 @@ export class CageArenaScript extends ArenaScript {
     this.scoreboardTextures = [];
     this.southBannerTexture = null;
     this.northBannerTexture = null;
+    if (this.cheerAudioCtx) {
+      this.cheerAudioCtx.close();
+      this.cheerAudioCtx = null;
+    }
+    this.cheerBuffer = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -154,6 +168,50 @@ export class CageArenaScript extends ArenaScript {
     this.bannerKillerTeam = killerTeam;
     this.drawSouthBanner(killerTeam);
     this.drawNorthBanner(killerTeam);
+
+    // Play crowd cheer
+    this.playCheerSound();
+  }
+
+  onGameOver(winningTeam: number): void {
+    this.gameOverWinningTeam = winningTeam;
+
+    // If no killing blow banner is active, show result immediately
+    if (!this.bannerActive) {
+      this.drawSouthBanner();
+      this.drawNorthBanner();
+    }
+    // Otherwise the result banners will show once the killing blow banner expires
+  }
+
+  private async preloadCheerSound(): Promise<void> {
+    try {
+      const ctx = new AudioContext();
+      this.cheerAudioCtx = ctx;
+      const resp = await fetch('/audio/ambient/maps/cage/cheer.ogg');
+      const buf = await resp.arrayBuffer();
+      this.cheerBuffer = await ctx.decodeAudioData(buf);
+    } catch (e) {
+      console.warn('Failed to preload cheer sound:', e);
+    }
+  }
+
+  private playCheerSound(): void {
+    if (!this.cheerAudioCtx || !this.cheerBuffer) return;
+    if (!audioSettings.enableAmbient || !audioSettings.windowFocused) return;
+
+    const ctx = this.cheerAudioCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+
+    const gain = ctx.createGain();
+    gain.gain.value = audioSettings.masterVolume * audioSettings.ambientVolume;
+    gain.connect(ctx.destination);
+
+    const source = ctx.createBufferSource();
+    source.buffer = this.cheerBuffer;
+    source.loop = false;
+    source.connect(gain);
+    source.start();
   }
 
   protected onOpen(): void {
@@ -2485,6 +2543,10 @@ export class CageArenaScript extends ArenaScript {
     } else if (killerTeam === 1) {
       // Blue team scored — shame red
       this.drawBannerReaction(ctx, canvas.width, canvas.height, 'shame', '#ff2222', '#330000');
+    } else if (this.gameOverWinningTeam >= 0) {
+      // Game over — show result
+      const won = this.gameOverWinningTeam === 0;
+      this.drawBannerResult(ctx, canvas.width, canvas.height, won, '#ff2222', '#330000');
     } else {
       // Idle state
       this.drawBannerIdle(ctx, canvas.width, canvas.height, 'RED TEAM', '#cc2222', '#180000');
@@ -2509,6 +2571,10 @@ export class CageArenaScript extends ArenaScript {
     } else if (killerTeam === 0) {
       // Red team scored — shame blue
       this.drawBannerReaction(ctx, canvas.width, canvas.height, 'shame', '#3388ff', '#000d33');
+    } else if (this.gameOverWinningTeam >= 0) {
+      // Game over — show result
+      const won = this.gameOverWinningTeam === 1;
+      this.drawBannerResult(ctx, canvas.width, canvas.height, won, '#3388ff', '#000d33');
     } else {
       // Idle state
       this.drawBannerIdle(ctx, canvas.width, canvas.height, 'BLUE TEAM', '#2266cc', '#000818');
@@ -2555,5 +2621,24 @@ export class CageArenaScript extends ArenaScript {
     ctx.fillStyle = isCheer ? '#ffcc00' : color;
     ctx.font = `bold 44px monospace`;
     ctx.fillText(text, w / 2, h / 2);
+  }
+
+  private drawBannerResult(
+    ctx: CanvasRenderingContext2D, w: number, h: number,
+    won: boolean, color: string, bg: string,
+  ): void {
+    ctx.fillStyle = won ? '#0a0800' : '#0a0000';
+    ctx.fillRect(0, 0, w, h);
+
+    const emote = won ? '🏆' : '💀';
+    ctx.font = '52px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emote, w * 0.15, h / 2);
+    ctx.fillText(emote, w * 0.85, h / 2);
+
+    ctx.fillStyle = won ? '#ffcc00' : color;
+    ctx.font = 'bold 48px monospace';
+    ctx.fillText(won ? 'VICTORY' : 'DEFEAT', w / 2, h / 2);
   }
 }

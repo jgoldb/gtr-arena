@@ -1696,6 +1696,7 @@ function handleServerMessage(msg: ServerMessage): void {
 
     case 'game_over':
       showGameOver(msg.winningTeam, msg.allPlayersPresent, msg.playerResults);
+      clientEngine?.mapManager.onGameOver(msg.winningTeam);
       break;
 
     case 'rematch_challenge':

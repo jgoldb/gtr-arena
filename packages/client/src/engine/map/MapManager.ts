@@ -113,6 +113,11 @@ export class MapManager {
     this.currentScript?.onKillingBlow?.(killerTeam, victimTeam);
   }
 
+  /** Notify the map script that the game has ended. */
+  onGameOver(winningTeam: number): void {
+    this.currentScript?.onGameOver?.(winningTeam);
+  }
+
   /**
    * If a moving platform jumped this frame (e.g. tab restore), returns the
    * surface Y for the entity at (px, pz).  Undefined = no snap needed.
