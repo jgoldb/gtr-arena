@@ -242,6 +242,7 @@ export interface S2C_CombatEvent {
   combatType: 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune';
   suppressAutoTarget?: boolean;
   isAutoAttack?: boolean;
+  abilityId?: string;
 }
 
 export interface S2C_Flinch {

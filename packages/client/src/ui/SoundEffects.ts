@@ -26,8 +26,8 @@ class SoundEffectsManager {
     } catch { /* failed to load — play() will silently no-op */ }
   }
 
-  /** Play a sound effect. Pass distance (world units) and pan (-1 left, +1 right) for spatial audio. */
-  play(url: string, distance?: number, pan?: number): void {
+  /** Play a sound effect. Pass distance (world units) and pan (-1 left, +1 right) for spatial audio. volumeMultiplier scales the final gain (default 1). */
+  play(url: string, distance?: number, pan?: number, volumeMultiplier = 1): void {
     if (!audioSettings.enableSfx || !audioSettings.windowFocused) return;
     const buffer = this.buffers.get(url);
     if (!buffer) return;
@@ -44,7 +44,7 @@ class SoundEffectsManager {
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     const gain = ctx.createGain();
-    gain.gain.value = audioSettings.masterVolume * audioSettings.sfxVolume * proximityScale;
+    gain.gain.value = audioSettings.masterVolume * audioSettings.sfxVolume * proximityScale * volumeMultiplier;
     source.connect(gain);
     // Stereo panning: place sound in left/right channel based on direction
     if (pan !== undefined && pan !== 0) {
@@ -63,10 +63,9 @@ class SoundEffectsManager {
     for (const char of Object.values(CHARACTERS)) {
       const sfx = getCharacterSfx(char.id as CharacterId);
       if (!sfx) continue;
-      if (sfx.autoAttackHit) this.load(sfx.autoAttackHit);
-      if (sfx.autoAttackCrit) this.load(sfx.autoAttackCrit);
-      if (sfx.struck) this.load(sfx.struck);
-      if (sfx.dodge) this.load(sfx.dodge);
+      for (const entry of Object.values(sfx)) {
+        if (entry) this.load(entry.url);
+      }
     }
   }
 }

@@ -16,6 +16,7 @@ import { UnitTooltip } from './ui/UnitTooltip';
 import { EscapeMenu, type EscapeMenuButton } from './ui/EscapeMenu';
 import { AudioSettingsDialog } from './ui/AudioSettingsDialog';
 import { audioSettings } from './ui/AudioSettings';
+import { soundEffects } from './ui/SoundEffects';
 import { KeybindMenu } from './ui/KeybindMenu';
 import { DebugHUD } from './ui/DebugHUD';
 import { ReconnectOverlay } from './ui/ReconnectOverlay';
@@ -25,7 +26,7 @@ import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { ChatWindow } from './ui/ChatWindow';
 import { renderPortraits } from './ui/PortraitRenderer';
-import { getCharacterStats, xpToLevel, CHARACTER_LIST, type CharacterId } from '@gtr/shared';
+import { getCharacterStats, getCharacterSfx, xpToLevel, CHARACTER_LIST, type CharacterId } from '@gtr/shared';
 import { GLOBAL_COOLDOWN, type Ability } from './engine/combat/Ability';
 import type { Targetable } from './engine/types';
 
@@ -2413,6 +2414,14 @@ async function startPlayground(): Promise<void> {
   function onAbilitySuccess(ability: Ability, groundPos?: import('three').Vector3): void {
     const targetPos = groundPos ?? engine.targetingSystem.currentTarget?.mesh.position.clone();
     engine.playerController.triggerAbilityAnimation(ability.id, targetPos);
+    if (ability.id === 'crash-out') {
+      const crashSfx = getCharacterSfx(engine.playerController.characterId)?.crashOut;
+      if (crashSfx) soundEffects.play(crashSfx.url, undefined, undefined, crashSfx.volume);
+    }
+    if (ability.id === 'bucket-splash') {
+      const splashSfx = getCharacterSfx(engine.playerController.characterId)?.bucketSplash;
+      if (splashSfx) soundEffects.play(splashSfx.url, undefined, undefined, splashSfx.volume);
+    }
     if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
     if (ability.id === 'sweep') engine.startSweepCharge();
     if (ability.id === 'kaboom') engine.executeKaboom();
@@ -2895,6 +2904,14 @@ async function startUISetup(): Promise<void> {
   function onAbilitySuccess(ability: Ability, groundPos?: import('three').Vector3): void {
     const targetPos = groundPos ?? engine.targetingSystem.currentTarget?.mesh.position.clone();
     engine.playerController.triggerAbilityAnimation(ability.id, targetPos);
+    if (ability.id === 'crash-out') {
+      const crashSfx = getCharacterSfx(engine.playerController.characterId)?.crashOut;
+      if (crashSfx) soundEffects.play(crashSfx.url, undefined, undefined, crashSfx.volume);
+    }
+    if (ability.id === 'bucket-splash') {
+      const splashSfx = getCharacterSfx(engine.playerController.characterId)?.bucketSplash;
+      if (splashSfx) soundEffects.play(splashSfx.url, undefined, undefined, splashSfx.volume);
+    }
     if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
     if (ability.id === 'sweep') engine.startSweepCharge();
     if (ability.id === 'kaboom') engine.executeKaboom();

@@ -314,6 +314,7 @@ export class ServerEngine {
         combatType: type,
         ...(ability?.suppressAutoTarget ? { suppressAutoTarget: true } : {}),
         ...(isAutoAttack ? { isAutoAttack: true } : {}),
+        ...(ability ? { abilityId: ability.id } : {}),
       } as S2C_CombatEvent);
       // Track match stats
       if (amount > 0) {

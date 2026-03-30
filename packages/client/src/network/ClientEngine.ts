@@ -768,7 +768,18 @@ export class ClientEngine {
       if (charId) {
         const sfx = getCharacterSfx(charId);
         const aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
-        if (aaSfx) soundEffects.play(aaSfx, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId));
+        if (aaSfx) soundEffects.play(aaSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), aaSfx.volume);
+      }
+    }
+
+    // Play sound effects for ability hits (mop)
+    if (msg.abilityId === 'mop' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
+      const charId = msg.sourceEntityId === this.localEntityId
+        ? this.playerController.characterId
+        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
+      if (charId) {
+        const mopSfx = getCharacterSfx(charId)?.mop;
+        if (mopSfx) soundEffects.play(mopSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), mopSfx.volume);
       }
     }
 
@@ -777,13 +788,13 @@ export class ClientEngine {
       if (msg.targetEntityId === this.localEntityId) {
         this.playerController.triggerDodge();
         const localDodgeSfx = getCharacterSfx(this.playerController.characterId)?.dodge;
-        if (localDodgeSfx) soundEffects.play(localDodgeSfx);
+        if (localDodgeSfx) soundEffects.play(localDodgeSfx.url, undefined, undefined, localDodgeSfx.volume);
       } else {
         const entity = this.remoteEntities.get(msg.targetEntityId);
         if (entity) {
           entity.model.triggerDodge();
           const dodgeSfx = getCharacterSfx(entity.characterId)?.dodge;
-          if (dodgeSfx) soundEffects.play(dodgeSfx, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId));
+          if (dodgeSfx) soundEffects.play(dodgeSfx.url, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId), dodgeSfx.volume);
         }
       }
     }
@@ -804,6 +815,20 @@ export class ClientEngine {
     const groundPos = msg.groundTargetX !== undefined && msg.groundTargetZ !== undefined
       ? new THREE.Vector3(msg.groundTargetX, msg.groundTargetY ?? 0, msg.groundTargetZ)
       : undefined;
+
+    // Play ability-specific sound effects
+    const abilitySfxCharId = msg.entityId === this.localEntityId
+      ? this.playerController.characterId
+      : this.remoteEntities.get(msg.entityId)?.characterId;
+    if (abilitySfxCharId) {
+      const sfx = getCharacterSfx(abilitySfxCharId);
+      if (msg.abilityId === 'crash-out' && sfx?.crashOut) {
+        soundEffects.play(sfx.crashOut.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.crashOut.volume);
+      }
+      if (msg.abilityId === 'bucket-splash' && sfx?.bucketSplash) {
+        soundEffects.play(sfx.bucketSplash.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.bucketSplash.volume);
+      }
+    }
 
     if (msg.entityId === this.localEntityId) {
       // If we predicted this ability, clear prediction state
@@ -859,13 +884,13 @@ export class ClientEngine {
     if (msg.entityId === this.localEntityId) {
       this.playerController.triggerFlinch();
       const localStruckSfx = getCharacterSfx(this.playerController.characterId)?.struck;
-      if (localStruckSfx) soundEffects.play(localStruckSfx);
+      if (localStruckSfx) soundEffects.play(localStruckSfx.url, undefined, undefined, localStruckSfx.volume);
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
       if (entity) {
         entity.model.triggerFlinch();
         const struckSfx = getCharacterSfx(entity.characterId)?.struck;
-        if (struckSfx) soundEffects.play(struckSfx, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId));
+        if (struckSfx) soundEffects.play(struckSfx.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), struckSfx.volume);
       }
     }
   }

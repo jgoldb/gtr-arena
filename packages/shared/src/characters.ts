@@ -10,6 +10,12 @@ import {
 
 export type CharacterId = 'janitor' | 'dr-retardo' | 'crackhead' | 'rabbi-zehnwirth' | 'brad-clemons' | 'gourd-of-war';
 
+/** A sound effect entry: either a filename string (volume defaults to 1) or { file, volume }. */
+export type SfxEntry = string | { file: string; volume?: number };
+
+/** Resolved sound effect with full URL path and volume. */
+export interface ResolvedSfx { url: string; volume: number; }
+
 export interface CharacterStats {
   id: CharacterId;
   displayName: string;
@@ -27,10 +33,13 @@ export interface CharacterStats {
   startingBuffs?: readonly BuffDefinition[];
   playgroundOnly?: boolean;
   soundEffects?: {
-    autoAttackHit?: string;
-    autoAttackCrit?: string;
-    struck?: string;
-    dodge?: string;
+    autoAttackHit?: SfxEntry;
+    autoAttackCrit?: SfxEntry;
+    struck?: SfxEntry;
+    dodge?: SfxEntry;
+    crashOut?: SfxEntry;
+    bucketSplash?: SfxEntry;
+    mop?: SfxEntry;
   };
 }
 
@@ -60,6 +69,9 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       autoAttackCrit: 'crit.ogg',
       struck: 'struck.ogg',
       dodge: 'dodge.ogg',
+      crashOut: { file: 'crash-out.ogg', volume: 4 },
+      bucketSplash: { file: 'bucket-splash.ogg', volume: 8 },
+      mop: { file: 'mop.ogg', volume: 3 },
     },
   },
   'dr-retardo': {
@@ -154,17 +166,24 @@ export function getCharacterStats(id: CharacterId): CharacterStats {
   return CHARACTERS[id];
 }
 
-/** Resolve short SFX filenames to full `/audio/sfx/characters/{id}/` paths. */
-export function getCharacterSfx(id: CharacterId): CharacterStats['soundEffects'] {
+export type ResolvedCharacterSfx = { [K in keyof NonNullable<CharacterStats['soundEffects']>]?: ResolvedSfx };
+
+function resolveSfxEntry(base: string, entry: SfxEntry): ResolvedSfx {
+  if (typeof entry === 'string') return { url: base + entry, volume: 1 };
+  return { url: base + entry.file, volume: entry.volume ?? 1 };
+}
+
+/** Resolve short SFX filenames to full `/audio/sfx/characters/{id}/` paths with volume. */
+export function getCharacterSfx(id: CharacterId): ResolvedCharacterSfx | undefined {
   const sfx = CHARACTERS[id].soundEffects;
   if (!sfx) return undefined;
   const base = `/audio/sfx/characters/${id}/`;
-  return {
-    autoAttackHit: sfx.autoAttackHit ? base + sfx.autoAttackHit : undefined,
-    autoAttackCrit: sfx.autoAttackCrit ? base + sfx.autoAttackCrit : undefined,
-    struck: sfx.struck ? base + sfx.struck : undefined,
-    dodge: sfx.dodge ? base + sfx.dodge : undefined,
-  };
+  const result: ResolvedCharacterSfx = {};
+  for (const key of Object.keys(sfx) as (keyof typeof sfx)[]) {
+    const entry = sfx[key];
+    if (entry) result[key] = resolveSfxEntry(base, entry);
+  }
+  return result;
 }
 
 // ── Ranged auto-attack constants ──

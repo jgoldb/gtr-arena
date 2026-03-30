@@ -37,6 +37,7 @@ export class CombatSystem {
   onEnterCombat?: (entity: Targetable) => void;
   onLeaveCombat?: (entity: Targetable) => void;
   onAutoAttackDamageDealt?: (attacker: Targetable, isCrit: boolean) => void;
+  onAbilityDamageDealt?: (attacker: Targetable, abilityId: string) => void;
 
   constructor(regenSystem: RegenSystem, buffSystem: BuffSystem, collisionSystem: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -345,6 +346,7 @@ export class CombatSystem {
         }
         if (actualDamage > 0) {
           this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
+          this.onAbilityDamageDealt?.(attacker, ability.id);
         }
 
         // Jimmy Legs: if target already has it, also immobilize

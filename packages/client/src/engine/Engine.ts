@@ -281,7 +281,7 @@ export class Engine {
         }
       }
       const struckSfx = getCharacterSfx(target.characterId)?.struck;
-      if (struckSfx) soundEffects.play(struckSfx, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position));
+      if (struckSfx) soundEffects.play(struckSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), struckSfx.volume);
     };
 
     // Dodge animation
@@ -294,13 +294,20 @@ export class Engine {
         }
       }
       const dodgeSfx = getCharacterSfx(target.characterId)?.dodge;
-      if (dodgeSfx) soundEffects.play(dodgeSfx, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position));
+      if (dodgeSfx) soundEffects.play(dodgeSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), dodgeSfx.volume);
     };
 
     this.combatSystem.onAutoAttackDamageDealt = (attacker, isCrit) => {
       const sfx = getCharacterSfx(attacker.characterId);
       const aaSfx = (isCrit && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
-      if (aaSfx) soundEffects.play(aaSfx, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position));
+      if (aaSfx) soundEffects.play(aaSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), aaSfx.volume);
+    };
+
+    this.combatSystem.onAbilityDamageDealt = (attacker, abilityId) => {
+      if (abilityId === 'mop') {
+        const mopSfx = getCharacterSfx(attacker.characterId)?.mop;
+        if (mopSfx) soundEffects.play(mopSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), mopSfx.volume);
+      }
     };
 
     // Auto-target attacker when player has no target (not while blinded)
