@@ -131,6 +131,27 @@ export class ServerEntity {
     return this.discombobSeed;
   }
 
+  /** Restore mutable state from a persisted snapshot (crash recovery). */
+  applySnapshot(snap: EntitySnapshot): void {
+    this.x = snap.x;
+    this.y = snap.y;
+    this.z = snap.z;
+    this.rotationY = snap.rotationY;
+    this.hp = snap.hp;
+    this.maxHp = snap.maxHp;
+    this.mana = snap.mana;
+    this.maxMana = snap.maxMana;
+    this.dead = snap.dead;
+    this.inCombat = snap.inCombat;
+    this.stunned = snap.stunned;
+    this.charging = snap.charging;
+    this.isMoving = false;
+    this.isAutoAttacking = false;
+    this.vx = 0;
+    this.vz = 0;
+    this.moveFlags = 0;
+  }
+
   toSnapshot(): EntitySnapshot {
     return {
       id: this.id,

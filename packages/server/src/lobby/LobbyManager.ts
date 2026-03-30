@@ -28,15 +28,84 @@ export class LobbyManager {
   private nextGameId = 1;
   /** Reference to the global DataChannel map for unreliable game traffic. */
   private dataChannelMap: Map<string, DataChannel> | null = null;
+  /** In-memory ring buffer of recent lobby chat messages (session-level, clears on restart). */
+  private static readonly CHAT_HISTORY_SIZE = 100;
+  private chatHistory: S2C_LobbyChat[] = [];
 
   constructor(auth: AuthManager, db: GtrDatabase) {
     this.auth = auth;
     this.db = db;
+    this.restoreActiveSessions();
   }
 
   /** Set the global DataChannel map for unreliable game traffic (called once at startup). */
   setDataChannelMap(map: Map<string, DataChannel>): void {
     this.dataChannelMap = map;
+    // Wire DataChannel lookup into any sessions restored before this was set
+    for (const session of this.gameSessions.values()) {
+      if (!session.getDataChannel) {
+        session.getDataChannel = (userId) => map.get(userId);
+      }
+    }
+  }
+
+  /** Restore active game sessions from the database on server startup (crash recovery). */
+  private restoreActiveSessions(): void {
+    const saved = this.db.loadActiveSessions();
+    if (saved.length === 0) return;
+
+    console.log(`[CrashRecovery] Restoring ${saved.length} active game session(s)...`);
+
+    for (const data of saved) {
+      const session = GameSession.restore(
+        data,
+        this.auth,
+        this.db,
+        (_gameId: string) => {},
+      );
+
+      if (!session) {
+        console.warn(`[CrashRecovery] Failed to restore session ${data.gameId}, deleting`);
+        this.db.deleteActiveSession(data.gameId);
+        continue;
+      }
+
+      // Wire session callbacks
+      if (this.dataChannelMap) {
+        const dcMap = this.dataChannelMap;
+        session.getDataChannel = (userId) => dcMap.get(userId);
+      }
+      session.onRematch = (oldGameId, info) => this.handleRematch(oldGameId, info);
+      session.onGracePeriodExpired = (userId) => {
+        this.pendingRejoins.delete(userId);
+        if (session.isEmpty()) {
+          session.stop();
+          this.gameSessions.delete(data.gameId);
+          this.broadcastLobbyState();
+        }
+      };
+
+      this.gameSessions.set(data.gameId, session);
+
+      // Parse the gameId to keep nextGameId above any restored IDs
+      const idNum = parseInt(data.gameId.replace('game_', ''), 10);
+      if (!isNaN(idNum) && idNum >= this.nextGameId) {
+        this.nextGameId = idNum + 1;
+      }
+
+      // Add surviving players to pendingRejoins and start grace periods
+      // (skip players who were already removed before the crash)
+      const players: { userId: string; username: string; team: number; characterId: string }[] = JSON.parse(data.players);
+      const removedBeforeEnd: string[] = JSON.parse(data.removedBeforeEnd);
+      const removedSet = new Set(removedBeforeEnd);
+      for (const p of players) {
+        if (removedSet.has(p.userId)) continue;
+        this.pendingRejoins.set(p.userId, data.gameId);
+        session.startGracePeriod(p.userId);
+      }
+
+      console.log(`[CrashRecovery] Restored session ${data.gameId} (${data.mapId}, ${data.format}) with ${players.length} players`);
+    }
   }
 
   /** Prefix a username with <GM> if the user is an admin. */
@@ -74,6 +143,7 @@ export class LobbyManager {
       gameLobbyId: null,
       gameSessionId: null,
     });
+    this.sendChatHistory(socket);
     this.broadcastLobbyState();
     this.notifyAdminsUserListChanged();
   }
@@ -183,6 +253,7 @@ export class LobbyManager {
         }
         user.status = 'online';
         user.gameSessionId = null;
+        this.sendChatHistory(user.socket);
         this.broadcastLobbyState();
         break;
 
@@ -243,6 +314,12 @@ export class LobbyManager {
       timestamp: Date.now(),
       ...(isAnnouncement && { isAnnouncement: true }),
     };
+
+    // Store in history buffer
+    this.chatHistory.push(chatMsg);
+    if (this.chatHistory.length > LobbyManager.CHAT_HISTORY_SIZE) {
+      this.chatHistory.shift();
+    }
 
     // Send to all lobby users (not in-game)
     for (const u of this.users.values()) {
@@ -913,6 +990,14 @@ export class LobbyManager {
     }
 
     this.send(user.socket, { type: 'lobby_state', users, games });
+  }
+
+  /** Send recent lobby chat history to a single socket (on join / return from game). */
+  private sendChatHistory(socket: WebSocket): void {
+    if (socket.readyState !== socket.OPEN) return;
+    for (const msg of this.chatHistory) {
+      socket.send(encodeMessage(msg));
+    }
   }
 
   private send(socket: WebSocket, msg: ServerMessage): void {

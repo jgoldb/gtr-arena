@@ -1541,20 +1541,10 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'lobby_state':
       if (awaitingReconnectResult) {
         // Server didn't send rejoin_game — no game to rejoin.
-        // Wait for the version check before deciding how to transition.
+        // Always transition to lobby (update snackbar will show there if needed).
         awaitingReconnectResult = false;
-        const pending = updateCheckPromise ?? Promise.resolve();
         updateCheckPromise = null;
-        pending.then(() => {
-          if (updatePending) {
-            // Update detected while in game — don't force a transition.
-            // The snackbar is already showing; the user can exit via
-            // the escape menu → "Return to Lobby", which calls showLobby()
-            // and will reload at that point.
-          } else {
-            showLobby();
-          }
-        });
+        showLobby();
       }
       lobbyScreen?.updateUsers(msg.users);
       lobbyScreen?.updateGames(msg.games);

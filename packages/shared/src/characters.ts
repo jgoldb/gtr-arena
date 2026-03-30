@@ -51,7 +51,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     autoAttackSpeed: 2.5,
     autoAttackRange: 1.8,
     critChance: 0.25,
-    dodgeChance: 0.99,
+    dodgeChance: 0.17,
     hpRegen: 32,
     manaRegen: 12,
     abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket],

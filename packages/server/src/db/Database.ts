@@ -76,6 +76,25 @@ export class GtrDatabase {
     if (!cols.some(c => c.name === 'ban_reason')) {
       this.db.exec("ALTER TABLE users ADD COLUMN ban_reason TEXT DEFAULT NULL");
     }
+
+    // Active game sessions — persisted for crash recovery
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS active_sessions (
+        game_id       TEXT PRIMARY KEY,
+        map_id        TEXT NOT NULL,
+        format        TEXT NOT NULL,
+        players       TEXT NOT NULL,
+        game_started_at INTEGER NOT NULL,
+        game_elapsed  REAL NOT NULL DEFAULT 0,
+        arena_countdown_started_at INTEGER NOT NULL DEFAULT 0,
+        countdown_started INTEGER NOT NULL DEFAULT 0,
+        arena_preparation_active INTEGER NOT NULL DEFAULT 0,
+        match_stats   TEXT NOT NULL DEFAULT '{}',
+        removed_before_end TEXT NOT NULL DEFAULT '[]',
+        game_state    TEXT NOT NULL,
+        updated_at    INTEGER NOT NULL
+      );
+    `);
   }
 
   // ── Auth ────────────────────────────────────────────────────────────────
@@ -255,6 +274,78 @@ export class GtrDatabase {
     this.db.prepare('DELETE FROM user_stats WHERE user_id = ?').run(userId);
     this.db.prepare('DELETE FROM users WHERE id = ?').run(userId);
     return true;
+  }
+
+  // ── Active Sessions (crash recovery) ────────────────────────────────
+
+  saveActiveSession(data: {
+    gameId: string;
+    mapId: string;
+    format: string;
+    players: string;       // JSON
+    gameStartedAt: number;
+    gameElapsed: number;
+    arenaCountdownStartedAt: number;
+    countdownStarted: boolean;
+    arenaPreparationActive: boolean;
+    matchStats: string;    // JSON
+    removedBeforeEnd: string; // JSON
+    gameState: string;     // JSON
+  }): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO active_sessions
+        (game_id, map_id, format, players, game_started_at, game_elapsed,
+         arena_countdown_started_at, countdown_started, arena_preparation_active,
+         match_stats, removed_before_end, game_state, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.gameId, data.mapId, data.format, data.players,
+      data.gameStartedAt, data.gameElapsed,
+      data.arenaCountdownStartedAt,
+      data.countdownStarted ? 1 : 0,
+      data.arenaPreparationActive ? 1 : 0,
+      data.matchStats, data.removedBeforeEnd, data.gameState,
+      Date.now(),
+    );
+  }
+
+  loadActiveSessions(): {
+    gameId: string;
+    mapId: string;
+    format: string;
+    players: string;
+    gameStartedAt: number;
+    gameElapsed: number;
+    arenaCountdownStartedAt: number;
+    countdownStarted: boolean;
+    arenaPreparationActive: boolean;
+    matchStats: string;
+    removedBeforeEnd: string;
+    gameState: string;
+  }[] {
+    const rows = this.db.prepare('SELECT * FROM active_sessions').all() as any[];
+    return rows.map(r => ({
+      gameId: r.game_id,
+      mapId: r.map_id,
+      format: r.format,
+      players: r.players,
+      gameStartedAt: r.game_started_at,
+      gameElapsed: r.game_elapsed,
+      arenaCountdownStartedAt: r.arena_countdown_started_at,
+      countdownStarted: r.countdown_started === 1,
+      arenaPreparationActive: r.arena_preparation_active === 1,
+      matchStats: r.match_stats,
+      removedBeforeEnd: r.removed_before_end,
+      gameState: r.game_state,
+    }));
+  }
+
+  deleteActiveSession(gameId: string): void {
+    this.db.prepare('DELETE FROM active_sessions WHERE game_id = ?').run(gameId);
+  }
+
+  deleteAllActiveSessions(): void {
+    this.db.prepare('DELETE FROM active_sessions').run();
   }
 
   close(): void {

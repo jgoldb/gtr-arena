@@ -968,9 +968,17 @@ export class ServerEngine {
     }
   }
 
+  /** Set elapsed time offset for restored sessions so getGameElapsed() returns the correct value. */
+  setElapsedOffset(elapsedSeconds: number): void {
+    this.startTime = Date.now() - elapsedSeconds * 1000;
+  }
+
   start(): void {
     if (this.tickTimeoutId) return;
-    this.startTime = Date.now();
+    // Only set startTime if not already set by setElapsedOffset()
+    if (this.startTime === 0) {
+      this.startTime = Date.now();
+    }
     this.lastTickTime = performance.now();
     this.nextTickTarget = this.lastTickTime + ServerEngine.TICK_MS;
     this.scheduleNextTick();

@@ -136,8 +136,37 @@ export class ChatWindow {
       return btn;
     };
 
+    const makeJumpBtn = (label: string, toEnd: boolean): HTMLDivElement => {
+      const btn = document.createElement('div');
+      btn.textContent = label;
+      btn.dataset.chatBtn = '1';
+      btn.style.cssText = `
+        width: 18px; height: 24px;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(0, 0, 0, 0.45); color: rgba(180, 190, 220, 0.8);
+        border-radius: 3px; cursor: pointer; user-select: none;
+        font-size: 10px; pointer-events: auto;
+      `;
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.log.scrollTop = toEnd ? this.log.scrollHeight : 0;
+      });
+      btn.addEventListener('mouseenter', () => {
+        btn.style.background = 'rgba(0, 0, 0, 0.65)';
+        btn.style.color = 'rgba(210, 220, 240, 0.95)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.background = 'rgba(0, 0, 0, 0.45)';
+        btn.style.color = 'rgba(180, 190, 220, 0.8)';
+      });
+      return btn;
+    };
+
+    this.scrollControls.appendChild(makeJumpBtn('\u2912', false));
     this.scrollControls.appendChild(makeBtn('\u25B2', -1));
     this.scrollControls.appendChild(makeBtn('\u25BC', 1));
+    this.scrollControls.appendChild(makeJumpBtn('\u2913', true));
     hoverZone.appendChild(this.scrollControls);
 
     // Log area — fixed height, hidden scrollbar
@@ -186,13 +215,13 @@ export class ChatWindow {
       }
     });
 
-    // Prevent keyup from propagating to game input while chat is open
-    this.input.addEventListener('keyup', (e) => {
-      e.stopPropagation();
-    });
+    // Let keyup propagate to InputManager so keys held before chat opened get cleared
 
+    // Re-focus if something (e.g. mouse click to move) steals focus while chat is open
     this.input.addEventListener('blur', () => {
-      if (this._chatOpen) this.closeChat();
+      if (this._chatOpen) {
+        requestAnimationFrame(() => this.input.focus());
+      }
     });
 
     this.inputRow.appendChild(this.input);

@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { DataChannel } from 'node-datachannel';
-import type { CharacterId, GameFormat, ServerMessage, ClientMessage, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_GateVoteUpdate, S2C_GameChat, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
+import type { CharacterId, GameFormat, ServerMessage, ClientMessage, EntitySnapshot, S2C_GameStart, S2C_GameOver, S2C_EntityDied, S2C_CountdownStart, S2C_GodModeUpdate, S2C_GateVoteUpdate, S2C_GameChat, S2C_RematchChallenge, S2C_RematchReadyUpdate, S2C_RematchFailed, S2C_RejoinGame, S2C_PlayerDisconnected, S2C_PlayerReconnected, S2C_EntityRemoved, MapInfo, PlayerMatchStats, PlayerMatchResult, LobbyGameInfo } from '@gtr/shared';
 import { MAPS, MAP_LIST, xpToLevel, calculateXpGain, getMaxPlayers, encodeMessage } from '@gtr/shared';
 import { ServerEngine } from './ServerEngine.js';
 import { ServerEntity } from './ServerEntity.js';
@@ -120,7 +120,12 @@ export class GameSession {
       this.matchStats.set(p.userId, { kills: 0, deaths: 0, damageDealt: 0, healingDone: 0 });
     }
 
-    // Wire engine callbacks — inject arenaTimeRemaining + gameElapsed into keyframe snapshots
+    this.wireEngineCallbacks();
+  }
+
+  /** Wire all engine callbacks — shared by constructor and restore(). */
+  private wireEngineCallbacks(): void {
+    // Inject arenaTimeRemaining + gameElapsed into keyframe snapshots, and persist state
     this.engine.onBroadcast = (msg) => {
       if (msg.type === 'game_state_snapshot') {
         const snapshot = msg as import('@gtr/shared').S2C_GameStateSnapshot;
@@ -133,12 +138,15 @@ export class GameSession {
           }
         }
         snapshot.gameElapsed = this.engine.getGameElapsed();
+        // Persist to DB on each keyframe for crash recovery
+        if (!this.gameOver) {
+          this.persistState();
+        }
       }
       this.broadcast(msg);
     };
     this.engine.onSendToPlayer = (entityId, msg) => this.sendToEntity(entityId, msg);
     this.engine.onPositionRelay = (senderEntityId, msg) => this.broadcastExcept(senderEntityId, msg);
-    // Unreliable broadcasts — positions and relays via WebRTC DataChannel
     this.engine.onBroadcastUnreliable = (msg) => this.broadcastUnreliable(msg);
     this.engine.onPositionRelayUnreliable = (senderEntityId, msg) => this.broadcastUnreliableExcept(senderEntityId, msg);
     this.engine.onGameOver = (winningTeam) => this.handleGameOver(winningTeam);
@@ -282,6 +290,7 @@ export class GameSession {
     this.stopped = true;
     this.arenaPreparationActive = false;
     this.engine.stop();
+    this.deletePersistedState();
     if (this.readyTimeoutId) {
       clearTimeout(this.readyTimeoutId);
       this.readyTimeoutId = null;
@@ -651,6 +660,9 @@ export class GameSession {
 
     // Record stats and award XP for ALL players (including disconnected ones)
     this.recordStats(winningTeam);
+
+    // Game is over — no need to persist for crash recovery
+    this.deletePersistedState();
   }
 
   /** Record win/loss stats and award XP for every player in this game. Called once at game end. */
@@ -803,6 +815,178 @@ export class GameSession {
     this.rematchRequester = null;
     this.rematchMapMode = null;
     this.rematchAccepted.clear();
+  }
+
+  // ── Crash recovery persistence ──────────────────────────────────────
+
+  /** Serialize and persist current session state to the database (called every keyframe). */
+  private persistState(): void {
+    const entities = this.engine.getAllEntities().map(e => e.toSnapshot());
+    const cooldowns = this.engine.getFullState().cooldowns;
+
+    const matchStatsObj: Record<string, PlayerMatchStats> = {};
+    for (const [userId, stats] of this.matchStats) {
+      matchStatsObj[userId] = stats;
+    }
+
+    this.db.saveActiveSession({
+      gameId: this.gameId,
+      mapId: this.mapId,
+      format: this.format,
+      players: JSON.stringify(this.players),
+      gameStartedAt: Date.now() - this.engine.getGameElapsed() * 1000,
+      gameElapsed: this.engine.getGameElapsed(),
+      arenaCountdownStartedAt: this.arenaCountdownStartedAt,
+      countdownStarted: this.countdownStarted,
+      arenaPreparationActive: this.arenaPreparationActive,
+      matchStats: JSON.stringify(matchStatsObj),
+      removedBeforeEnd: JSON.stringify([...this.removedBeforeEnd]),
+      gameState: JSON.stringify({ entities, cooldowns }),
+    });
+  }
+
+  /** Delete persisted state (game over or session cleanup). */
+  deletePersistedState(): void {
+    this.db.deleteActiveSession(this.gameId);
+  }
+
+  /** Restore a GameSession from persisted database state (called on server startup). */
+  static restore(
+    data: {
+      gameId: string;
+      mapId: string;
+      format: string;
+      players: string;
+      gameStartedAt: number;
+      gameElapsed: number;
+      arenaCountdownStartedAt: number;
+      countdownStarted: boolean;
+      arenaPreparationActive: boolean;
+      matchStats: string;
+      removedBeforeEnd: string;
+      gameState: string;
+    },
+    auth: AuthManager,
+    db: GtrDatabase,
+    onGameOver: (gameId: string) => void,
+  ): GameSession | null {
+    const players: SessionPlayer[] = JSON.parse(data.players);
+    const gameState: { entities: EntitySnapshot[]; cooldowns: { entityId: string; abilityId: string; remaining: number; total: number }[] } = JSON.parse(data.gameState);
+    const matchStatsObj: Record<string, PlayerMatchStats> = JSON.parse(data.matchStats);
+    const removedBeforeEnd: string[] = JSON.parse(data.removedBeforeEnd);
+
+    const mapInfo = MAPS[data.mapId];
+    const format = data.format as GameFormat;
+
+    // Create session with empty sockets (all players disconnected on restart)
+    const session = new GameSession(
+      data.gameId,
+      data.mapId,
+      format,
+      players,
+      new Map(), // no sockets — all players are disconnected
+      auth,
+      db,
+      onGameOver,
+    );
+
+    // Restore entity positions/state from saved snapshots
+    const restoredEntityIds = new Set<string>();
+    for (const snap of gameState.entities) {
+      const entity = session.engine.getEntity(snap.id);
+      if (entity) {
+        entity.applySnapshot(snap);
+        restoredEntityIds.add(snap.id);
+      }
+    }
+
+    // Remove entities for players who were removed before the crash
+    // (the constructor creates all entities, but some may have been removed mid-game)
+    for (const userId of removedBeforeEnd) {
+      const entityId = session.entityIdByUserId.get(userId);
+      if (entityId && !restoredEntityIds.has(entityId)) {
+        session.engine.removeEntity(entityId);
+      }
+    }
+
+    // Restore game elapsed time so getGameElapsed() returns the correct value
+    session.engine.setElapsedOffset(data.gameElapsed);
+
+    // Restore session-level state
+    session.countdownStarted = data.countdownStarted;
+    session.arenaCountdownStartedAt = data.arenaCountdownStartedAt;
+
+    // Handle arena preparation — check if prep time has elapsed since the crash
+    if (data.arenaPreparationActive && data.arenaCountdownStartedAt > 0) {
+      const arenaOpenTime = mapInfo?.arenaOpenTime ?? 30;
+      const elapsedSinceCountdown = (Date.now() - data.arenaCountdownStartedAt) / 1000;
+      if (elapsedSinceCountdown < arenaOpenTime) {
+        // Still in arena prep — reapply buff and schedule removal
+        session.arenaPreparationActive = true;
+        session.engine.applyArenaPreparation();
+        const remainingMs = (arenaOpenTime - elapsedSinceCountdown) * 1000;
+        session.arenaOpenTimeoutId = setTimeout(() => {
+          session.arenaPreparationActive = false;
+          session.arenaOpenTimeoutId = null;
+          if (!session.stopped) {
+            session.engine.removeArenaPreparation();
+          }
+        }, remainingMs);
+      } else {
+        // Prep time already elapsed — skip it
+        session.arenaPreparationActive = false;
+      }
+    } else {
+      session.arenaPreparationActive = false;
+    }
+
+    // Restore match stats
+    for (const [userId, stats] of Object.entries(matchStatsObj)) {
+      session.matchStats.set(userId, stats);
+    }
+
+    // Restore removed-before-end set
+    for (const userId of removedBeforeEnd) {
+      session.removedBeforeEnd.add(userId);
+    }
+
+    // Start the engine tick loop (entities will be frozen once we disconnect all players)
+    session.engine.start();
+
+    // Freeze all entities and mark all players as disconnected
+    for (const p of players) {
+      const entityId = session.entityIdByUserId.get(p.userId);
+      if (entityId) {
+        const entity = session.engine.getEntity(entityId);
+        if (entity && !entity.dead) {
+          session.engine.freezeEntity(entityId);
+        }
+      }
+    }
+
+    return session;
+  }
+
+  /** Start grace period for a player without requiring them to have been connected.
+   *  Used during session restore when all players start disconnected. */
+  startGracePeriod(userId: string): void {
+    if (this.disconnectedPlayers.has(userId)) return;
+    const entityId = this.entityIdByUserId.get(userId);
+    if (!entityId) return;
+    const player = this.players.find(p => p.userId === userId);
+    if (!player) return;
+
+    const timer = setTimeout(() => {
+      this.disconnectedPlayers.delete(userId);
+      this.engine.removeEntity(entityId);
+      this.broadcast({ type: 'entity_removed', entityId, username: player?.username } as S2C_EntityRemoved);
+      this.onGracePeriodExpired?.(userId);
+      if (!this.gameOver) {
+        this.removedBeforeEnd.add(userId);
+        this.checkTeamForfeit();
+      }
+    }, GameSession.DISCONNECT_GRACE_PERIOD_MS);
+    this.disconnectedPlayers.set(userId, { timer });
   }
 
   private broadcast(msg: ServerMessage): void {
