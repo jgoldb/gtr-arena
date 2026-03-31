@@ -82,7 +82,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       autoAttackHit: 'auto-attack.ogg',
       autoAttackCrit: 'crit.ogg',
       struck: 'struck.ogg',
-      dodge: 'dodge.ogg',
+      dodge: '../shared/dodge.ogg',
       crashOut: { file: 'crash-out.ogg', volume: 4 },
       bucketSplash: { file: 'bucket-splash.ogg', volume: 8 },
       mop: { file: 'mop.ogg', volume: 3 },
@@ -111,6 +111,9 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     soundEffects: {
       autoAttackHit: { file: 'auto-attack1.ogg', volume: 3 },
       autoAttackHit2: { file: 'auto-attack2.ogg', volume: 3 },
+      autoAttackCrit: { file: 'crit.ogg', volume: 3 },
+      struck: { file: 'struck.ogg', volume: 3 },
+      dodge: { file: '../shared/dodge.ogg', volume: 3 },
       bottleChuck: { file: 'bottle-chuck.ogg', volume: 3 },
       discombobulate: { file: 'discombobulate.ogg', volume: 2 },
       chemicalSpill: { file: 'chemical-spill.ogg', volume: 3 },
