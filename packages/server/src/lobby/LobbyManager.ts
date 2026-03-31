@@ -222,6 +222,12 @@ export class LobbyManager {
       case 'swap_team':
         this.handleSwapTeam(userId, msg.draggedUserId, msg.newTeam, msg.droppedOnUserId);
         break;
+      case 'change_format':
+        this.handleChangeFormat(userId, msg.format);
+        break;
+      case 'change_map':
+        this.handleChangeMap(userId, msg.mapId);
+        break;
       // In-game messages are routed to GameSession
       case 'client_ready':
       case 'player_state':
@@ -456,6 +462,50 @@ export class LobbyManager {
     }
 
     this.broadcastGameLobbyState(lobby);
+  }
+
+  private handleChangeFormat(userId: string, format: '1v1' | '2v2' | '3v3'): void {
+    const user = this.users.get(userId);
+    if (!user?.gameLobbyId) return;
+
+    const lobby = this.gameLobbies.get(user.gameLobbyId);
+    if (!lobby) return;
+
+    if (lobby.hostUserId !== userId) {
+      this.send(user.socket, { type: 'error', message: 'Only the host can change the format' });
+      return;
+    }
+
+    const result = lobby.setFormat(format);
+    if (!result.success) {
+      this.send(user.socket, { type: 'error', message: result.error! });
+      return;
+    }
+
+    this.broadcastGameLobbyState(lobby);
+    this.broadcastLobbyState();
+  }
+
+  private handleChangeMap(userId: string, mapId: string): void {
+    const user = this.users.get(userId);
+    if (!user?.gameLobbyId) return;
+
+    const lobby = this.gameLobbies.get(user.gameLobbyId);
+    if (!lobby) return;
+
+    if (lobby.hostUserId !== userId) {
+      this.send(user.socket, { type: 'error', message: 'Only the host can change the map' });
+      return;
+    }
+
+    const result = lobby.setMapId(mapId);
+    if (!result.success) {
+      this.send(user.socket, { type: 'error', message: result.error! });
+      return;
+    }
+
+    this.broadcastGameLobbyState(lobby);
+    this.broadcastLobbyState();
   }
 
   private handleStartGame(userId: string): void {

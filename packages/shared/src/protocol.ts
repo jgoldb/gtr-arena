@@ -170,6 +170,16 @@ export interface C2S_SwapTeam {
   newTeam: number;
 }
 
+export interface C2S_ChangeFormat {
+  type: 'change_format';
+  format: GameFormat;
+}
+
+export interface C2S_ChangeMap {
+  type: 'change_map';
+  mapId: string;
+}
+
 // ── Server -> Client Messages ───────────────────────────────────────────
 
 export interface S2C_AuthResult {
@@ -754,6 +764,8 @@ export type ClientMessage =
   | C2S_ToggleGodMode
   | C2S_VoteOpenGates
   | C2S_SwapTeam
+  | C2S_ChangeFormat
+  | C2S_ChangeMap
   | C2S_AdminGetUsers
   | C2S_AdminDeleteUser
   | C2S_AdminBanUser

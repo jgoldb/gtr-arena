@@ -1,6 +1,6 @@
 import type { NetworkManager } from '../network/NetworkManager';
-import type { LobbyUser, LobbyGameInfo, GameFormat, UserProfileData } from '@gtr/shared';
-import { MAP_LIST, CHARACTER_LIST, xpToLevel, xpProgress } from '@gtr/shared';
+import type { LobbyUser, LobbyGameInfo, UserProfileData } from '@gtr/shared';
+import { CHARACTER_LIST, xpToLevel, xpProgress } from '@gtr/shared';
 import { keybindManager, matchesKeybindEvent } from '../ui/KeybindManager';
 
 export class LobbyScreen {
@@ -153,9 +153,11 @@ export class LobbyScreen {
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display: flex; gap: 8px; align-items: center;';
 
-    const createBtn = this.makeButton('+ Create Game', '#3466b8', '#4a80d4');
+    const createBtn = this.makeButton('Create Game', '#3466b8', '#4a80d4');
     createBtn.style.fontWeight = '600';
-    createBtn.addEventListener('click', () => this.showCreateGameDialog());
+    createBtn.addEventListener('click', () => {
+      this.network.send({ type: 'create_game', format: '2v2', mapId: 'cage' });
+    });
     btnRow.appendChild(createBtn);
 
     const leaderboardBtn = this.makeButton('Leaderboard', '#2a5a5a', '#348a7a');
@@ -710,135 +712,6 @@ export class LobbyScreen {
   }
 
   // ── Create game dialog ────────────────────────────────────────────
-  private showCreateGameDialog(): void {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position: fixed; inset: 0; z-index: 1100;
-      display: flex; align-items: center; justify-content: center;
-      background: rgba(0, 0, 0, 0.75);
-      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
-      animation: lby-fade-in 0.15s ease both;
-    `;
-
-    const dialog = document.createElement('div');
-    dialog.style.cssText = `
-      background: linear-gradient(to bottom, rgba(18,20,35,0.98), rgba(8,10,18,0.99));
-      border: 1px solid rgba(100,120,200,0.15);
-      border-radius: 10px; padding: 32px 40px; min-width: 380px;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(60,80,180,0.08);
-      animation: lby-fade-in 0.25s ease both;
-    `;
-
-    const title = document.createElement('div');
-    title.textContent = 'CREATE GAME';
-    title.style.cssText = `
-      font-size: 11px; font-weight: 700; letter-spacing: 2px;
-      color: rgba(130,150,210,0.8); margin-bottom: 24px;
-    `;
-
-    // Format selection
-    const formatLabel = document.createElement('div');
-    formatLabel.textContent = 'FORMAT';
-    formatLabel.style.cssText = 'color: rgba(120,130,160,0.5); font-size: 10px; letter-spacing: 1.5px; font-weight: 600; margin-bottom: 8px;';
-
-    let selectedFormat: GameFormat = '1v1';
-    const formatRow = document.createElement('div');
-    formatRow.style.cssText = 'display: flex; gap: 8px; margin-bottom: 20px;';
-    const formats: GameFormat[] = ['1v1', '2v2', '3v3'];
-    const formatBtns: HTMLButtonElement[] = [];
-
-    const updateFormatBtns = () => {
-      for (const btn of formatBtns) {
-        const isActive = btn.dataset.fmt === selectedFormat;
-        btn.style.background = isActive ? 'rgba(50,70,140,0.6)' : 'rgba(20,25,40,0.6)';
-        btn.style.borderColor = isActive ? 'rgba(100,140,255,0.5)' : 'rgba(100,120,200,0.1)';
-        btn.style.color = isActive ? '#aac0ff' : 'rgba(150,160,180,0.6)';
-      }
-    };
-
-    for (const fmt of formats) {
-      const btn = document.createElement('button');
-      btn.className = 'lby-btn';
-      btn.textContent = fmt;
-      btn.dataset.fmt = fmt;
-      btn.style.cssText = `
-        flex: 1; padding: 10px 0; font-size: 14px; font-weight: 600;
-        border-radius: 6px; cursor: pointer; outline: none;
-        border: 1px solid rgba(100,120,200,0.1);
-        background: rgba(20,25,40,0.6); color: rgba(150,160,180,0.6);
-      `;
-      btn.addEventListener('click', () => { selectedFormat = fmt; updateFormatBtns(); });
-      formatBtns.push(btn);
-      formatRow.appendChild(btn);
-    }
-    updateFormatBtns();
-
-    // Map selection
-    const mapLabel = document.createElement('div');
-    mapLabel.textContent = 'MAP';
-    mapLabel.style.cssText = 'color: rgba(120,130,160,0.5); font-size: 10px; letter-spacing: 1.5px; font-weight: 600; margin-bottom: 8px;';
-
-    let selectedMap = MAP_LIST[0]?.id ?? 'cage';
-    const mapRow = document.createElement('div');
-    mapRow.style.cssText = 'display: flex; gap: 8px; margin-bottom: 28px;';
-    const mapBtns: HTMLButtonElement[] = [];
-
-    const updateMapBtns = () => {
-      for (const btn of mapBtns) {
-        const isActive = btn.dataset.mapId === selectedMap;
-        btn.style.background = isActive ? 'rgba(50,70,140,0.6)' : 'rgba(20,25,40,0.6)';
-        btn.style.borderColor = isActive ? 'rgba(100,140,255,0.5)' : 'rgba(100,120,200,0.1)';
-        btn.style.color = isActive ? '#aac0ff' : 'rgba(150,160,180,0.6)';
-      }
-    };
-
-    for (const map of MAP_LIST) {
-      const btn = document.createElement('button');
-      btn.className = 'lby-btn';
-      btn.textContent = map.name;
-      btn.dataset.mapId = map.id;
-      btn.style.cssText = `
-        flex: 1; padding: 10px 0; font-size: 13px; font-weight: 600;
-        border-radius: 6px; cursor: pointer; outline: none;
-        border: 1px solid rgba(100,120,200,0.1);
-        background: rgba(20,25,40,0.6); color: rgba(150,160,180,0.6);
-      `;
-      btn.addEventListener('click', () => { selectedMap = map.id; updateMapBtns(); });
-      mapBtns.push(btn);
-      mapRow.appendChild(btn);
-    }
-    updateMapBtns();
-
-    // Buttons
-    const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display: flex; gap: 10px; justify-content: flex-end;';
-
-    const cancelBtn = this.makeButton('Cancel', '#4a2a2a', '#5e3636');
-    cancelBtn.addEventListener('click', () => overlay.remove());
-
-    const createBtn = this.makeButton('Create', '#2a5090', '#3466b8');
-    createBtn.style.fontWeight = '600';
-    createBtn.addEventListener('click', () => {
-      this.network.send({ type: 'create_game', format: selectedFormat, mapId: selectedMap });
-      overlay.remove();
-    });
-
-    btnRow.appendChild(cancelBtn);
-    btnRow.appendChild(createBtn);
-
-    dialog.appendChild(title);
-    dialog.appendChild(formatLabel);
-    dialog.appendChild(formatRow);
-    dialog.appendChild(mapLabel);
-    dialog.appendChild(mapRow);
-    dialog.appendChild(btnRow);
-    overlay.appendChild(dialog);
-
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    this.element.appendChild(overlay);
-  }
-
   // ── Change Password Dialog ──────────────────────────────────────
 
   showChangePasswordDialog(): void {

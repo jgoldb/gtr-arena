@@ -1390,12 +1390,14 @@ export class AuthScreen {
     const passwordInput = document.createElement('input');
     passwordInput.type = 'password';
     passwordInput.placeholder = 'Password';
+    passwordInput.maxLength = 128;
     passwordInput.style.cssText = inputStyle;
     addFocusBorder(passwordInput);
 
     this.confirmPasswordInput = document.createElement('input');
     this.confirmPasswordInput.type = 'password';
     this.confirmPasswordInput.placeholder = 'Confirm Password';
+    this.confirmPasswordInput.maxLength = 128;
     this.confirmPasswordInput.style.cssText = inputStyle;
     this.confirmPasswordInput.style.display = 'none';
     addFocusBorder(this.confirmPasswordInput);
@@ -1428,8 +1430,8 @@ export class AuthScreen {
         this.errorEl.textContent = 'Username must contain only letters and numbers';
         return;
       }
-      if (pass.length < 1) {
-        this.errorEl.textContent = 'Password is required';
+      if (pass.length < 1 || pass.length > 128) {
+        this.errorEl.textContent = 'Password must be 1-128 characters';
         return;
       }
       if (this.mode === 'register') {

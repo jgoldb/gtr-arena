@@ -13,8 +13,8 @@ interface LobbyPlayer {
 
 export class GameLobby {
   readonly gameId: string;
-  readonly format: GameFormat;
-  readonly mapId: string;
+  format: GameFormat;
+  mapId: string;
   hostUserId: string;
   private players: LobbyPlayer[] = [];
 
@@ -112,6 +112,38 @@ export class GameLobby {
       return { success: false, error: 'Team is full — drop on a player to swap' };
     }
     dragged.team = newTeam;
+    return { success: true };
+  }
+
+  setFormat(format: GameFormat): { success: boolean; error?: string } {
+    const maxPlayers = getMaxPlayers(format);
+    if (this.players.length > maxPlayers) {
+      return { success: false, error: `Too many players for ${format} (have ${this.players.length}, max ${maxPlayers})` };
+    }
+    this.format = format;
+    // Rebalance teams: if a player is on a team index beyond the new per-team cap, move them
+    const perTeam = maxPlayers / 2;
+    const team0 = this.players.filter(p => p.team === 0);
+    const team1 = this.players.filter(p => p.team === 1);
+    // Move overflow from team 0 to team 1 (or vice versa)
+    while (team0.length > perTeam && team1.length < perTeam) {
+      const p = team0.pop()!;
+      p.team = 1;
+      team1.push(p);
+    }
+    while (team1.length > perTeam && team0.length < perTeam) {
+      const p = team1.pop()!;
+      p.team = 0;
+      team0.push(p);
+    }
+    // Unlock all players when format changes
+    for (const p of this.players) p.lockedIn = false;
+    return { success: true };
+  }
+
+  setMapId(mapId: string): { success: boolean; error?: string } {
+    if (!MAPS[mapId]) return { success: false, error: 'Invalid map' };
+    this.mapId = mapId;
     return { success: true };
   }
 

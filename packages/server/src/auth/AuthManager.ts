@@ -32,8 +32,8 @@ export class AuthManager {
     if (!/^[a-zA-Z0-9]+$/.test(username)) {
       return { success: false, userId: '', error: 'Username must contain only letters and numbers' };
     }
-    if (!password || password.length < 1) {
-      return { success: false, userId: '', error: 'Password is required' };
+    if (!password || password.length < 1 || password.length > 128) {
+      return { success: false, userId: '', error: 'Password must be 1-128 characters' };
     }
 
     let dbId: number;

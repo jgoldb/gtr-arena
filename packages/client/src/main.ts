@@ -654,7 +654,7 @@ function showGameLobby(): void {
   gameLobbyScreen?.destroy();
   currentState = 'game-lobby';
 
-  gameLobbyScreen = new GameLobbyScreen(network!, localUserId);
+  gameLobbyScreen = new GameLobbyScreen(network!, localUserId, getPortrait);
   document.body.appendChild(gameLobbyScreen.element);
 }
 
@@ -1612,6 +1612,7 @@ function handleServerMessage(msg: ServerMessage): void {
       if (currentState !== 'game-lobby') showGameLobby();
       gameLobbyScreen?.update({
         format: msg.format,
+        mapId: msg.mapId,
         mapName: msg.mapName,
         hostUserId: msg.hostUserId,
         players: msg.players,
