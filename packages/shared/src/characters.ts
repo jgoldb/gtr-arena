@@ -83,7 +83,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       jimmyLegs: { file: 'jimmy-legs.ogg', volume: 3 },
       janitorsHelper: { file: 'janitors-helper.ogg', volume: 3 },
       sweepStart: { file: 'sweep_1.ogg', volume: 3 },
-      sweepSpin: { file: 'sweep_2.wav', volume: 3 },
+      sweepSpin: { file: 'sweep_2.ogg', volume: 3 },
     },
   },
   'dr-retardo': {
