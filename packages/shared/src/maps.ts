@@ -14,6 +14,8 @@ export interface MapInfo {
   obstacles: ObstacleConfig[];
   /** Seconds before arena doors open. Players have Arena Preparation during this period. */
   arenaOpenTime?: number;
+  /** Music file to loop on the music audio channel while this map is active. */
+  music?: string;
 }
 
 export const MAPS: Record<string, MapInfo> = {
@@ -21,6 +23,7 @@ export const MAPS: Record<string, MapInfo> = {
     id: 'cage',
     name: 'The Cage',
     arenaOpenTime: 30,
+    music: 'cage.ogg',
     spawnPoints: [
       { x: 0, y: 0, z: 26 },   // Team 0 — south pen
       { x: 0, y: 0, z: -26 },  // Team 1 — north pen
@@ -48,6 +51,7 @@ export const MAPS: Record<string, MapInfo> = {
     id: 'celestial-ballroom',
     name: 'Celestial Ballroom',
     arenaOpenTime: 30,
+    music: 'ballroom.ogg',
     spawnPoints: [
       { x: 0, y: 0, z: 32 },   // Team 0 — south bubble
       { x: 0, y: 0, z: -32 },  // Team 1 — north bubble

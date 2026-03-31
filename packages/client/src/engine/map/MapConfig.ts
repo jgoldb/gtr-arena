@@ -21,5 +21,6 @@ export interface MapConfig {
   npcSpawnBounds?: { minX: number; maxX: number; minZ: number; maxZ: number };
   ambientSound?: string;
   ambientSoundVolume?: number;  // per-map multiplier, default 1
+  music?: string;
   createScript?: () => MapScript;
 }

@@ -24,6 +24,13 @@ export class MapManager {
   private ambientSettingsListener: (() => void) | null = null;
   private ambientVisibilityListener: (() => void) | null = null;
 
+  // Music
+  private musicCtx: AudioContext | null = null;
+  private musicGain: GainNode | null = null;
+  private musicSource: AudioBufferSourceNode | null = null;
+  private musicSettingsListener: (() => void) | null = null;
+  private musicVisibilityListener: (() => void) | null = null;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
 
@@ -39,8 +46,9 @@ export class MapManager {
       return;
     }
 
-    // Stop previous ambient sound
+    // Stop previous ambient sound and music
     this.stopAmbientSound();
+    this.stopMusic();
 
     // Dispose active map script before removing the scene group
     if (this.currentScript) {
@@ -81,6 +89,11 @@ export class MapManager {
     if (config.ambientSound) {
       this.ambientSoundVolume = config.ambientSoundVolume ?? 1;
       this.startAmbientSound(config.ambientSound, config.id);
+    }
+
+    // Start music if the map defines one
+    if (config.music) {
+      this.startMusic(config.music);
     }
   }
 
@@ -255,8 +268,121 @@ export class MapManager {
     this.ambientGain = null;
   }
 
+  // ── Music (uses the music audio channel) ─────────────────────────────
+
+  private get musicVolume(): number {
+    if (!audioSettings.enableMusic || !audioSettings.windowFocused) return 0;
+    return audioSettings.masterVolume * audioSettings.musicVolume;
+  }
+
+  private applyMusicVolume(): void {
+    if (!this.musicCtx || !this.musicGain) return;
+    const ctx = this.musicCtx;
+    const gain = this.musicGain;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(this.musicVolume, ctx.currentTime + 0.15);
+  }
+
+  private async startMusic(filename: string): Promise<void> {
+    try {
+      const url = `/audio/music/${filename}`;
+      const ctx = new AudioContext();
+      this.musicCtx = ctx;
+      const gain = ctx.createGain();
+      this.musicGain = gain;
+      gain.gain.value = 0;
+      gain.connect(ctx.destination);
+
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(buf);
+
+      // Context may have been stopped while fetching
+      if (!this.musicCtx || this.musicCtx !== ctx) {
+        ctx.close();
+        return;
+      }
+
+      const source = ctx.createBufferSource();
+      this.musicSource = source;
+      source.buffer = audioBuf;
+      source.loop = true;
+      source.connect(gain);
+      source.start();
+
+      // Fade in over 2 seconds
+      if (ctx.state !== 'suspended' && !document.hidden) {
+        gain.gain.linearRampToValueAtTime(this.musicVolume, ctx.currentTime + 2);
+      }
+
+      // Resume on user gesture if suspended
+      if (ctx.state === 'suspended') {
+        const resume = () => {
+          ctx.resume().then(() => {
+            document.removeEventListener('pointerdown', resume);
+            document.removeEventListener('keydown', resume);
+            if (this.musicCtx === ctx && this.musicGain && !document.hidden) {
+              this.musicGain.gain.linearRampToValueAtTime(this.musicVolume, ctx.currentTime + 2);
+            }
+          });
+        };
+        document.addEventListener('pointerdown', resume);
+        document.addEventListener('keydown', resume);
+      }
+
+      // React to settings changes
+      this.musicSettingsListener = () => this.applyMusicVolume();
+      audioSettings.onChange(this.musicSettingsListener);
+
+      // React to visibility changes
+      this.musicVisibilityListener = () => {
+        if (!this.musicCtx || !this.musicGain) return;
+        const g = this.musicGain;
+        g.gain.cancelScheduledValues(this.musicCtx.currentTime);
+        g.gain.setValueAtTime(g.gain.value, this.musicCtx.currentTime);
+        if (!audioSettings.windowFocused) {
+          g.gain.linearRampToValueAtTime(0, this.musicCtx.currentTime + 0.3);
+        } else {
+          g.gain.linearRampToValueAtTime(this.musicVolume, this.musicCtx.currentTime + 0.5);
+        }
+      };
+      document.addEventListener('visibilitychange', this.musicVisibilityListener);
+    } catch (e) {
+      console.warn('Map music failed to load:', e);
+    }
+  }
+
+  private stopMusic(): void {
+    if (this.musicSettingsListener) {
+      audioSettings.removeListener(this.musicSettingsListener);
+      this.musicSettingsListener = null;
+    }
+    if (this.musicVisibilityListener) {
+      document.removeEventListener('visibilitychange', this.musicVisibilityListener);
+      this.musicVisibilityListener = null;
+    }
+    // Fade out over 1.5 seconds before stopping
+    if (this.musicCtx && this.musicGain && this.musicSource) {
+      const ctx = this.musicCtx;
+      const gain = this.musicGain;
+      const source = this.musicSource;
+      gain.gain.cancelScheduledValues(ctx.currentTime);
+      gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 1.5);
+      setTimeout(() => {
+        try { source.stop(); } catch { /* already stopped */ }
+        ctx.close();
+      }, 1600);
+    }
+    this.musicCtx = null;
+    this.musicGain = null;
+    this.musicSource = null;
+  }
+
   dispose(): void {
     this.stopAmbientSound();
+    this.stopMusic();
     if (this.currentScript) {
       this.currentScript.dispose();
       this.currentScript = null;

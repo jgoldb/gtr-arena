@@ -42,5 +42,6 @@ export const THE_CAGE: MapConfig = {
   npcSpawnBounds: { minX: -18, maxX: 18, minZ: -18, maxZ: 18 },
   ambientSound: 'crowd.ogg',
   ambientSoundVolume: 0.33,
+  music: 'cage.ogg',
   createScript: () => new CageArenaScript(),
 };

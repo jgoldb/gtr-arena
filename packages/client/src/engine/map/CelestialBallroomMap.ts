@@ -28,5 +28,6 @@ export const CELESTIAL_BALLROOM: MapConfig = {
   npcSpawnBounds: { minX: -40, maxX: 40, minZ: -30, maxZ: 30 },
   ambientSound: 'sci-fi-sounds.ogg',
   ambientSoundVolume: 5,
+  music: 'ballroom.ogg',
   createScript: () => new CelestialBallroomScript(),
 };
