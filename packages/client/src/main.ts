@@ -2505,6 +2505,10 @@ async function startPlayground(): Promise<void> {
       const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
       if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
     }
+    if (ability.id === 'pocket-sand') {
+      const psSfx = getCharacterSfx(engine.playerController.characterId)?.pocketSand;
+      if (psSfx) soundEffects.play(psSfx.url, undefined, undefined, psSfx.volume);
+    }
     if (ability.id === 'sweep') {
       const sweepStartSfx = getCharacterSfx(engine.playerController.characterId)?.sweepStart;
       if (sweepStartSfx) soundEffects.play(sweepStartSfx.url, undefined, undefined, sweepStartSfx.volume);
@@ -3040,6 +3044,10 @@ async function startUISetup(): Promise<void> {
     if (ability.id === 'janitors-helper') {
       const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
       if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
+    }
+    if (ability.id === 'pocket-sand') {
+      const psSfx = getCharacterSfx(engine.playerController.characterId)?.pocketSand;
+      if (psSfx) soundEffects.play(psSfx.url, undefined, undefined, psSfx.volume);
     }
     if (ability.id === 'sweep') {
       const sweepStartSfx = getCharacterSfx(engine.playerController.characterId)?.sweepStart;

@@ -919,6 +919,15 @@ export class ClientEngine {
       if (msg.abilityId === 'kaboom' && sfx?.kaboom) {
         soundEffects.play(sfx.kaboom.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.kaboom.volume, msg.entityId);
       }
+      if (msg.abilityId === 'shank' && sfx?.shank) {
+        soundEffects.play(sfx.shank.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.shank.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'gank' && sfx?.gank) {
+        soundEffects.play(sfx.gank.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.gank.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'pocket-sand' && sfx?.pocketSand) {
+        soundEffects.play(sfx.pocketSand.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.pocketSand.volume, msg.entityId);
+      }
     }
     // Shared ability SFX (all characters)
     if (msg.abilityId === 'pvp-trinket') {

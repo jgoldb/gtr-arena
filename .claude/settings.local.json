@@ -44,7 +44,8 @@
       "Bash(find /c/Users/Joey/Repos/gtr/packages -type f -name *.ts)",
       "Bash(find C:UsersJoeyReposgtr/src -type f -name *.ts)",
       "Bash(find /c/Users/Joey/Repos/gtr -name mop.ogg -o -name mop.*)",
-      "Bash(find /c/Users/Joey/Repos/gtr -type f -name *.mp3 -o -name *.wav -o -name *.ogg)"
+      "Bash(find /c/Users/Joey/Repos/gtr -type f -name *.mp3 -o -name *.wav -o -name *.ogg)",
+      "Bash(find /c/Users/Joey/Repos/gtr/packages/client/public/audio/sfx/abilities -type f -name *retardo*)"
     ]
   }
 }

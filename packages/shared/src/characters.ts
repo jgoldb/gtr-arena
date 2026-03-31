@@ -54,6 +54,9 @@ export interface CharacterStats {
     fullRetard?: SfxEntry;
     crotchRot?: SfxEntry;
     kaboom?: SfxEntry;
+    shank?: SfxEntry;
+    gank?: SfxEntry;
+    pocketSand?: SfxEntry;
   };
 }
 
@@ -113,7 +116,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       autoAttackHit2: { file: 'auto-attack2.ogg', volume: 3 },
       autoAttackCrit: { file: 'crit.ogg', volume: 3 },
       struck: { file: 'struck.ogg', volume: 3 },
-      dodge: { file: '../shared/dodge.ogg', volume: 3 },
+      dodge: '../shared/dodge.ogg',
       bottleChuck: { file: 'bottle-chuck.ogg', volume: 3 },
       discombobulate: { file: 'discombobulate.ogg', volume: 2 },
       chemicalSpill: { file: 'chemical-spill.ogg', volume: 3 },
@@ -138,6 +141,16 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     manaRegen: 16,
     abilities: [Attack, Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD, PvPTrinket, Bandage],
     startingBuffs: [TweakingBuff],
+    soundEffects: {
+      autoAttackHit: { file: 'auto-attack1.ogg', volume: 3 },
+      autoAttackHit2: { file: 'auto-attack2.ogg', volume: 3 },
+      autoAttackCrit: { file: 'crit.ogg', volume: 3 },
+      struck: { file: 'struck.ogg', volume: 3 },
+      dodge: '../shared/dodge.ogg',
+      shank: { file: 'shank.ogg', volume: 3 },
+      gank: { file: 'gank.ogg', volume: 6 },
+      pocketSand: { file: 'pocket-sand.ogg', volume: 3 },
+    },
   },
   'rabbi-zehnwirth': {
     id: 'rabbi-zehnwirth',
