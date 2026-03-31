@@ -223,7 +223,7 @@ export class MapManager {
         const g = this.ambientGain;
         g.gain.cancelScheduledValues(this.ambientCtx.currentTime);
         g.gain.setValueAtTime(g.gain.value, this.ambientCtx.currentTime);
-        if (document.hidden) {
+        if (!audioSettings.windowFocused) {
           g.gain.linearRampToValueAtTime(0, this.ambientCtx.currentTime + 0.3);
         } else {
           g.gain.linearRampToValueAtTime(this.ambientVolume, this.ambientCtx.currentTime + 0.5);

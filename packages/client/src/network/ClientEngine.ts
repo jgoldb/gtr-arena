@@ -7,7 +7,7 @@ import type {
   S2C_EntityDied, S2C_PositionRelay, S2C_PositionUpdate,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits, getCharacterStats, getCharacterSfx, Sweep, TweakerSprint, Bandage, GLOBAL_COOLDOWN } from '@gtr/shared';
+import { yardsToUnits, getCharacterStats, getCharacterSfx, getSharedSfx, Sweep, TweakerSprint, Bandage, GLOBAL_COOLDOWN } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -33,7 +33,7 @@ import {
 import { BlindEffect } from '../engine/effects/BlindEffect';
 import { DeadReckoning } from './DeadReckoning';
 import { keybindManager } from '../ui/KeybindManager';
-import { soundEffects } from '../ui/SoundEffects';
+import { soundEffects, type LoopHandle } from '../ui/SoundEffects';
 
 interface RemoteEntity {
   id: string;
@@ -167,6 +167,9 @@ export class ClientEngine {
   // Bandage heal visual
   private bandageHealVisual: BandageHealVisual | null = null;
   private bandageHealElapsed = 0;
+
+  // Bandage loop SFX (keyed by entity ID)
+  private bandageLoops = new Map<string, LoopHandle>();
 
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
@@ -616,6 +619,7 @@ export class ClientEngine {
           if (this.pendingPrediction?.castPredicted && delta.castingAbilityId === this.pendingPrediction.abilityId) {
             this.pendingPrediction = null;
           }
+          this.updateBandageLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
           this.localCastingAbilityId = delta.castingAbilityId!;
         }
         if (delta.castingElapsed !== undefined) this.localCastingElapsed = delta.castingElapsed;
@@ -640,7 +644,10 @@ export class ClientEngine {
       if (delta.stunned !== undefined) entity.stunned = delta.stunned;
       if (delta.charging !== undefined) entity.charging = delta.charging;
       if (delta.isAutoAttacking !== undefined) entity.isAutoAttacking = delta.isAutoAttacking;
-      if ('castingAbilityId' in delta) entity.castingAbilityId = delta.castingAbilityId!;
+      if ('castingAbilityId' in delta) {
+        this.updateBandageLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
+        entity.castingAbilityId = delta.castingAbilityId!;
+      }
       if (delta.castingElapsed !== undefined) entity.castingElapsed = delta.castingElapsed;
       if (delta.castingTotalTime !== undefined) entity.castingTotalTime = delta.castingTotalTime;
       if (delta.castingIsChannel !== undefined) entity.castingIsChannel = delta.castingIsChannel;
@@ -670,6 +677,7 @@ export class ClientEngine {
     pc.charging = snap.charging;
     pc.setAutoAttacking(snap.isAutoAttacking);
     pc.setStunned(snap.stunned);
+    this.updateBandageLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
     this.localCastingAbilityId = snap.castingAbilityId;
     this.localCastingElapsed = snap.castingElapsed;
     this.localCastingTotalTime = snap.castingTotalTime;
@@ -689,6 +697,7 @@ export class ClientEngine {
     entity.charging = snap.charging;
     entity.isMoving = snap.isMoving;
     entity.isAutoAttacking = snap.isAutoAttacking;
+    this.updateBandageLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
     entity.castingAbilityId = snap.castingAbilityId;
     entity.castingElapsed = snap.castingElapsed;
     entity.castingTotalTime = snap.castingTotalTime;
@@ -768,7 +777,7 @@ export class ClientEngine {
       if (charId) {
         const sfx = getCharacterSfx(charId);
         const aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
-        if (aaSfx) soundEffects.play(aaSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), aaSfx.volume);
+        if (aaSfx) soundEffects.play(aaSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), aaSfx.volume, msg.sourceEntityId);
       }
     }
 
@@ -779,7 +788,7 @@ export class ClientEngine {
         : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
       if (charId) {
         const mopSfx = getCharacterSfx(charId)?.mop;
-        if (mopSfx) soundEffects.play(mopSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), mopSfx.volume);
+        if (mopSfx) soundEffects.play(mopSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), mopSfx.volume, msg.sourceEntityId);
       }
     }
     if (msg.abilityId === 'big-boot' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
@@ -788,7 +797,7 @@ export class ClientEngine {
         : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
       if (charId) {
         const bigBootSfx = getCharacterSfx(charId)?.bigBoot;
-        if (bigBootSfx) soundEffects.play(bigBootSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), bigBootSfx.volume);
+        if (bigBootSfx) soundEffects.play(bigBootSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), bigBootSfx.volume, msg.sourceEntityId);
       }
     }
     if (msg.abilityId === 'jimmy-legs' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
@@ -797,7 +806,7 @@ export class ClientEngine {
         : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
       if (charId) {
         const jimmyLegsSfx = getCharacterSfx(charId)?.jimmyLegs;
-        if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), jimmyLegsSfx.volume);
+        if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), jimmyLegsSfx.volume, msg.sourceEntityId);
       }
     }
 
@@ -812,7 +821,7 @@ export class ClientEngine {
         if (entity) {
           entity.model.triggerDodge();
           const dodgeSfx = getCharacterSfx(entity.characterId)?.dodge;
-          if (dodgeSfx) soundEffects.play(dodgeSfx.url, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId), dodgeSfx.volume);
+          if (dodgeSfx) soundEffects.play(dodgeSfx.url, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId), dodgeSfx.volume, msg.targetEntityId);
         }
       }
     }
@@ -841,17 +850,22 @@ export class ClientEngine {
     if (abilitySfxCharId) {
       const sfx = getCharacterSfx(abilitySfxCharId);
       if (msg.abilityId === 'crash-out' && sfx?.crashOut) {
-        soundEffects.play(sfx.crashOut.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.crashOut.volume);
+        soundEffects.play(sfx.crashOut.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.crashOut.volume, msg.entityId);
       }
       if (msg.abilityId === 'bucket-splash' && sfx?.bucketSplash) {
-        soundEffects.play(sfx.bucketSplash.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.bucketSplash.volume);
+        soundEffects.play(sfx.bucketSplash.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.bucketSplash.volume, msg.entityId);
       }
       if (msg.abilityId === 'fart-bomb' && sfx?.fartBomb) {
-        soundEffects.play(sfx.fartBomb.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.fartBomb.volume);
+        soundEffects.play(sfx.fartBomb.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.fartBomb.volume, msg.entityId);
       }
       if (msg.abilityId === 'janitors-helper' && sfx?.janitorsHelper) {
-        soundEffects.play(sfx.janitorsHelper.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.janitorsHelper.volume);
+        soundEffects.play(sfx.janitorsHelper.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.janitorsHelper.volume, msg.entityId);
       }
+    }
+    // Shared ability SFX (all characters)
+    if (msg.abilityId === 'pvp-trinket') {
+      const trinketSfx = getSharedSfx().pvpTrinket;
+      if (trinketSfx) soundEffects.play(trinketSfx.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), trinketSfx.volume, msg.entityId);
     }
 
     if (msg.entityId === this.localEntityId) {
@@ -914,7 +928,7 @@ export class ClientEngine {
       if (entity) {
         entity.model.triggerFlinch();
         const struckSfx = getCharacterSfx(entity.characterId)?.struck;
-        if (struckSfx) soundEffects.play(struckSfx.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), struckSfx.volume);
+        if (struckSfx) soundEffects.play(struckSfx.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), struckSfx.volume, msg.entityId);
       }
     }
   }
@@ -1243,6 +1257,7 @@ export class ClientEngine {
     // Predict cast bar for cast-time abilities (only if not moving — server rejects casts while moving)
     let castPredicted = false;
     if (ability.castTime && !pc.isMoving) {
+      this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
       this.localCastingAbilityId = abilityId;
       this.localCastingElapsed = 0;
       this.localCastingTotalTime = ability.castTime;
@@ -1319,6 +1334,7 @@ export class ClientEngine {
 
     // Revert predicted cast bar
     if (pred.castPredicted && this.localCastingAbilityId === pred.abilityId) {
+      this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, null);
       this.localCastingAbilityId = null;
       this.localCastingElapsed = 0;
       this.localCastingTotalTime = 0;
@@ -1508,9 +1524,9 @@ export class ClientEngine {
     this.animationFrameId = requestAnimationFrame(this.loop);
     const now = performance.now();
 
-    // Throttle to ~10 FPS when tab is visible but not focused
+    // Throttle to ~30 FPS when tab is visible but not focused
     const focused = document.hasFocus();
-    if (!focused && now - this.lastFrameTime < 100) return;
+    if (!focused && now - this.lastFrameTime < 33) return;
 
     const dt = Math.min((now - this.lastFrameTime) / 1000, focused ? 0.1 : 0.2);
     this.lastFrameTime = now;
@@ -1793,6 +1809,12 @@ export class ClientEngine {
     if (this.blindEffect.isActive()) {
       this.blindEffect.update(dt);
     }
+
+    // Update spatial audio positions so sounds track entity movement
+    soundEffects.updateSpatialPositions((key) => {
+      if (key === this.localEntityId) return null;
+      return { distance: this.distToEntity(key), pan: this.panToEntity(key) };
+    });
 
     // Dead-reckon remote entity positions — predict current position from
     // last known server state + velocity, with smooth error correction.
@@ -2378,9 +2400,31 @@ export class ClientEngine {
     }
   }
 
+  /** Start or stop the bandage loop SFX when an entity's castingAbilityId changes. */
+  private updateBandageLoop(entityId: string, prev: string | null, next: string | null): void {
+    if (prev === next) return;
+    // Stop existing loop for this entity
+    if (prev === 'bandage') {
+      const handle = this.bandageLoops.get(entityId);
+      if (handle) { handle.stop(); this.bandageLoops.delete(entityId); }
+    }
+    // Start new loop
+    if (next === 'bandage') {
+      const sfx = getSharedSfx().bandage;
+      if (sfx) {
+        const dist = entityId === this.localEntityId ? undefined : this.distToEntity(entityId);
+        const pan = entityId === this.localEntityId ? undefined : this.panToEntity(entityId);
+        const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, entityId);
+        if (handle) this.bandageLoops.set(entityId, handle);
+      }
+    }
+  }
+
   destroy(): void {
     this.stop();
     this.blindEffect.deactivate();
+    for (const handle of this.bandageLoops.values()) handle.stop();
+    this.bandageLoops.clear();
     this.input.dispose();
     this.targetingSystem.dispose();
     this.mapManager.dispose();

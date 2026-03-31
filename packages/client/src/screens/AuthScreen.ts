@@ -702,9 +702,9 @@ export class AuthScreen {
     const animateLoop = (now: number) => {
       this.animationFrameId = requestAnimationFrame(animateLoop);
       if (document.hidden) return;
-      // Throttle to ~10 FPS when tab is visible but not focused
+      // Throttle to ~30 FPS when tab is visible but not focused
       const focused = document.hasFocus();
-      if (!focused && now - lastLoopTime < 100) return;
+      if (!focused && now - lastLoopTime < 33) return;
       lastLoopTime = now;
 
       // ── Astronaut update (every frame for smooth DOM movement) ──

@@ -11,10 +11,10 @@ import {
 export type CharacterId = 'janitor' | 'dr-retardo' | 'crackhead' | 'rabbi-zehnwirth' | 'brad-clemons' | 'gourd-of-war';
 
 /** A sound effect entry: either a filename string (volume defaults to 1) or { file, volume }. */
-export type SfxEntry = string | { file: string; volume?: number };
+export type SfxEntry = string | { file: string; volume?: number; loop?: boolean };
 
 /** Resolved sound effect with full URL path and volume. */
-export interface ResolvedSfx { url: string; volume: number; }
+export interface ResolvedSfx { url: string; volume: number; loop: boolean; }
 
 export interface CharacterStats {
   id: CharacterId;
@@ -112,7 +112,6 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     manaRegen: 16,
     abilities: [Attack, Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD, PvPTrinket, Bandage],
     startingBuffs: [TweakingBuff],
-    playgroundOnly: false,
   },
   'rabbi-zehnwirth': {
     id: 'rabbi-zehnwirth',
@@ -177,20 +176,44 @@ export function getCharacterStats(id: CharacterId): CharacterStats {
 export type ResolvedCharacterSfx = { [K in keyof NonNullable<CharacterStats['soundEffects']>]?: ResolvedSfx };
 
 function resolveSfxEntry(base: string, entry: SfxEntry): ResolvedSfx {
-  if (typeof entry === 'string') return { url: base + entry, volume: 1 };
-  return { url: base + entry.file, volume: entry.volume ?? 1 };
+  if (typeof entry === 'string') return { url: base + entry, volume: 1, loop: false };
+  return { url: base + entry.file, volume: entry.volume ?? 1, loop: entry.loop ?? false };
 }
 
-/** Resolve short SFX filenames to full `/audio/sfx/characters/{id}/` paths with volume. */
+/** Resolve short SFX filenames to full `/audio/sfx/abilities/{id}/` paths with volume. */
 export function getCharacterSfx(id: CharacterId): ResolvedCharacterSfx | undefined {
   const sfx = CHARACTERS[id].soundEffects;
   if (!sfx) return undefined;
-  const base = `/audio/sfx/characters/${id}/`;
+  const base = `/audio/sfx/abilities/${id}/`;
   const result: ResolvedCharacterSfx = {};
   for (const key of Object.keys(sfx) as (keyof typeof sfx)[]) {
     const entry = sfx[key];
     if (entry) result[key] = resolveSfxEntry(base, entry);
   }
+  return result;
+}
+
+// ── Shared SFX (abilities used by all characters) ──
+
+const SHARED_SFX_BASE = '/audio/sfx/abilities/shared/';
+
+const SHARED_SFX_DEFS: Record<string, SfxEntry> = {
+  pvpTrinket: { file: 'pvp-trinket.ogg', volume: 3 },
+  bandage: { file: 'bandage.ogg', volume: 5, loop: true },
+};
+
+export type ResolvedSharedSfx = { [K in keyof typeof SHARED_SFX_DEFS]?: ResolvedSfx };
+
+let _sharedSfxCache: ResolvedSharedSfx | undefined;
+
+/** Resolve shared ability SFX (abilities common to all characters) from `/audio/sfx/abilities/shared/`. */
+export function getSharedSfx(): ResolvedSharedSfx {
+  if (_sharedSfxCache) return _sharedSfxCache;
+  const result: ResolvedSharedSfx = {};
+  for (const key of Object.keys(SHARED_SFX_DEFS)) {
+    result[key] = resolveSfxEntry(SHARED_SFX_BASE, SHARED_SFX_DEFS[key]);
+  }
+  _sharedSfxCache = result;
   return result;
 }
 

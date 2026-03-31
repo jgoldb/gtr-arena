@@ -26,7 +26,7 @@ import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { ChatWindow } from './ui/ChatWindow';
 import { renderPortraits } from './ui/PortraitRenderer';
-import { getCharacterStats, getCharacterSfx, xpToLevel, CHARACTER_LIST, type CharacterId } from '@gtr/shared';
+import { getCharacterStats, getCharacterSfx, getSharedSfx, xpToLevel, CHARACTER_LIST, type CharacterId } from '@gtr/shared';
 import { GLOBAL_COOLDOWN, type Ability } from './engine/combat/Ability';
 import type { Targetable } from './engine/types';
 
@@ -83,7 +83,7 @@ const lobbyMusic = {
     const gain = this.gainNode;
     gain.gain.cancelScheduledValues(ctx.currentTime);
     gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
-    if (document.hidden) {
+    if (!audioSettings.windowFocused) {
       gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
     } else {
       gain.gain.linearRampToValueAtTime(this.volume, ctx.currentTime + 0.5);
@@ -1065,6 +1065,10 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
     clientEngine!.targetingSystem.cancelGroundTarget();
   }
 
+  clientEngine.targetingSystem.onGroundTargetCancelled = () => {
+    mpPendingGroundAbility = null;
+  };
+
   clientEngine.onGroundTargetConfirmed = () => {
     if (!mpPendingGroundAbility || !clientEngine) return;
     const ability = mpPendingGroundAbility;
@@ -1327,9 +1331,9 @@ function setupMultiplayerUI(msg: { entities: S2C_GameStart['entities']; localEnt
   function mpUpdateFrames(): void {
     mpFrameLoopId = requestAnimationFrame(mpUpdateFrames);
     const now = performance.now();
-    // Throttle to ~10 FPS when tab is visible but not focused
+    // Throttle to ~30 FPS when tab is visible but not focused
     const focused = document.hasFocus();
-    if (!focused && now - lastMpFrameTime < 100) return;
+    if (!focused && now - lastMpFrameTime < 33) return;
     const dt = Math.min((now - lastMpFrameTime) / 1000, focused ? 0.1 : 0.2);
     lastMpFrameTime = now;
 
@@ -2388,6 +2392,11 @@ async function startPlayground(): Promise<void> {
     engine.targetingSystem.cancelGroundTarget();
   }
 
+  engine.targetingSystem.onGroundTargetCancelled = () => {
+    pendingGroundAbility = null;
+    engine.pendingNpcSpawn = null;
+  };
+
   engine.onGroundTargetConfirmed = () => {
     // NPC spawn ground targeting
     if (engine.pendingNpcSpawn) {
@@ -2547,7 +2556,11 @@ async function startPlayground(): Promise<void> {
         if (result.success) {
           onAbilitySuccess(ability);
           if (!engine.godMode && !ability.usableWhileCCd) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
-          if (ability.id === 'pvp-trinket') engine.buffSystem.removeAllCCEffects(engine.playerController);
+          if (ability.id === 'pvp-trinket') {
+            engine.buffSystem.removeAllCCEffects(engine.playerController);
+            const trinketSfx = getSharedSfx().pvpTrinket;
+            if (trinketSfx) soundEffects.play(trinketSfx.url, undefined, undefined, trinketSfx.volume);
+          }
         }
         else if (result.errorMessage) errorText.show(result.errorMessage);
       }
@@ -2641,9 +2654,9 @@ async function startPlayground(): Promise<void> {
   function updateFrames(): void {
     pgFrameLoopId = requestAnimationFrame(updateFrames);
     const now = performance.now();
-    // Throttle to ~10 FPS when tab is visible but not focused
+    // Throttle to ~30 FPS when tab is visible but not focused
     const focused = document.hasFocus();
-    if (!focused && now - lastFrameTime < 100) return;
+    if (!focused && now - lastFrameTime < 33) return;
     const dt = Math.min((now - lastFrameTime) / 1000, focused ? 0.1 : 0.2);
     lastFrameTime = now;
 
@@ -2709,6 +2722,10 @@ async function startPlayground(): Promise<void> {
 }
 
 // ── UI Setup (solo training room for UI customization) ────────────────
+// NOTE: This mode reuses the same Engine as startPlayground() and duplicates
+// much of its gameplay wiring (ability activation, ground targeting, combat
+// text, action bar, etc.). When changing shared mechanics, update both
+// functions to keep them in sync.
 
 async function startUISetup(): Promise<void> {
   lobbyMusic.fadeOut();
@@ -2893,6 +2910,10 @@ async function startUISetup(): Promise<void> {
     engine.targetingSystem.cancelGroundTarget();
   }
 
+  engine.targetingSystem.onGroundTargetCancelled = () => {
+    pendingGroundAbility = null;
+  };
+
   engine.onGroundTargetConfirmed = () => {
     if (!pendingGroundAbility) return;
     const ability = pendingGroundAbility;
@@ -3040,7 +3061,11 @@ async function startUISetup(): Promise<void> {
         if (result.success) {
           onAbilitySuccess(ability);
           if (!ability.usableWhileCCd) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
-          if (ability.id === 'pvp-trinket') engine.buffSystem.removeAllCCEffects(engine.playerController);
+          if (ability.id === 'pvp-trinket') {
+            engine.buffSystem.removeAllCCEffects(engine.playerController);
+            const trinketSfx = getSharedSfx().pvpTrinket;
+            if (trinketSfx) soundEffects.play(trinketSfx.url, undefined, undefined, trinketSfx.volume);
+          }
         }
         else if (result.errorMessage) errorText.show(result.errorMessage);
       }
@@ -3133,9 +3158,9 @@ async function startUISetup(): Promise<void> {
   function updateFrames(): void {
     pgFrameLoopId = requestAnimationFrame(updateFrames);
     const now = performance.now();
-    // Throttle to ~10 FPS when tab is visible but not focused
+    // Throttle to ~30 FPS when tab is visible but not focused
     const focused = document.hasFocus();
-    if (!focused && now - lastFrameTime < 100) return;
+    if (!focused && now - lastFrameTime < 33) return;
     const dt = Math.min((now - lastFrameTime) / 1000, focused ? 0.1 : 0.2);
     lastFrameTime = now;
 

@@ -20,6 +20,7 @@ export class TargetingSystem {
   // Ground targeting (click-to-place AoE)
   groundTargetActive = false;
   groundTargetBlocked = false;
+  onGroundTargetCancelled?: () => void;
   private groundTargetCircle: THREE.Group;
   private groundTargetMats: THREE.MeshBasicMaterial[] = [];
   private groundTargetRange = 0;
@@ -316,9 +317,12 @@ export class TargetingSystem {
    *  @param alwaysScreenPos — mouse position that tracks even during pointer lock (for ground targeting reticle). */
   updateHoverCursor(screenPos: { x: number; y: number } | null, rightMouseDown = false): void {
     if (this.groundTargetActive) {
-      // Hide during right-click camera drag. screenPos is null while pointer lock
-      // is active, so the reticle stays hidden until the lock fully exits.
-      if (!rightMouseDown && screenPos) {
+      // Right-click drag cancels ground targeting
+      if (rightMouseDown) {
+        this.cancelGroundTarget();
+        return;
+      }
+      if (screenPos) {
         this.updateGroundTargetPosition(screenPos.x, screenPos.y);
         this.groundTargetCircle.visible = true;
         this.canvas.style.cursor = 'crosshair';
@@ -356,9 +360,11 @@ export class TargetingSystem {
 
   /** Exit ground targeting mode without confirming. */
   cancelGroundTarget(): void {
+    const wasActive = this.groundTargetActive;
     this.groundTargetActive = false;
     this.groundTargetCircle.visible = false;
     this.canvas.style.cursor = '';
+    if (wasActive) this.onGroundTargetCancelled?.();
   }
 
   /** Get the current ground target world position (XZ on ground plane). */

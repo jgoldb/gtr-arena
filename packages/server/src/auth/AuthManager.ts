@@ -25,7 +25,7 @@ export class AuthManager {
     password: string,
     mode: 'login' | 'register',
     socket: WebSocket
-  ): { success: boolean; userId: string; username?: string; isAdmin?: boolean; bannedUntil?: string; banReason?: string; error?: string } {
+  ): { success: boolean; userId: string; username?: string; isAdmin?: boolean; bannedUntil?: string; banReason?: string; error?: string; replacedSocket?: WebSocket } {
     if (!username || username.length < 1 || username.length > 20) {
       return { success: false, userId: '', error: 'Username must be 1-20 characters' };
     }
@@ -63,14 +63,15 @@ export class AuthManager {
 
     const isAdmin = this.db.isAdmin(dbId);
 
-    // Check if this DB user already has an active session (reconnection)
+    // Check if this DB user already has an active session (reconnection / duplicate login)
     const existingUserId = this.userIdByDbId.get(dbId);
     if (existingUserId) {
       const session = this.sessions.get(existingUserId)!;
+      const replacedSocket = session.socket ?? undefined;
       session.socket = socket;
       session.username = displayUsername;
       session.isAdmin = isAdmin;
-      return { success: true, userId: existingUserId, username: displayUsername, isAdmin };
+      return { success: true, userId: existingUserId, username: displayUsername, isAdmin, replacedSocket };
     }
 
     // New session

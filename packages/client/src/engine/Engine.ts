@@ -6,7 +6,7 @@ import { PlayerController } from './player/PlayerController';
 import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, ODStunDebuff, ParanoidDebuff, RecentlyBandagedDebuff, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
-import { getCharacterStats, getCharacterSfx, isRangedAutoAttack, BULLET_SPEED } from '@gtr/shared';
+import { getCharacterStats, getCharacterSfx, getSharedSfx, isRangedAutoAttack, BULLET_SPEED } from '@gtr/shared';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
 import { TargetingSystem } from './targeting/TargetingSystem';
@@ -27,7 +27,7 @@ import {
 } from './effects/VisualEffects';
 import { BlindEffect } from './effects/BlindEffect';
 import { keybindManager } from '../ui/KeybindManager';
-import { soundEffects } from '../ui/SoundEffects';
+import { soundEffects, type LoopHandle } from '../ui/SoundEffects';
 
 interface ActiveGasCloud extends GasCloudVisual {
   center: THREE.Vector3;
@@ -132,6 +132,7 @@ export class Engine {
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamTarget: Targetable | null = null;
   private bandageHealVisual: BandageHealVisual | null = null;
+  private bandageLoopHandle: LoopHandle | null = null;
   private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
@@ -281,7 +282,7 @@ export class Engine {
         }
       }
       const struckSfx = getCharacterSfx(target.characterId)?.struck;
-      if (struckSfx) soundEffects.play(struckSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), struckSfx.volume);
+      if (struckSfx) soundEffects.play(struckSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), struckSfx.volume, target.mesh.uuid);
     };
 
     // Dodge animation
@@ -294,27 +295,27 @@ export class Engine {
         }
       }
       const dodgeSfx = getCharacterSfx(target.characterId)?.dodge;
-      if (dodgeSfx) soundEffects.play(dodgeSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), dodgeSfx.volume);
+      if (dodgeSfx) soundEffects.play(dodgeSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), dodgeSfx.volume, target.mesh.uuid);
     };
 
     this.combatSystem.onAutoAttackDamageDealt = (attacker, isCrit) => {
       const sfx = getCharacterSfx(attacker.characterId);
       const aaSfx = (isCrit && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
-      if (aaSfx) soundEffects.play(aaSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), aaSfx.volume);
+      if (aaSfx) soundEffects.play(aaSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), aaSfx.volume, attacker.mesh.uuid);
     };
 
     this.combatSystem.onAbilityDamageDealt = (attacker, abilityId) => {
       if (abilityId === 'mop') {
         const mopSfx = getCharacterSfx(attacker.characterId)?.mop;
-        if (mopSfx) soundEffects.play(mopSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), mopSfx.volume);
+        if (mopSfx) soundEffects.play(mopSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), mopSfx.volume, attacker.mesh.uuid);
       }
       if (abilityId === 'big-boot') {
         const bigBootSfx = getCharacterSfx(attacker.characterId)?.bigBoot;
-        if (bigBootSfx) soundEffects.play(bigBootSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), bigBootSfx.volume);
+        if (bigBootSfx) soundEffects.play(bigBootSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), bigBootSfx.volume, attacker.mesh.uuid);
       }
       if (abilityId === 'jimmy-legs') {
         const jimmyLegsSfx = getCharacterSfx(attacker.characterId)?.jimmyLegs;
-        if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), jimmyLegsSfx.volume);
+        if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), jimmyLegsSfx.volume, attacker.mesh.uuid);
       }
     };
 
@@ -567,6 +568,8 @@ export class Engine {
     // Apply blockedByTargetDebuff at channel start (e.g. Recently Bandaged)
     if (isChannel && target && ability.id === 'bandage') {
       this.buffSystem.apply(target, RecentlyBandagedDebuff);
+      const bandageSfx = getSharedSfx().bandage;
+      if (bandageSfx) this.bandageLoopHandle = soundEffects.playLoop(bandageSfx.url, undefined, undefined, bandageSfx.volume);
     }
 
     // Apply channel aura to target
@@ -594,7 +597,15 @@ export class Engine {
   cancelCasting(): void {
     if (!this.casting) return;
     this.removeChannelAura();
+    this.stopBandageLoop();
     this.casting = null;
+  }
+
+  private stopBandageLoop(): void {
+    if (this.bandageLoopHandle) {
+      this.bandageLoopHandle.stop();
+      this.bandageLoopHandle = null;
+    }
   }
 
   // Delay from ability activation to projectile impact (animation wind-up + flight time)
@@ -1737,10 +1748,10 @@ export class Engine {
   private loop = (): void => {
     this.animationFrameId = requestAnimationFrame(this.loop);
 
-    // Throttle to ~10 FPS when tab is visible but not focused
+    // Throttle to ~30 FPS when tab is visible but not focused
     const now = performance.now();
     const focused = document.hasFocus();
-    if (!focused && now - this.lastLoopTime < 100) return;
+    if (!focused && now - this.lastLoopTime < 33) return;
     this.lastLoopTime = now;
 
     const deltaTime = Math.min(this.clock.getDelta(), focused ? 0.1 : 0.2);
@@ -1951,6 +1962,7 @@ export class Engine {
         // Channel ends when elapsed reaches totalTime
         if (this.casting && this.casting.elapsed >= this.casting.totalTime) {
           this.removeChannelAura();
+          this.stopBandageLoop();
           this.casting = null;
         }
       }
@@ -2041,6 +2053,18 @@ export class Engine {
     this.updateChannelAuraRemaining();
     this.regenSystem.update(deltaTime);
     this.targetingSystem.update(deltaTime);
+    // Update spatial audio positions so sounds track entity movement
+    soundEffects.updateSpatialPositions((key) => {
+      for (const npc of this.npcs) {
+        if (npc.mesh.uuid === key) {
+          return {
+            distance: this.playerController.mesh.position.distanceTo(npc.mesh.position),
+            pan: this.sfxPan(npc.mesh.position),
+          };
+        }
+      }
+      return null;
+    });
     this.thirdPersonCamera.update(deltaTime);
     this.playerController.setOpacity(this.thirdPersonCamera.getPlayerModelOpacity());
     this.renderer.render(this.scene, this.camera);
@@ -2067,6 +2091,7 @@ export class Engine {
       removeBandageHealEffect(this.scene, this.bandageHealVisual);
       this.bandageHealVisual = null;
     }
+    this.stopBandageLoop();
     this.mapManager.dispose();
     this.playerController.dispose();
     this.renderer.dispose();

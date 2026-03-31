@@ -270,6 +270,31 @@ export class AudioSettingsDialog {
     ambientSliderRow.append(ambientSlider, ambientPctLabel);
     dialog.appendChild(ambientSliderRow);
 
+    // ── Play While Minimized ──
+    const minimizedRow = document.createElement('label');
+    minimizedRow.style.cssText = `
+      display: flex; align-items: center; gap: 10px;
+      color: #bbc; font-size: 14px; cursor: pointer;
+      margin-bottom: 28px; user-select: none;
+    `;
+
+    const minimizedCheckbox = document.createElement('input');
+    minimizedCheckbox.type = 'checkbox';
+    minimizedCheckbox.checked = audioSettings.playWhileMinimized;
+    minimizedCheckbox.style.cssText = `
+      width: 16px; height: 16px; cursor: pointer;
+      accent-color: rgba(100, 140, 220, 0.9);
+    `;
+    minimizedCheckbox.addEventListener('change', () => {
+      audioSettings.update({ playWhileMinimized: minimizedCheckbox.checked });
+    });
+
+    const minimizedLabel = document.createElement('span');
+    minimizedLabel.textContent = 'Play Audio While Minimized';
+
+    minimizedRow.append(minimizedCheckbox, minimizedLabel);
+    dialog.appendChild(minimizedRow);
+
     // ── Button row ──
     const btnRow = document.createElement('div');
     btnRow.style.cssText = 'display: flex; gap: 10px;';
@@ -297,6 +322,7 @@ export class AudioSettingsDialog {
       ambientCheckbox.checked = audioSettings.enableAmbient;
       ambientSlider.value = String(Math.round(audioSettings.ambientVolume * 100));
       ambientPctLabel.textContent = ambientSlider.value + '%';
+      minimizedCheckbox.checked = audioSettings.playWhileMinimized;
     });
 
     const closeBtn = document.createElement('button');

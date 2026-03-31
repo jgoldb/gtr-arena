@@ -114,6 +114,13 @@ export class LobbyManager {
   }
 
   addUser(userId: string, username: string, socket: WebSocket): void {
+    // If the user already has an active entry (duplicate login), clean up old state first.
+    // This handles leaving game lobbies and starting disconnect grace periods for game sessions
+    // so that the rejoin logic below can seamlessly reconnect the new socket.
+    if (this.users.has(userId)) {
+      this.removeUser(userId);
+    }
+
     // Check for pending game rejoin
     const rejoinSessionId = this.pendingRejoins.get(userId);
     if (rejoinSessionId) {

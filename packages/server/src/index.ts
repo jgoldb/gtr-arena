@@ -215,6 +215,14 @@ wss.on('connection', (ws: WebSocket) => {
         userId = result.userId;
         const displayUsername = result.username!;
         const dbId = auth.getDbId(result.userId)!;
+        // If this login replaced an existing session, kick the old connection
+        if (result.replacedSocket && result.replacedSocket !== ws && result.replacedSocket.readyState === WebSocket.OPEN) {
+          result.replacedSocket.send(encodeMessage({
+            type: 'kicked',
+            reason: 'Logged in from another location',
+          }));
+          result.replacedSocket.close();
+        }
         ws.send(encodeMessage({
           type: 'auth_result',
           success: true,
@@ -262,6 +270,8 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('close', () => {
     if (userId) {
+      // Skip cleanup if this connection was replaced by a newer login
+      if (auth.getSocket(userId) !== ws) return;
       teardownWebRTC(userId);
       lobby.removeUser(userId);
       auth.disconnect(userId);
@@ -270,6 +280,8 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('error', () => {
     if (userId) {
+      // Skip cleanup if this connection was replaced by a newer login
+      if (auth.getSocket(userId) !== ws) return;
       teardownWebRTC(userId);
       lobby.removeUser(userId);
       auth.disconnect(userId);

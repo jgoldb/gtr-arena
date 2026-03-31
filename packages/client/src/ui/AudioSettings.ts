@@ -8,6 +8,7 @@ export interface AudioSettingsData {
   sfxVolume: number;      // 0–1
   enableAmbient: boolean;
   ambientVolume: number;  // 0–1
+  playWhileMinimized: boolean;
 }
 
 const defaults: AudioSettingsData = {
@@ -18,6 +19,7 @@ const defaults: AudioSettingsData = {
   sfxVolume: 0.5,
   enableAmbient: true,
   ambientVolume: 0.5,
+  playWhileMinimized: false,
 };
 
 type Listener = (settings: AudioSettingsData) => void;
@@ -40,6 +42,7 @@ class AudioSettingsStore {
         if (typeof parsed.sfxVolume === 'number') this.data.sfxVolume = Math.max(0, Math.min(1, parsed.sfxVolume));
         if (typeof parsed.enableAmbient === 'boolean') this.data.enableAmbient = parsed.enableAmbient;
         if (typeof parsed.ambientVolume === 'number') this.data.ambientVolume = Math.max(0, Math.min(1, parsed.ambientVolume));
+        if (typeof parsed.playWhileMinimized === 'boolean') this.data.playWhileMinimized = parsed.playWhileMinimized;
       }
     } catch { /* corrupt data — use defaults */ }
 
@@ -69,7 +72,8 @@ class AudioSettingsStore {
   get sfxVolume(): number { return this.data.sfxVolume; }
   get enableAmbient(): boolean { return this.data.enableAmbient; }
   get ambientVolume(): number { return this.data.ambientVolume; }
-  get windowFocused(): boolean { return this._windowFocused; }
+  get playWhileMinimized(): boolean { return this.data.playWhileMinimized; }
+  get windowFocused(): boolean { return this._windowFocused || this.data.playWhileMinimized; }
 
   update(partial: Partial<AudioSettingsData>): void {
     Object.assign(this.data, partial);
