@@ -58,7 +58,9 @@ export interface CharacterStats {
     gank?: SfxEntry;
     pocketSand?: SfxEntry;
     stickyFingers?: SfxEntry;
+    tweakerSprint?: SfxEntry;
     crackRock?: SfxEntry;
+    od?: SfxEntry;
     dumpsterDive1?: SfxEntry;
     dumpsterDive2?: SfxEntry;
   };
@@ -155,7 +157,9 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       gank: { file: 'gank.ogg', volume: 6 },
       pocketSand: { file: 'pocket-sand.ogg', volume: 3 },
       stickyFingers: { file: 'sticky-fingers.ogg', volume: 5 },
+      tweakerSprint: { file: 'tweaker-sprint.ogg', volume: 3 },
       crackRock: { file: 'crack-rock.ogg', volume: 3 },
+      od: { file: 'od.ogg', volume: 3 },
       dumpsterDive1: { file: 'dumpster-dive1.ogg', volume: 3 },
       dumpsterDive2: { file: 'dumpster-dive2.ogg', volume: 3 },
     },

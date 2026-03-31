@@ -2566,6 +2566,8 @@ async function startPlayground(): Promise<void> {
       }
     }
     if (ability.id === 'tweaker-sprint') {
+      const tsSfx = getCharacterSfx(engine.playerController.characterId)?.tweakerSprint;
+      if (tsSfx) soundEffects.play(tsSfx.url, undefined, undefined, tsSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target && !target.dead) {
         engine.startTweakerSprintCharge(target);
@@ -3110,6 +3112,8 @@ async function startUISetup(): Promise<void> {
       }
     }
     if (ability.id === 'tweaker-sprint') {
+      const tsSfx = getCharacterSfx(engine.playerController.characterId)?.tweakerSprint;
+      if (tsSfx) soundEffects.play(tsSfx.url, undefined, undefined, tsSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target && !target.dead) {
         engine.startTweakerSprintCharge(target);
