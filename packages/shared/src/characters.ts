@@ -34,6 +34,7 @@ export interface CharacterStats {
   playgroundOnly?: boolean;
   soundEffects?: {
     autoAttackHit?: SfxEntry;
+    autoAttackHit2?: SfxEntry;
     autoAttackCrit?: SfxEntry;
     struck?: SfxEntry;
     dodge?: SfxEntry;
@@ -42,10 +43,17 @@ export interface CharacterStats {
     mop?: SfxEntry;
     bigBoot?: SfxEntry;
     fartBomb?: SfxEntry;
+    bottleChuck?: SfxEntry;
     jimmyLegs?: SfxEntry;
     janitorsHelper?: SfxEntry;
     sweepStart?: SfxEntry;
     sweepSpin?: SfxEntry;
+    discombobulate?: SfxEntry;
+    chemicalSpill?: SfxEntry;
+    retardStrength?: SfxEntry;
+    fullRetard?: SfxEntry;
+    crotchRot?: SfxEntry;
+    kaboom?: SfxEntry;
   };
 }
 
@@ -100,6 +108,17 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     hpRegen: 24,
     manaRegen: 48,
     abilities: [Attack, BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket, Bandage],
+    soundEffects: {
+      autoAttackHit: { file: 'auto-attack1.ogg', volume: 3 },
+      autoAttackHit2: { file: 'auto-attack2.ogg', volume: 3 },
+      bottleChuck: { file: 'bottle-chuck.ogg', volume: 3 },
+      discombobulate: { file: 'discombobulate.ogg', volume: 2 },
+      chemicalSpill: { file: 'chemical-spill.ogg', volume: 3 },
+      retardStrength: { file: 'retard-strength.ogg', volume: 3 },
+      fullRetard: { file: 'full-retard.ogg', volume: 3 },
+      crotchRot: { file: 'crotch-rot.ogg', volume: 3 },
+      kaboom: { file: 'kaboom.ogg', volume: 3 },
+    },
   },
   'crackhead': {
     id: 'crackhead',
@@ -204,6 +223,7 @@ const SHARED_SFX_BASE = '/audio/sfx/abilities/shared/';
 const SHARED_SFX_DEFS: Record<string, SfxEntry> = {
   pvpTrinket: { file: 'pvp-trinket.ogg', volume: 3 },
   bandage: { file: 'bandage.ogg', volume: 5, loop: true },
+  castSpell: { file: 'cast-spell.ogg', volume: 4, loop: true },
 };
 
 export type ResolvedSharedSfx = { [K in keyof typeof SHARED_SFX_DEFS]?: ResolvedSfx };

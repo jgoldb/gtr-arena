@@ -186,7 +186,17 @@ export abstract class CharacterModel {
   /** World-space position of the auto-attack target (set before triggerSwing for ranged characters). */
   swingTargetWorldPos: THREE.Vector3 | null = null;
 
+  /** Whether the current/next swing uses the alternate arm. */
+  get swingArmToggle(): boolean {
+    return this.attackArmToggle;
+  }
+
   triggerSwing(isCrit = false): void {
+    // If a swing animation was still playing, it never reached the end to toggle —
+    // toggle now so we still alternate arms even at very fast attack speeds.
+    if (this.attackAnimTime >= 0) {
+      this.attackArmToggle = !this.attackArmToggle;
+    }
     this.attackAnimTime = 0;
     this.attackIsCrit = isCrit;
   }

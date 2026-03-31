@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ArenaScript } from './ArenaScript';
 import type { Collider, BoxCollider } from '../physics/CollisionSystem';
+import { audioSettings } from '../../ui/AudioSettings';
 
 export class CelestialBallroomScript extends ArenaScript {
   // Oval arena dimensions
@@ -23,6 +24,10 @@ export class CelestialBallroomScript extends ArenaScript {
   private lastPlatformY = 0.2;
   private platformJumped = false;
 
+  // One-shot ambient sounds
+  private ambientAudioCtx: AudioContext | null = null;
+  private doorsOpenBuffer: AudioBuffer | null = null;
+
   protected override readonly OPEN_ANIM_DURATION = 1.5;
 
   constructor() {
@@ -41,6 +46,7 @@ export class CelestialBallroomScript extends ArenaScript {
   // ArenaScript hooks
   // ---------------------------------------------------------------------------
   protected initArena(scene: THREE.Scene): void {
+    this.preloadAmbientSounds();
     this.createSkybox(scene);
     this.createAsteroidGround();
     this.createPlasmaWall();
@@ -74,12 +80,48 @@ export class CelestialBallroomScript extends ArenaScript {
     this.archShaderMaterials = [];
     this.glassPlatformGroup = null;
     this.glassPlatformCollider = null;
+    if (this.ambientAudioCtx) {
+      this.ambientAudioCtx.close();
+      this.ambientAudioCtx = null;
+    }
+    this.doorsOpenBuffer = null;
   }
 
   protected onOpen(): void {
+    this.playDoorsOpenSound();
     for (const collider of this.bubbleColliders) {
       this.collision.removeCollider(collider);
     }
+  }
+
+  private async preloadAmbientSounds(): Promise<void> {
+    try {
+      const ctx = new AudioContext();
+      this.ambientAudioCtx = ctx;
+      const resp = await fetch('/audio/ambient/maps/celestial-ballroom/doors_open.ogg');
+      const buf = await resp.arrayBuffer();
+      this.doorsOpenBuffer = await ctx.decodeAudioData(buf);
+    } catch (e) {
+      console.warn('Failed to preload ambient sounds:', e);
+    }
+  }
+
+  private playDoorsOpenSound(): void {
+    if (!this.ambientAudioCtx || !this.doorsOpenBuffer) return;
+    if (!audioSettings.enableAmbient || !audioSettings.windowFocused) return;
+
+    const ctx = this.ambientAudioCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+
+    const gain = ctx.createGain();
+    gain.gain.value = audioSettings.masterVolume * audioSettings.ambientVolume * 3;
+    gain.connect(ctx.destination);
+
+    const source = ctx.createBufferSource();
+    source.buffer = this.doorsOpenBuffer;
+    source.loop = false;
+    source.connect(gain);
+    source.start();
   }
 
   protected animateOpen(t: number): void {

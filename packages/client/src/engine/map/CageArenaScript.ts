@@ -30,9 +30,10 @@ export class CageArenaScript extends ArenaScript {
   private bannerTimer = 0;
   private bannerActive = false;
 
-  // Cheer sound (one-shot ambient effect on killing blow)
-  private cheerAudioCtx: AudioContext | null = null;
+  // One-shot ambient sounds
+  private ambientAudioCtx: AudioContext | null = null;
   private cheerBuffer: AudioBuffer | null = null;
+  private doorsOpenBuffer: AudioBuffer | null = null;
 
   // Game over state (-1 = game in progress)
   private gameOverWinningTeam = -1;
@@ -44,6 +45,8 @@ export class CageArenaScript extends ArenaScript {
   private readonly PILLAR_RISE_ANIM = 2;
   private readonly PILLAR_Y_UP = 3;
   private readonly PILLAR_Y_DOWN = -2.7;
+
+  protected override readonly OPEN_ANIM_DURATION = 3.5;
 
   constructor() {
     super({
@@ -61,7 +64,7 @@ export class CageArenaScript extends ArenaScript {
   // ArenaScript hooks
   // ---------------------------------------------------------------------------
   protected initArena(): void {
-    this.preloadCheerSound();
+    this.preloadAmbientSounds();
     this.createRingFloor();
     this.createPenFloors();
     this.createCageBars();
@@ -143,11 +146,12 @@ export class CageArenaScript extends ArenaScript {
     this.scoreboardTextures = [];
     this.southBannerTexture = null;
     this.northBannerTexture = null;
-    if (this.cheerAudioCtx) {
-      this.cheerAudioCtx.close();
-      this.cheerAudioCtx = null;
+    if (this.ambientAudioCtx) {
+      this.ambientAudioCtx.close();
+      this.ambientAudioCtx = null;
     }
     this.cheerBuffer = null;
+    this.doorsOpenBuffer = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -184,37 +188,53 @@ export class CageArenaScript extends ArenaScript {
     // Otherwise the result banners will show once the killing blow banner expires
   }
 
-  private async preloadCheerSound(): Promise<void> {
+  private async preloadAmbientSounds(): Promise<void> {
     try {
       const ctx = new AudioContext();
-      this.cheerAudioCtx = ctx;
-      const resp = await fetch('/audio/ambient/maps/cage/cheer.ogg');
-      const buf = await resp.arrayBuffer();
-      this.cheerBuffer = await ctx.decodeAudioData(buf);
+      this.ambientAudioCtx = ctx;
+      const [cheerResp, doorsResp] = await Promise.all([
+        fetch('/audio/ambient/maps/cage/cheer.ogg'),
+        fetch('/audio/ambient/maps/cage/doors_open.ogg'),
+      ]);
+      const [cheerBuf, doorsBuf] = await Promise.all([
+        cheerResp.arrayBuffer(),
+        doorsResp.arrayBuffer(),
+      ]);
+      this.cheerBuffer = await ctx.decodeAudioData(cheerBuf);
+      this.doorsOpenBuffer = await ctx.decodeAudioData(doorsBuf);
     } catch (e) {
-      console.warn('Failed to preload cheer sound:', e);
+      console.warn('Failed to preload ambient sounds:', e);
     }
   }
 
-  private playCheerSound(): void {
-    if (!this.cheerAudioCtx || !this.cheerBuffer) return;
+  private playAmbientOneShot(buffer: AudioBuffer | null, volumeMultiplier = 1): void {
+    if (!this.ambientAudioCtx || !buffer) return;
     if (!audioSettings.enableAmbient || !audioSettings.windowFocused) return;
 
-    const ctx = this.cheerAudioCtx;
+    const ctx = this.ambientAudioCtx;
     if (ctx.state === 'suspended') ctx.resume();
 
     const gain = ctx.createGain();
-    gain.gain.value = audioSettings.masterVolume * audioSettings.ambientVolume;
+    gain.gain.value = audioSettings.masterVolume * audioSettings.ambientVolume * volumeMultiplier;
     gain.connect(ctx.destination);
 
     const source = ctx.createBufferSource();
-    source.buffer = this.cheerBuffer;
+    source.buffer = buffer;
     source.loop = false;
     source.connect(gain);
     source.start();
   }
 
+  private playCheerSound(): void {
+    this.playAmbientOneShot(this.cheerBuffer);
+  }
+
+  private playDoorsOpenSound(): void {
+    this.playAmbientOneShot(this.doorsOpenBuffer, 3);
+  }
+
   protected onOpen(): void {
+    this.playDoorsOpenSound();
     for (const collider of this.doorColliders) {
       this.collision.removeCollider(collider);
     }

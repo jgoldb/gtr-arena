@@ -825,7 +825,7 @@ export class ServerEngine {
     if (ability.groundTargeted && groundTarget) {
       const result = this.useGroundTargetAbility(entity, ability, groundTarget.x, groundTarget.z);
       if (result.success) {
-        this.onAbilitySuccess(entity, ability, groundTarget);
+        this.onAbilitySuccess(entity, ability, undefined, groundTarget);
         this.triggerEntityGcd(entity);
       } else if (result.errorMessage) {
         this.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
@@ -856,7 +856,7 @@ export class ServerEngine {
     } else {
       const result = this.combatSystem.useAbility(ability, entity, target, targetPosOverride);
       if (result.success) {
-        this.onAbilitySuccess(entity, ability);
+        this.onAbilitySuccess(entity, ability, target);
         if (!ability.usableWhileCCd) this.triggerEntityGcd(entity);
       } else if (result.errorMessage) {
         this.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
@@ -1401,7 +1401,7 @@ export class ServerEngine {
       this.combatSystem.clearCooldown(entity.id, ability.id);
       const result = this.combatSystem.useAbility(ability, entity, target);
       if (result.success) {
-        this.onAbilitySuccess(entity, ability);
+        this.onAbilitySuccess(entity, ability, target);
       } else if (result.errorMessage) {
         this.onSendToPlayer?.(entity.id, { type: 'error', message: result.errorMessage });
       }
@@ -1607,11 +1607,12 @@ export class ServerEngine {
 
   private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank', 'gank'];
 
-  private onAbilitySuccess(entity: ServerEntity, ability: Ability, groundTarget?: { x: number; y: number; z: number }): void {
+  private onAbilitySuccess(entity: ServerEntity, ability: Ability, target?: ServerEntity | null, groundTarget?: { x: number; y: number; z: number }): void {
     const abilityEvent: S2C_AbilityEffect = {
       type: 'ability_effect',
       entityId: entity.id,
       abilityId: ability.id,
+      ...(target ? { targetId: target.id } : {}),
       ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetY: groundTarget.y, groundTargetZ: groundTarget.z } : {}),
     };
     this.emitEvent(abilityEvent);

@@ -4,7 +4,7 @@ import type { CharacterId } from '@gtr/shared';
 
 // Distance-based volume falloff (world units, 1 yard = 0.6 units)
 const SFX_FULL_VOLUME_DIST = 3;   // ~5 yards — full volume within melee range
-const SFX_SILENT_DIST = 18;       // ~30 yards — inaudible beyond this
+const SFX_SILENT_DIST = 24;       // ~40 yards — inaudible beyond this
 
 /** Handle returned by playLoop() — call stop() to end the loop. */
 export interface LoopHandle {

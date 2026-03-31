@@ -77,6 +77,7 @@ export class ClientEngine {
 
   // Remote entities (other players) — interpolated from server state
   private remoteEntities = new Map<string, RemoteEntity>();
+  private aaSfxToggle = new Map<string, boolean>(); // per-entity toggle for alternating auto-attack SFX
 
   // Snapshot interpolation buffer — smoothly interpolates remote entity positions
   // between two known server states instead of exponential chase lerp
@@ -170,6 +171,10 @@ export class ClientEngine {
 
   // Bandage loop SFX (keyed by entity ID)
   private bandageLoops = new Map<string, LoopHandle>();
+  // Dr. Retardo cast-spell loop SFX (keyed by entity ID)
+  private castSpellLoops = new Map<string, LoopHandle>();
+  // Full Retard looping SFX (keyed by entity ID)
+  private fullRetardLoops = new Map<string, LoopHandle>();
 
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
@@ -620,6 +625,7 @@ export class ClientEngine {
             this.pendingPrediction = null;
           }
           this.updateBandageLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
+          this.updateCastSpellLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
           this.localCastingAbilityId = delta.castingAbilityId!;
         }
         if (delta.castingElapsed !== undefined) this.localCastingElapsed = delta.castingElapsed;
@@ -646,6 +652,7 @@ export class ClientEngine {
       if (delta.isAutoAttacking !== undefined) entity.isAutoAttacking = delta.isAutoAttacking;
       if ('castingAbilityId' in delta) {
         this.updateBandageLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
+        this.updateCastSpellLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
         entity.castingAbilityId = delta.castingAbilityId!;
       }
       if (delta.castingElapsed !== undefined) entity.castingElapsed = delta.castingElapsed;
@@ -678,6 +685,7 @@ export class ClientEngine {
     pc.setAutoAttacking(snap.isAutoAttacking);
     pc.setStunned(snap.stunned);
     this.updateBandageLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
+    this.updateCastSpellLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
     this.localCastingAbilityId = snap.castingAbilityId;
     this.localCastingElapsed = snap.castingElapsed;
     this.localCastingTotalTime = snap.castingTotalTime;
@@ -698,6 +706,7 @@ export class ClientEngine {
     entity.isMoving = snap.isMoving;
     entity.isAutoAttacking = snap.isAutoAttacking;
     this.updateBandageLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
+    this.updateCastSpellLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
     entity.castingAbilityId = snap.castingAbilityId;
     entity.castingElapsed = snap.castingElapsed;
     entity.castingTotalTime = snap.castingTotalTime;
@@ -714,7 +723,13 @@ export class ClientEngine {
         const oldIds = new Set(this.localBuffs.map(b => b.id));
         const newIds = new Set(buffSnap.buffs.map(b => b.id));
         for (const b of buffSnap.buffs) {
-          if (!oldIds.has(b.id)) this.onBuffApplied?.(buffSnap.entityId, b);
+          if (!oldIds.has(b.id)) {
+            this.onBuffApplied?.(buffSnap.entityId, b);
+            if (b.id === 'rotten-crotch') {
+              const struckSfx = getCharacterSfx(this.playerController.characterId)?.struck;
+              if (struckSfx) soundEffects.play(struckSfx.url, undefined, undefined, struckSfx.volume);
+            }
+          }
         }
         for (const b of this.localBuffs) {
           if (!newIds.has(b.id)) this.onBuffExpired?.(buffSnap.entityId, b);
@@ -749,6 +764,11 @@ export class ClientEngine {
       }
       const entity = this.remoteEntities.get(buffSnap.entityId);
       if (entity) {
+        // Detect rotten-crotch application for struck SFX
+        if (buffSnap.buffs.some(b => b.id === 'rotten-crotch') && !entity.buffs.some(b => b.id === 'rotten-crotch')) {
+          const struckSfx = getCharacterSfx(entity.characterId)?.struck;
+          if (struckSfx) soundEffects.play(struckSfx.url, this.distToEntity(entity.id), this.panToEntity(entity.id), struckSfx.volume, entity.id);
+        }
         entity.buffs = buffSnap.buffs;
         entity.drTimers = buffSnap.drTimers;
         const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
@@ -776,7 +796,13 @@ export class ClientEngine {
         : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
       if (charId) {
         const sfx = getCharacterSfx(charId);
-        const aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+        let aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+        // Alternate between two auto-attack sounds when available (e.g. Dr. Retardo's flask/test tube)
+        if (msg.combatType !== 'crit' && sfx?.autoAttackHit2) {
+          const toggle = this.aaSfxToggle.get(msg.sourceEntityId) ?? false;
+          aaSfx = toggle ? sfx.autoAttackHit2 : sfx.autoAttackHit;
+          this.aaSfxToggle.set(msg.sourceEntityId, !toggle);
+        }
         if (aaSfx) soundEffects.play(aaSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), aaSfx.volume, msg.sourceEntityId);
       }
     }
@@ -807,6 +833,15 @@ export class ClientEngine {
       if (charId) {
         const jimmyLegsSfx = getCharacterSfx(charId)?.jimmyLegs;
         if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), jimmyLegsSfx.volume, msg.sourceEntityId);
+      }
+    }
+    if (msg.abilityId === 'bottle-chuck' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
+      const charId = msg.sourceEntityId === this.localEntityId
+        ? this.playerController.characterId
+        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
+      if (charId) {
+        const bcSfx = getCharacterSfx(charId)?.bottleChuck;
+        if (bcSfx) soundEffects.play(bcSfx.url, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId), bcSfx.volume, msg.targetEntityId);
       }
     }
 
@@ -866,6 +901,23 @@ export class ClientEngine {
       }
       if (msg.abilityId === 'sweep-finish' && sfx?.sweepSpin) {
         soundEffects.play(sfx.sweepSpin.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.sweepSpin.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'discombobulate' && sfx?.discombobulate) {
+        const spatialId = msg.targetId ?? msg.entityId;
+        soundEffects.play(sfx.discombobulate.url, this.distToEntity(spatialId), this.panToEntity(spatialId), sfx.discombobulate.volume, spatialId);
+      }
+      if (msg.abilityId === 'chemical-spill' && sfx?.chemicalSpill) {
+        soundEffects.play(sfx.chemicalSpill.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.chemicalSpill.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'retard-strength' && sfx?.retardStrength) {
+        soundEffects.play(sfx.retardStrength.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.retardStrength.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'crotch-rot' && sfx?.crotchRot) {
+        const spatialId = msg.targetId ?? msg.entityId;
+        soundEffects.play(sfx.crotchRot.url, this.distToEntity(spatialId), this.panToEntity(spatialId), sfx.crotchRot.volume, spatialId);
+      }
+      if (msg.abilityId === 'kaboom' && sfx?.kaboom) {
+        soundEffects.play(sfx.kaboom.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.kaboom.volume, msg.entityId);
       }
     }
     // Shared ability SFX (all characters)
@@ -1264,6 +1316,7 @@ export class ClientEngine {
     let castPredicted = false;
     if (ability.castTime && !pc.isMoving && pc.grounded) {
       this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
+      this.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
       this.localCastingAbilityId = abilityId;
       this.localCastingElapsed = 0;
       this.localCastingTotalTime = ability.castTime;
@@ -1341,6 +1394,7 @@ export class ClientEngine {
     // Revert predicted cast bar
     if (pred.castPredicted && this.localCastingAbilityId === pred.abilityId) {
       this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, null);
+      this.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, null);
       this.localCastingAbilityId = null;
       this.localCastingElapsed = 0;
       this.localCastingTotalTime = 0;
@@ -2332,6 +2386,12 @@ export class ClientEngine {
         const pos = this.playerController.mesh.position;
         const visual = createFullRetardAura(this.scene, pos.x, pos.z, this.playerController.autoAttackRange);
         this.fullRetardAuras.set(this.localEntityId, { ...visual, elapsed: 0 });
+        // Start looping SFX
+        const frSfx = getCharacterSfx(this.playerController.characterId)?.fullRetard;
+        if (frSfx) {
+          const handle = soundEffects.playLoop(frSfx.url, undefined, undefined, frSfx.volume, this.localEntityId);
+          if (handle) this.fullRetardLoops.set(this.localEntityId, handle);
+        }
       }
     }
 
@@ -2342,6 +2402,12 @@ export class ClientEngine {
         if (!this.fullRetardAuras.has(entity.id)) {
           const visual = createFullRetardAura(this.scene, entity.mesh.position.x, entity.mesh.position.z, 1.5);
           this.fullRetardAuras.set(entity.id, { ...visual, elapsed: 0 });
+          // Start looping SFX
+          const frSfx = getCharacterSfx(entity.characterId)?.fullRetard;
+          if (frSfx) {
+            const handle = soundEffects.playLoop(frSfx.url, this.distToEntity(entity.id), this.panToEntity(entity.id), frSfx.volume, entity.id);
+            if (handle) this.fullRetardLoops.set(entity.id, handle);
+          }
         }
       }
     }
@@ -2351,6 +2417,9 @@ export class ClientEngine {
       if (!activeIds.has(entityId)) {
         disposeGroup(this.scene, aura.group);
         this.fullRetardAuras.delete(entityId);
+        // Stop looping SFX
+        const loop = this.fullRetardLoops.get(entityId);
+        if (loop) { loop.stop(); this.fullRetardLoops.delete(entityId); }
         continue;
       }
 
@@ -2430,11 +2499,39 @@ export class ClientEngine {
     }
   }
 
+  /** Start or stop Dr. Retardo's cast-spell loop SFX when casting state changes. */
+  private updateCastSpellLoop(entityId: string, prev: string | null, next: string | null): void {
+    if (prev === next) return;
+    const charId = entityId === this.localEntityId
+      ? this.playerController?.characterId
+      : this.remoteEntities.get(entityId)?.characterId;
+    if (charId !== 'dr-retardo') return;
+    // Stop existing loop
+    if (prev && prev !== 'bandage') {
+      const handle = this.castSpellLoops.get(entityId);
+      if (handle) { handle.stop(); this.castSpellLoops.delete(entityId); }
+    }
+    // Start new loop
+    if (next && next !== 'bandage') {
+      const sfx = getSharedSfx().castSpell;
+      if (sfx) {
+        const dist = entityId === this.localEntityId ? undefined : this.distToEntity(entityId);
+        const pan = entityId === this.localEntityId ? undefined : this.panToEntity(entityId);
+        const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, entityId);
+        if (handle) this.castSpellLoops.set(entityId, handle);
+      }
+    }
+  }
+
   destroy(): void {
     this.stop();
     this.blindEffect.deactivate();
     for (const handle of this.bandageLoops.values()) handle.stop();
     this.bandageLoops.clear();
+    for (const handle of this.castSpellLoops.values()) handle.stop();
+    this.castSpellLoops.clear();
+    for (const handle of this.fullRetardLoops.values()) handle.stop();
+    this.fullRetardLoops.clear();
     this.input.dispose();
     this.targetingSystem.dispose();
     this.mapManager.dispose();

@@ -266,6 +266,7 @@ export interface S2C_AbilityEffect {
   type: 'ability_effect';
   entityId: string;
   abilityId: string;
+  targetId?: string;
   groundTargetX?: number;
   groundTargetY?: number;
   groundTargetZ?: number;

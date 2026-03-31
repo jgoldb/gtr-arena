@@ -403,7 +403,7 @@ export class ServerCombatSystem {
 
     const outcome = this.rollOutcome(attacker, target, !!ability.isMelee);
     if (outcome === 'miss' || outcome === 'dodge') {
-      this.onCombatText?.(attacker, target, 0, outcome);
+      this.onCombatText?.(attacker, target, 0, outcome, ability);
       this.enterCombat(attacker);
       this.enterCombat(target);
       return;
@@ -429,13 +429,13 @@ export class ServerCombatSystem {
       this.onFlinchDamage?.(target);
     }
     if (actualDamage > 0) {
-      this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage');
+      this.onCombatText?.(attacker, target, actualDamage, isCrit ? 'crit' : 'damage', ability);
     }
 
     // Apply debuff on hit
     if (ability.appliesDebuff) {
       if (!this.buffSystem.apply(target, ability.appliesDebuff)) {
-        this.onCombatText?.(attacker, target, 0, 'immune');
+        this.onCombatText?.(attacker, target, 0, 'immune', ability);
       } else {
         if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
           this.onSleepApplied?.(attacker, target);

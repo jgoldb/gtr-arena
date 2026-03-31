@@ -133,10 +133,13 @@ export class Engine {
   private channelBeamTarget: Targetable | null = null;
   private bandageHealVisual: BandageHealVisual | null = null;
   private bandageLoopHandle: LoopHandle | null = null;
+  private castSpellLoopHandle: LoopHandle | null = null;
+  private fullRetardLoopHandle: LoopHandle | null = null;
   private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
   private autoAttackTarget: Targetable | null = null;
+  private aaSfxToggle = new Map<Targetable, boolean>(); // per-entity toggle for alternating auto-attack SFX
   private rangedResumeDelay = 0; // GCD-length delay before first/resumed ranged shot
   private rangedWasMoving = false; // tracks movement→stop transition for ranged delay
   private dumpsterDiveAutoTarget: Targetable | null = null;
@@ -300,7 +303,13 @@ export class Engine {
 
     this.combatSystem.onAutoAttackDamageDealt = (attacker, isCrit) => {
       const sfx = getCharacterSfx(attacker.characterId);
-      const aaSfx = (isCrit && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+      let aaSfx = (isCrit && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+      // Alternate between two auto-attack sounds when available (e.g. Dr. Retardo's flask/test tube)
+      if (!isCrit && sfx?.autoAttackHit2) {
+        const toggle = this.aaSfxToggle.get(attacker) ?? false;
+        aaSfx = toggle ? sfx.autoAttackHit2 : sfx.autoAttackHit;
+        this.aaSfxToggle.set(attacker, !toggle);
+      }
       if (aaSfx) soundEffects.play(aaSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), aaSfx.volume, attacker.mesh.uuid);
     };
 
@@ -393,7 +402,7 @@ export class Engine {
   }
 
   /** Stereo pan (-1 left, +1 right) for a world position relative to the player's facing. */
-  private sfxPan(sourcePos: THREE.Vector3): number {
+  sfxPan(sourcePos: THREE.Vector3): number {
     const pos = this.playerController.mesh.position;
     const rotY = this.playerController.mesh.rotation.y;
     const dx = sourcePos.x - pos.x;
@@ -565,6 +574,12 @@ export class Engine {
       damageMultiplier: isChannel ? this.buffSystem.getDamageDealtMultiplier(this.playerController) : 1,
     };
 
+    // Dr. Retardo cast-spell loop SFX (any cast/channel except bandage)
+    if (this.playerController.characterId === 'dr-retardo' && ability.id !== 'bandage') {
+      const castSpellSfx = getSharedSfx().castSpell;
+      if (castSpellSfx) this.castSpellLoopHandle = soundEffects.playLoop(castSpellSfx.url, undefined, undefined, castSpellSfx.volume);
+    }
+
     // Apply blockedByTargetDebuff at channel start (e.g. Recently Bandaged)
     if (isChannel && target && ability.id === 'bandage') {
       this.buffSystem.apply(target, RecentlyBandagedDebuff);
@@ -598,6 +613,7 @@ export class Engine {
     if (!this.casting) return;
     this.removeChannelAura();
     this.stopBandageLoop();
+    this.stopCastSpellLoop();
     this.casting = null;
   }
 
@@ -605,6 +621,13 @@ export class Engine {
     if (this.bandageLoopHandle) {
       this.bandageLoopHandle.stop();
       this.bandageLoopHandle = null;
+    }
+  }
+
+  private stopCastSpellLoop(): void {
+    if (this.castSpellLoopHandle) {
+      this.castSpellLoopHandle.stop();
+      this.castSpellLoopHandle = null;
     }
   }
 
@@ -666,6 +689,12 @@ export class Engine {
         this.combatSystem.applyAoeDamage(impact.owner, target, impact.ability);
       }
 
+      // Play impact sound effect
+      if (impact.ability.id === 'bottle-chuck') {
+        const bcSfx = getCharacterSfx(impact.owner.characterId)?.bottleChuck;
+        if (bcSfx) soundEffects.play(bcSfx.url, this.playerController.mesh.position.distanceTo(impact.groundPos), this.sfxPan(impact.groundPos), bcSfx.volume);
+      }
+
       this.pendingAoeImpacts.splice(i, 1);
     }
   }
@@ -674,6 +703,7 @@ export class Engine {
     if (!this.casting) return;
     const { ability, target } = this.casting;
     this.casting = null;
+    this.stopCastSpellLoop();
 
     // Clear the interrupt cooldown so useAbility's validation passes
     this.combatSystem.clearCooldown(ability.id);
@@ -976,6 +1006,8 @@ export class Engine {
     }
     if (definition.id === 'crotch-rot') {
       this.buffSystem.apply(target, RottenCrotchStun);
+      const struckSfx = getCharacterSfx(target.characterId)?.struck;
+      if (struckSfx) soundEffects.play(struckSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), struckSfx.volume, target.mesh.uuid);
     }
     if (definition.id === 'overdosing') {
       this.buffSystem.apply(target, ODStunDebuff);
@@ -1125,12 +1157,20 @@ export class Engine {
       elapsed: 0,
       nextTickAt: 1,
     };
+
+    // Start looping SFX
+    const frSfx = getCharacterSfx(this.playerController.characterId)?.fullRetard;
+    if (frSfx) this.fullRetardLoopHandle = soundEffects.playLoop(frSfx.url, undefined, undefined, frSfx.volume);
   }
 
   private cleanupFullRetardFumes(): void {
     if (!this.fullRetardAura) return;
     disposeGroup(this.scene, this.fullRetardAura.group);
     this.fullRetardAura = null;
+    if (this.fullRetardLoopHandle) {
+      this.fullRetardLoopHandle.stop();
+      this.fullRetardLoopHandle = null;
+    }
   }
 
   private updateFullRetardAura(dt: number): void {
@@ -1972,6 +2012,7 @@ export class Engine {
         if (this.casting && this.casting.elapsed >= this.casting.totalTime) {
           this.removeChannelAura();
           this.stopBandageLoop();
+          this.stopCastSpellLoop();
           this.casting = null;
         }
       }
@@ -2101,6 +2142,7 @@ export class Engine {
       this.bandageHealVisual = null;
     }
     this.stopBandageLoop();
+    this.stopCastSpellLoop();
     this.mapManager.dispose();
     this.playerController.dispose();
     this.renderer.dispose();

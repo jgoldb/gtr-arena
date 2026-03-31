@@ -71,6 +71,10 @@ export class NpcController implements Targetable {
     return this.team !== other.team;
   }
 
+  get model(): CharacterModel {
+    return this.characterModel;
+  }
+
   get modelName(): string {
     return this.characterModel.displayName;
   }
