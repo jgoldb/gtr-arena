@@ -164,6 +164,7 @@ export class GameLobbyScreen {
         background: rgba(12,15,28,0.85);
         border: 2px solid rgba(100,120,200,0.08);
         position: relative; overflow: hidden;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
       `;
 
       // Role color accent bar at top
@@ -195,7 +196,7 @@ export class GameLobbyScreen {
       if (!isDisabled && !CHARACTERS[char.id as keyof typeof CHARACTERS].soundEffects) {
         const sfxLabel = document.createElement('div');
         sfxLabel.textContent = 'SFX in development';
-        sfxLabel.style.cssText = 'font-size: 9px; color: rgba(224,80,80,0.7); margin-top: 5px;';
+        sfxLabel.style.cssText = 'font-size: 9px; color: rgba(224,200,80,0.7); margin-top: 5px;';
         card.appendChild(sfxLabel);
       }
 
