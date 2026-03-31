@@ -1429,6 +1429,11 @@ export class Engine {
         }
       }
 
+      // Trigger sweep finish spin animation + wind burst
+      this.playerController.triggerAbilityAnimation('sweep-finish');
+      const sweepSpinSfx = getCharacterSfx(this.playerController.characterId)?.sweepSpin;
+      if (sweepSpinSfx) soundEffects.play(sweepSpinSfx.url, undefined, undefined, sweepSpinSfx.volume);
+
       // Re-engage auto-attack if we were auto-attacking before sweep
       const savedTarget = charge.savedAutoAttackTarget;
       if (savedTarget && !savedTarget.dead && savedTarget.isHostileTo(this.playerController)) {

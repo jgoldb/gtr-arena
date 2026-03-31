@@ -429,6 +429,104 @@ export class AuthScreen {
       return off;
     })();
 
+    // ── Pre-rendered textures (avoid per-frame gradient allocations) ──
+    const preRenderedStreaks = streaks.map(s => {
+      const c = document.createElement('canvas');
+      c.width = Math.ceil(s.len); c.height = 4;
+      const p = c.getContext('2d')!;
+      const g = p.createLinearGradient(0, 0, s.len, 0);
+      g.addColorStop(0, 'transparent');
+      g.addColorStop(0.5, s.color);
+      g.addColorStop(1, 'transparent');
+      p.strokeStyle = g;
+      p.lineWidth = 1.5;
+      p.beginPath();
+      p.moveTo(0, 2);
+      p.lineTo(s.len, 2);
+      p.stroke();
+      return c;
+    });
+
+    const preRenderedLensFlares = lensEls.map(le => {
+      const maxR = Math.ceil(le.size * 1.15 + 2);
+      const c = document.createElement('canvas');
+      c.width = maxR * 2; c.height = maxR * 2;
+      const p = c.getContext('2d')!;
+      const g = p.createRadialGradient(maxR, maxR, 0, maxR, maxR, maxR);
+      g.addColorStop(0, `rgba(${le.r}, ${le.g}, ${le.b}, ${le.a})`);
+      g.addColorStop(0.6, `rgba(${le.r}, ${le.g}, ${le.b}, ${le.a * 0.3})`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      p.fillStyle = g;
+      p.beginPath();
+      p.arc(maxR, maxR, maxR, 0, Math.PI * 2);
+      p.fill();
+      return c;
+    });
+
+    const planetAtmosCanvas = (() => {
+      const r = Math.ceil(PLANET_R * 1.2);
+      const dim = r * 2;
+      const c = document.createElement('canvas');
+      c.width = dim; c.height = dim;
+      const p = c.getContext('2d')!;
+      const g = p.createRadialGradient(r, r, PLANET_R * 0.9, r, r, r);
+      g.addColorStop(0, 'rgba(40,80,180,0.08)');
+      g.addColorStop(0.5, 'rgba(30,60,150,0.04)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      p.fillStyle = g;
+      p.beginPath();
+      p.arc(r, r, r, 0, Math.PI * 2);
+      p.fill();
+      return c;
+    })();
+
+    const planetLightCanvas = (() => {
+      const dim = PLANET_R * 2;
+      const c = document.createElement('canvas');
+      c.width = dim; c.height = dim;
+      const p = c.getContext('2d')!;
+      const cx = PLANET_R, cy = PLANET_R;
+      const g = p.createRadialGradient(cx - PLANET_R * 0.45, cy - PLANET_R * 0.45, 0, cx, cy, PLANET_R);
+      g.addColorStop(0, 'rgba(255,240,200,0.12)');
+      g.addColorStop(0.35, 'rgba(0,0,0,0)');
+      g.addColorStop(0.75, 'rgba(0,0,0,0.35)');
+      g.addColorStop(1, 'rgba(0,0,0,0.65)');
+      p.fillStyle = g;
+      p.fillRect(0, 0, dim, dim);
+      return c;
+    })();
+
+    const shimmerTex = (() => {
+      const r = 32;
+      const c = document.createElement('canvas');
+      c.width = r * 2; c.height = r * 2;
+      const p = c.getContext('2d')!;
+      const g = p.createRadialGradient(r, r, 0, r, r, r);
+      g.addColorStop(0, 'rgba(255, 255, 220, 0.5)');
+      g.addColorStop(1, 'rgba(255, 255, 200, 0)');
+      p.fillStyle = g;
+      p.beginPath();
+      p.arc(r, r, r, 0, Math.PI * 2);
+      p.fill();
+      return c;
+    })();
+
+    const volcanoGlowTex = (() => {
+      const r = 64;
+      const c = document.createElement('canvas');
+      c.width = r * 2; c.height = r * 2;
+      const p = c.getContext('2d')!;
+      const g = p.createRadialGradient(r, r, 0, r, r, r);
+      g.addColorStop(0, 'rgba(255,140,20,0.4)');
+      g.addColorStop(0.5, 'rgba(255,60,0,0.15)');
+      g.addColorStop(1, 'rgba(255,30,0,0)');
+      p.fillStyle = g;
+      p.beginPath();
+      p.arc(r, r, r, 0, Math.PI * 2);
+      p.fill();
+      return c;
+    })();
+
     // Ring bands and planet animation state
     const ringBands = [
       { r: PLANET_R * 1.12, w: 10, c: 'rgba(185,165,135,0.3)' },
@@ -872,20 +970,14 @@ export class AuthScreen {
       ctx.arc(sunX, sunY, sunRadius, 0, Math.PI * 2);
       ctx.fill();
 
-      // Surface shimmer — moving bright spots on the sun
+      // Surface shimmer — moving bright spots on the sun (pre-rendered texture)
       ctx.globalAlpha = 0.15;
       for (let si = 0; si < 3; si++) {
         const shimAngle = now * 0.001 * (si + 1) + si * 2.1;
         const shimX = sunX + Math.cos(shimAngle) * sunRadius * 0.4;
         const shimY = sunY + Math.sin(shimAngle) * sunRadius * 0.3;
         const shimR = sunRadius * (0.25 + 0.15 * Math.sin(now * 0.002 + si));
-        const shim = ctx.createRadialGradient(shimX, shimY, 0, shimX, shimY, shimR);
-        shim.addColorStop(0, 'rgba(255, 255, 220, 0.5)');
-        shim.addColorStop(1, 'rgba(255, 255, 200, 0)');
-        ctx.fillStyle = shim;
-        ctx.beginPath();
-        ctx.arc(shimX, shimY, shimR, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.drawImage(shimmerTex, shimX - shimR, shimY - shimR, shimR * 2, shimR * 2);
       }
 
       // Star-point light rays — elongated spikes
@@ -920,18 +1012,12 @@ export class AuthScreen {
       const lfDy = canvas.height * 0.5 - sunY;
       const flareIntensity = 0.7 + 0.3 * Math.sin(now * 0.0012);
       ctx.globalAlpha = flareIntensity;
-      for (const le of lensEls) {
+      for (let li = 0; li < lensEls.length; li++) {
+        const le = lensEls[li];
         const lx = sunX + lfDx * le.t;
         const ly = sunY + lfDy * le.t;
         const pSize = le.size * (1 + 0.15 * Math.sin(now * 0.002 + le.t * 5));
-        const leGrad = ctx.createRadialGradient(lx, ly, 0, lx, ly, pSize);
-        leGrad.addColorStop(0, `rgba(${le.r}, ${le.g}, ${le.b}, ${le.a})`);
-        leGrad.addColorStop(0.6, `rgba(${le.r}, ${le.g}, ${le.b}, ${le.a * 0.3})`);
-        leGrad.addColorStop(1, 'transparent');
-        ctx.fillStyle = leGrad;
-        ctx.beginPath();
-        ctx.arc(lx, ly, pSize, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.drawImage(preRenderedLensFlares[li], lx - pSize, ly - pSize, pSize * 2, pSize * 2);
       }
 
       ctx.globalAlpha = 1;
@@ -954,41 +1040,26 @@ export class AuthScreen {
         ctx.fill();
       }
 
-      // Streaks
-      ctx.globalAlpha = 1;
-      for (const s of streaks) {
+      // Streaks (pre-rendered textures)
+      for (let si = 0; si < streaks.length; si++) {
+        const s = streaks[si];
         s.x += s.vx;
         if (s.x > canvas.width + 200) {
           s.x = -s.len - Math.random() * 400;
           s.y = Math.random() * canvas.height;
         }
-        const grad = ctx.createLinearGradient(s.x, s.y, s.x + s.len, s.y);
-        grad.addColorStop(0, 'transparent');
-        grad.addColorStop(0.5, s.color);
-        grad.addColorStop(1, 'transparent');
-        ctx.strokeStyle = grad;
         ctx.globalAlpha = s.alpha;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(s.x, s.y);
-        ctx.lineTo(s.x + s.len, s.y);
-        ctx.stroke();
+        ctx.drawImage(preRenderedStreaks[si], s.x, s.y - 2);
       }
 
       // ── Exotic planet (bottom-right, rotating) ─────────────────
       const px = canvas.width - 180, py = canvas.height - 100;
       const scrollX = (now * PLANET_SCROLL_SPEED) % STRIP_W;
 
-      // Atmospheric outer glow
+      // Atmospheric outer glow (pre-rendered)
       ctx.globalAlpha = 0.6;
-      const planetAtmos = ctx.createRadialGradient(px, py, PLANET_R * 0.9, px, py, PLANET_R * 1.2);
-      planetAtmos.addColorStop(0, 'rgba(40,80,180,0.08)');
-      planetAtmos.addColorStop(0.5, 'rgba(30,60,150,0.04)');
-      planetAtmos.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = planetAtmos;
-      ctx.beginPath();
-      ctx.arc(px, py, PLANET_R * 1.2, 0, Math.PI * 2);
-      ctx.fill();
+      const atmosR = Math.ceil(PLANET_R * 1.2);
+      ctx.drawImage(planetAtmosCanvas, px - atmosR, py - atmosR);
 
       // Back rings (top visual half — behind planet)
       ctx.globalAlpha = 1;
@@ -1012,15 +1083,9 @@ export class AuthScreen {
       ctx.drawImage(planetStrip, stripDrawX, stripDrawY);
       ctx.drawImage(planetStrip, stripDrawX + STRIP_W, stripDrawY);
 
-      // 3D lighting overlay (fixed, doesn't rotate with surface)
+      // 3D lighting overlay (pre-rendered, doesn't rotate with surface)
       ctx.globalAlpha = 1;
-      const pLight = ctx.createRadialGradient(px - PLANET_R * 0.45, py - PLANET_R * 0.45, 0, px, py, PLANET_R);
-      pLight.addColorStop(0, 'rgba(255,240,200,0.12)');
-      pLight.addColorStop(0.35, 'rgba(0,0,0,0)');
-      pLight.addColorStop(0.75, 'rgba(0,0,0,0.35)');
-      pLight.addColorStop(1, 'rgba(0,0,0,0.65)');
-      ctx.fillStyle = pLight;
-      ctx.fillRect(px - PLANET_R, py - PLANET_R, PLANET_R * 2, PLANET_R * 2);
+      ctx.drawImage(planetLightCanvas, px - PLANET_R, py - PLANET_R);
 
       // Atmosphere rim highlight
       ctx.strokeStyle = 'rgba(80,140,255,0.12)';
@@ -1029,7 +1094,7 @@ export class AuthScreen {
       ctx.arc(px, py, PLANET_R - 1.5, 0, Math.PI * 2);
       ctx.stroke();
 
-      // Volcano glow pulses (at scrolled strip positions)
+      // Volcano glow pulses (pre-rendered texture, at scrolled strip positions)
       for (const v of volcanoStripPos) {
         for (let wrap = 0; wrap < 2; wrap++) {
           const vx = stripDrawX + v.x + wrap * STRIP_W;
@@ -1038,14 +1103,8 @@ export class AuthScreen {
           if (dx * dx + dy * dy > (PLANET_R + v.r * 3) * (PLANET_R + v.r * 3)) continue;
           const pulse = 0.5 + 0.5 * Math.sin(now * 0.003 + v.x * 0.1);
           ctx.globalAlpha = 0.12 + pulse * 0.15;
-          const vg = ctx.createRadialGradient(vx, vy, 0, vx, vy, v.r * 3);
-          vg.addColorStop(0, 'rgba(255,140,20,0.4)');
-          vg.addColorStop(0.5, 'rgba(255,60,0,0.15)');
-          vg.addColorStop(1, 'rgba(255,30,0,0)');
-          ctx.fillStyle = vg;
-          ctx.beginPath();
-          ctx.arc(vx, vy, v.r * 3, 0, Math.PI * 2);
-          ctx.fill();
+          const glowR = v.r * 3;
+          ctx.drawImage(volcanoGlowTex, vx - glowR, vy - glowR, glowR * 2, glowR * 2);
         }
       }
 

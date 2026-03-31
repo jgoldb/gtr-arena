@@ -44,6 +44,8 @@ export interface CharacterStats {
     fartBomb?: SfxEntry;
     jimmyLegs?: SfxEntry;
     janitorsHelper?: SfxEntry;
+    sweepStart?: SfxEntry;
+    sweepSpin?: SfxEntry;
   };
 }
 
@@ -80,6 +82,8 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       fartBomb: { file: 'fart-bomb.ogg', volume: 3 },
       jimmyLegs: { file: 'jimmy-legs.ogg', volume: 3 },
       janitorsHelper: { file: 'janitors-helper.ogg', volume: 3 },
+      sweepStart: { file: 'sweep_1.ogg', volume: 3 },
+      sweepSpin: { file: 'sweep_2.wav', volume: 3 },
     },
   },
   'dr-retardo': {

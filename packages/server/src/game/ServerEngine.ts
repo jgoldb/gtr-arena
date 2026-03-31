@@ -1579,6 +1579,13 @@ export class ServerEngine {
         }
       }
 
+      // Broadcast sweep finish animation event
+      this.emitEvent({
+        type: 'ability_effect',
+        entityId: entity.id,
+        abilityId: 'sweep-finish',
+      } as S2C_AbilityEffect);
+
       // Re-engage auto-attack if we were auto-attacking before sweep
       const savedTarget = charge.savedAutoAttackTarget;
       if (savedTarget && !savedTarget.dead && savedTarget.isHostileTo(entity)) {

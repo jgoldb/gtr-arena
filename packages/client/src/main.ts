@@ -553,6 +553,8 @@ function showLobby(): void {
     localUserId = '';
     isAdmin = false;
     localXp = 0;
+    const lastUser = sessionStorage.getItem('gtr_username');
+    if (lastUser) localStorage.setItem('gtr_last_username', lastUser);
     sessionStorage.removeItem('gtr_username');
     sessionStorage.removeItem('gtr_password');
     showAuth();
@@ -1748,6 +1750,8 @@ function handleServerMessage(msg: ServerMessage): void {
       localUserId = '';
       isAdmin = false;
       localXp = 0;
+      const lastUser = sessionStorage.getItem('gtr_username');
+      if (lastUser) localStorage.setItem('gtr_last_username', lastUser);
       sessionStorage.removeItem('gtr_username');
       sessionStorage.removeItem('gtr_password');
       showAuth();
@@ -2442,7 +2446,11 @@ async function startPlayground(): Promise<void> {
       const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
       if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
     }
-    if (ability.id === 'sweep') engine.startSweepCharge();
+    if (ability.id === 'sweep') {
+      const sweepStartSfx = getCharacterSfx(engine.playerController.characterId)?.sweepStart;
+      if (sweepStartSfx) soundEffects.play(sweepStartSfx.url, undefined, undefined, sweepStartSfx.volume);
+      engine.startSweepCharge();
+    }
     if (ability.id === 'kaboom') engine.executeKaboom();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
     if (ability.id === 'crotch-rot') {
@@ -2952,7 +2960,11 @@ async function startUISetup(): Promise<void> {
       const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
       if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
     }
-    if (ability.id === 'sweep') engine.startSweepCharge();
+    if (ability.id === 'sweep') {
+      const sweepStartSfx = getCharacterSfx(engine.playerController.characterId)?.sweepStart;
+      if (sweepStartSfx) soundEffects.play(sweepStartSfx.url, undefined, undefined, sweepStartSfx.volume);
+      engine.startSweepCharge();
+    }
     if (ability.id === 'kaboom') engine.executeKaboom();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
     if (ability.id === 'crotch-rot') {

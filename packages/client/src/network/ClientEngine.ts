@@ -861,6 +861,12 @@ export class ClientEngine {
       if (msg.abilityId === 'janitors-helper' && sfx?.janitorsHelper) {
         soundEffects.play(sfx.janitorsHelper.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.janitorsHelper.volume, msg.entityId);
       }
+      if (msg.abilityId === 'sweep' && sfx?.sweepStart) {
+        soundEffects.play(sfx.sweepStart.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.sweepStart.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'sweep-finish' && sfx?.sweepSpin) {
+        soundEffects.play(sfx.sweepSpin.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.sweepSpin.volume, msg.entityId);
+      }
     }
     // Shared ability SFX (all characters)
     if (msg.abilityId === 'pvp-trinket') {
@@ -2162,6 +2168,9 @@ export class ClientEngine {
       this.sweepCharge.direction, this.sweepCharge.speed * dt
     );
     if (this.sweepCharge.elapsed >= this.sweepCharge.duration) {
+      // Trigger sweep finish spin animation + wind burst
+      this.playerController.triggerAbilityAnimation('sweep-finish');
+
       // Re-engage auto-attack if we were auto-attacking before sweep
       const targetId = this.sweepCharge.savedAutoAttackTargetId;
       if (targetId) {

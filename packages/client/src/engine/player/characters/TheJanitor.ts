@@ -45,6 +45,19 @@ export class TheJanitor extends CharacterModel {
   private declare smokeTime: number;
   private declare smokeLaunched: boolean;
 
+  // Wind burst particle state (Sweep finish)
+  private static readonly WIND_BURST_COUNT = 14;
+  private static readonly WIND_BURST_DURATION = 0.6;
+  private declare windBurstParticles: THREE.Mesh[];
+  private declare windBurstVelocities: THREE.Vector3[];
+  private declare windBurstMaterial: THREE.MeshStandardMaterial;
+  private declare windBurstActive: boolean;
+  private declare windBurstTime: number;
+  private declare windBurstLaunched: boolean;
+
+  // Sweep finish spin
+  private sweepFinishSpinAngle = 0;
+
   // Crash Out visual state
   private crashOutActive = false;
   private crashOutWeight = 0;
@@ -63,6 +76,7 @@ export class TheJanitor extends CharacterModel {
     this.buildRag();
     this.buildSplashDroplets();
     this.buildSmokePuffs();
+    this.buildWindBurstParticles();
   }
 
   // ── Head ───────────────────────────────────────────────
@@ -487,6 +501,64 @@ export class TheJanitor extends CharacterModel {
     this.smokeMaterial.opacity = 0.6;
   }
 
+  // ── Wind burst particles (Sweep finish) ────────────────
+
+  private buildWindBurstParticles(): void {
+    this.windBurstParticles = [];
+    this.windBurstVelocities = [];
+    this.windBurstActive = false;
+    this.windBurstTime = 0;
+    this.windBurstLaunched = false;
+
+    const geo = new THREE.SphereGeometry(0.06, 6, 6);
+    this.windBurstMaterial = new THREE.MeshStandardMaterial({
+      color: 0xddeeff,
+      roughness: 1.0,
+      metalness: 0,
+      transparent: true,
+      opacity: 0.5,
+    });
+
+    for (let i = 0; i < TheJanitor.WIND_BURST_COUNT; i++) {
+      const puff = new THREE.Mesh(geo, this.windBurstMaterial);
+      puff.castShadow = false;
+      puff.visible = false;
+      this.group.add(puff);
+      this.windBurstParticles.push(puff);
+      this.windBurstVelocities.push(new THREE.Vector3());
+    }
+  }
+
+  private launchWindBurst(): void {
+    this.windBurstLaunched = true;
+    this.windBurstActive = true;
+    this.windBurstTime = 0;
+
+    for (let i = 0; i < TheJanitor.WIND_BURST_COUNT; i++) {
+      const puff = this.windBurstParticles[i];
+      puff.visible = true;
+      puff.scale.setScalar(0.8 + Math.random() * 0.4);
+      // Position at chest/core level
+      puff.position.set(
+        (Math.random() - 0.5) * 0.1,
+        1.1 + (Math.random() - 0.5) * 0.1,
+        (Math.random() - 0.5) * 0.1,
+      );
+
+      // Burst outward in all directions (360°)
+      const angle = (i / TheJanitor.WIND_BURST_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+      const speed = 3.0 + Math.random() * 2.0;
+      const upSpeed = 0.3 + Math.random() * 0.6;
+      this.windBurstVelocities[i].set(
+        Math.cos(angle) * speed,
+        upSpeed,
+        Math.sin(angle) * speed,
+      );
+    }
+
+    this.windBurstMaterial.opacity = 0.5;
+  }
+
   // ── Character-specific animation ──────────────────────
 
   protected override onAnimate(dt: number, _input: AnimationInput): void {
@@ -549,6 +621,37 @@ export class TheJanitor extends CharacterModel {
       }
     }
 
+    // Update wind burst particles (Sweep finish)
+    if (this.windBurstActive) {
+      this.windBurstTime += dt;
+      const life = this.windBurstTime / TheJanitor.WIND_BURST_DURATION;
+
+      for (let i = 0; i < this.windBurstParticles.length; i++) {
+        const p = this.windBurstParticles[i];
+        if (!p.visible) continue;
+        p.position.addScaledVector(this.windBurstVelocities[i], dt);
+        // Expand as they travel outward
+        p.scale.multiplyScalar(1 + 2.5 * dt);
+        // Decelerate
+        this.windBurstVelocities[i].multiplyScalar(1 - 1.5 * dt);
+      }
+
+      this.windBurstMaterial.opacity = 0.5 * Math.max(0, 1 - life);
+
+      if (life >= 1) {
+        this.windBurstActive = false;
+        for (const p of this.windBurstParticles) p.visible = false;
+      }
+    }
+
+    // Apply sweep finish spin to group rotation
+    if (this.sweepFinishSpinAngle !== 0) {
+      if (this.abilityAnimId !== 'sweep-finish') {
+        this.sweepFinishSpinAngle = 0;
+      }
+      this.group.rotation.y = Math.PI + this.sweepFinishSpinAngle;
+    }
+
     // Crash Out visual: scale up + red tint
     const wantCrash = this.crashOutActive ? 1 : 0;
     this.crashOutWeight += (wantCrash - this.crashOutWeight) * Math.min(1, 8 * dt);
@@ -578,6 +681,7 @@ export class TheJanitor extends CharacterModel {
     if (abilityId === 'big-boot') return 0.55;
     if (abilityId === 'fart-bomb') return 0.6;
     if (abilityId === 'sweep') return 1.0;
+    if (abilityId === 'sweep-finish') return 0.8;
     if (abilityId === 'jimmy-legs') return 0.7;
     if (abilityId === 'janitors-helper') return 0.8;
     if (abilityId === 'pvp-trinket') return 0.5;
@@ -597,6 +701,8 @@ export class TheJanitor extends CharacterModel {
       this.animateCrashOut(t);
     } else if (abilityId === 'sweep') {
       this.animateSweep(t);
+    } else if (abilityId === 'sweep-finish') {
+      this.animateSweepFinish(t);
     } else if (abilityId === 'jimmy-legs') {
       this.animateJimmyLegs(t);
     } else if (abilityId === 'janitors-helper') {
@@ -883,6 +989,98 @@ export class TheJanitor extends CharacterModel {
     this.mopGroup.rotation.z = horizRotZ * mopBlend;
   }
 
+  private animateSweepFinish(t: number): void {
+    const baseRotX = TheJanitor.MOP_BASE_ROT_X;
+    const horizRotZ = -Math.PI / 2;
+
+    // Sweep charge pose (transitioning FROM at start)
+    const sweepLeftArmX = 1.4;
+    const sweepRightArmX = 0.8;
+    const sweepLeftArmZ = 0.3;
+    const sweepRightArmZ = -0.15;
+    const sweepBodyRotX = 0.25;
+    const sweepBodyY = -0.04;
+
+    // Overhead spin pose (transitioning TO)
+    const overLeftArmX = -1.6;
+    const overRightArmX = -1.8;
+    const overLeftArmZ = 0.4;
+    const overRightArmZ = -0.2;
+    const overBodyY = 0.04;
+
+    let leftArmX: number;
+    let rightArmX: number;
+    let leftArmZ: number;
+    let rightArmZ: number;
+    let bodyRotX: number;
+    let bodyY: number;
+    let mopBlend: number;
+    let spinAngle: number;
+
+    if (t < 0.12) {
+      // Transition from sweep charge pose to overhead
+      this.windBurstLaunched = false;
+      const p = t / 0.12;
+      const ease = p * p * (3 - 2 * p);
+
+      leftArmX = sweepLeftArmX + (overLeftArmX - sweepLeftArmX) * ease;
+      rightArmX = sweepRightArmX + (overRightArmX - sweepRightArmX) * ease;
+      leftArmZ = sweepLeftArmZ + (overLeftArmZ - sweepLeftArmZ) * ease;
+      rightArmZ = sweepRightArmZ + (overRightArmZ - sweepRightArmZ) * ease;
+      bodyRotX = sweepBodyRotX * (1 - ease);
+      bodyY = sweepBodyY + (overBodyY - sweepBodyY) * ease;
+      mopBlend = 1;
+      spinAngle = 0;
+      this.bucketGroup.visible = false;
+    } else if (t < 0.80) {
+      // Spin: 2 full rotations with mop overhead
+      const spinT = (t - 0.12) / (0.80 - 0.12);
+
+      leftArmX = overLeftArmX;
+      rightArmX = overRightArmX;
+      leftArmZ = overLeftArmZ;
+      rightArmZ = overRightArmZ;
+      bodyRotX = 0;
+      bodyY = overBodyY;
+      mopBlend = 1;
+      spinAngle = spinT * Math.PI * 4;
+      this.bucketGroup.visible = false;
+
+      // Launch wind burst at start of spin
+      if (!this.windBurstLaunched && spinT > 0.05) {
+        this.launchWindBurst();
+      }
+    } else {
+      // Recovery: arms come down, return to normal
+      const p = (t - 0.80) / 0.20;
+      const ease = p * p * (3 - 2 * p);
+
+      leftArmX = overLeftArmX * (1 - ease);
+      rightArmX = overRightArmX * (1 - ease);
+      leftArmZ = overLeftArmZ * (1 - ease);
+      rightArmZ = overRightArmZ * (1 - ease);
+      bodyRotX = 0;
+      bodyY = overBodyY * (1 - ease);
+      mopBlend = 1 - ease;
+      spinAngle = Math.PI * 4; // 2 full rotations = visually same as 0
+      this.bucketGroup.visible = ease > 0.5;
+    }
+
+    this.leftArmGroup.rotation.x += leftArmX;
+    this.rightArmGroup.rotation.x += rightArmX;
+    this.leftArmGroup.rotation.z += leftArmZ;
+    this.rightArmGroup.rotation.z += rightArmZ;
+    this.bodyGroup.rotation.x += bodyRotX;
+    this.bodyGroup.position.y += bodyY;
+
+    // Mop horizontal overhead position
+    this.mopGroup.rotation.x = baseRotX + (0 - baseRotX) * mopBlend;
+    this.mopGroup.rotation.z = horizRotZ * mopBlend;
+
+    // Store spin for application in onAnimate
+    this.sweepFinishSpinAngle = spinAngle;
+  }
+
   private animateJimmyLegs(t: number): void {
     const baseRotX = TheJanitor.MOP_BASE_ROT_X;
     // Target mop angle: more vertical so the head reaches down toward feet
@@ -1128,8 +1326,12 @@ export class TheJanitor extends CharacterModel {
     this.mopGroup.rotation.z = 0;
     this.ragGroup.visible = false;
     this.smokeActive = false;
+    this.windBurstActive = false;
+    this.sweepFinishSpinAngle = 0;
+    this.group.rotation.y = Math.PI;
     for (const d of this.splashDroplets) d.visible = false;
     for (const p of this.smokePuffs) p.visible = false;
+    for (const p of this.windBurstParticles) p.visible = false;
     // Reset crash out visual
     this.crashOutActive = false;
     this.crashOutWeight = 0;
