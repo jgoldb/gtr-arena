@@ -44,6 +44,7 @@ export class GameLobbyScreen {
   private charNameEl: HTMLDivElement;
   private charRoleEl: HTMLDivElement;
   private charStatsEl: HTMLDivElement;
+  private playgroundWarningEl: HTMLDivElement;
   private animFrameId = 0;
 
   private hostUserId = '';
@@ -51,6 +52,8 @@ export class GameLobbyScreen {
   private mapId = '';
   private mapName = '';
   private players: GameLobbyPlayer[] = [];
+  /** Locally-previewed playground-only character (not sent to server). */
+  private previewOnlyCharId: CharacterId | null = null;
 
   // Format/map selection elements
   private formatBtns: HTMLButtonElement[] = [];
@@ -96,9 +99,7 @@ export class GameLobbyScreen {
       .glby-btn:hover { filter: brightness(1.3); transform: translateY(-1px); }
       .glby-btn:active { transform: translateY(0); }
       .glby-char-card { transition: all 0.2s ease; position: relative; }
-      .glby-char-card:not(.glby-disabled):hover { transform: translateY(-3px); background: rgba(30,40,65,0.95) !important; border-color: rgba(100,140,220,0.4) !important; box-shadow: 0 8px 24px rgba(0,0,0,0.4), 0 0 20px rgba(80,120,220,0.1) !important; }
-      .glby-char-card.glby-disabled { opacity: 0.45; cursor: default !important; filter: grayscale(0.6); }
-      .glby-char-card.glby-disabled:hover { transform: none !important; }
+      .glby-char-card:hover { transform: translateY(-3px); background: rgba(30,40,65,0.95) !important; border-color: rgba(100,140,220,0.4) !important; box-shadow: 0 8px 24px rgba(0,0,0,0.4), 0 0 20px rgba(80,120,220,0.1) !important; }
       .glby-scrollbar::-webkit-scrollbar { width: 5px; }
       .glby-scrollbar::-webkit-scrollbar-track { background: transparent; }
       .glby-scrollbar::-webkit-scrollbar-thumb { background: rgba(100,120,200,0.2); border-radius: 3px; }
@@ -154,11 +155,11 @@ export class GameLobbyScreen {
       gap: 10px; align-content: start; padding: 4px 4px 4px 0;
     `;
 
-    // Render all characters — playgroundOnly ones are disabled
+    // Render all characters — playgroundOnly ones are selectable for preview but can't lock in
     for (const char of CHARACTER_LIST) {
       const isDisabled = !!char.playgroundOnly;
       const card = document.createElement('div');
-      card.className = `glby-char-card${isDisabled ? ' glby-disabled' : ''}`;
+      card.className = 'glby-char-card';
       card.style.cssText = `
         padding: 14px 12px; border-radius: 8px; cursor: pointer; text-align: center;
         background: rgba(12,15,28,0.85);
@@ -212,11 +213,18 @@ export class GameLobbyScreen {
       }
 
       card.dataset.charId = char.id;
-      if (!isDisabled) {
-        card.addEventListener('click', () => {
+      card.addEventListener('click', () => {
+        if (char.playgroundOnly) {
+          // Preview-only: set locally without telling the server (no-op if already selected)
+          if (this.previewOnlyCharId === char.id) return;
+          this.previewOnlyCharId = char.id as CharacterId;
+          this.refreshLocalPreview();
+        } else {
+          // Real selection: send to server, clear any playground preview
+          this.previewOnlyCharId = null;
           this.network.send({ type: 'select_character', characterId: char.id as any });
-        });
-      }
+        }
+      });
       this.charGridEl.appendChild(card);
     }
 
@@ -416,7 +424,7 @@ export class GameLobbyScreen {
     this.previewScene.add(rimLight);
 
     this.previewCamera = new THREE.PerspectiveCamera(30, 400 / 440, 0.1, 20);
-    this.previewCamera.position.set(0, 0.9, 3.8);
+    this.previewCamera.position.set(0, 1.0, 4.6);
     this.previewCamera.lookAt(0, 0.9, 0);
 
     this.lastPreviewTime = performance.now();
@@ -456,9 +464,20 @@ export class GameLobbyScreen {
     `;
     rightPanel.appendChild(this.playersEl);
 
+    // ── Playground-only warning ────────────────────────────────────
+    this.playgroundWarningEl = document.createElement('div');
+    this.playgroundWarningEl.textContent = 'This character is not yet available in multiplayer.';
+    this.playgroundWarningEl.style.cssText = `
+      display: none; text-align: center; font-size: 11px; font-weight: 500;
+      color: #e05050; margin-top: 16px; padding: 6px 10px;
+      background: rgba(224,80,80,0.08); border-radius: 5px;
+      border: 1px solid rgba(224,80,80,0.15);
+    `;
+    rightPanel.appendChild(this.playgroundWarningEl);
+
     // ── Buttons ─────────────────────────────────────────────────────
     const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display: flex; gap: 10px; margin-top: 20px;';
+    btnRow.style.cssText = 'display: flex; gap: 10px; margin-top: 10px;';
 
     this.leaveBtn = document.createElement('button');
     this.leaveBtn.className = 'glby-btn';
@@ -616,18 +635,22 @@ export class GameLobbyScreen {
       btn.style.cursor = isHost ? 'pointer' : 'default';
     }
 
-    // Highlight selected character + update 3D preview + info
+    // Determine what to preview: playground-only local pick overrides server selection
     const localPlayer = this.players.find(p => p.userId === this.localUserId);
-    const selectedCharId = (localPlayer?.characterId as CharacterId) ?? null;
-    this.setPreviewCharacter(selectedCharId);
-    this.updateCharInfo(selectedCharId);
+    const serverCharId = (localPlayer?.characterId as CharacterId) ?? null;
+    // If the server just confirmed a real selection, clear any playground preview
+    if (serverCharId && !CHARACTER_LIST.find(c => c.id === serverCharId)?.playgroundOnly) {
+      this.previewOnlyCharId = null;
+    }
+    const displayCharId = this.previewOnlyCharId ?? serverCharId;
+    this.setPreviewCharacter(displayCharId);
+    this.updateCharInfo(displayCharId);
 
+    // Highlight the displayed character card
     const cards = this.charGridEl.children;
     for (let i = 0; i < cards.length; i++) {
       const card = cards[i] as HTMLElement;
-      const isSelected = card.dataset.charId === localPlayer?.characterId;
-      const isDisabled = card.classList.contains('glby-disabled');
-      if (isDisabled) continue;
+      const isSelected = card.dataset.charId === displayCharId;
       if (isSelected) {
         card.style.borderColor = 'rgba(100,200,140,0.5)';
         card.style.background = 'rgba(20,40,30,0.85)';
@@ -639,8 +662,12 @@ export class GameLobbyScreen {
       }
     }
 
-    // Update lock-in button state
-    const canLockIn = !!localPlayer?.characterId && !localPlayer?.lockedIn;
+    // Show warning & disable lock-in when previewing a playground-only character
+    const isPlaygroundOnly = !!this.previewOnlyCharId;
+    this.playgroundWarningEl.style.display = isPlaygroundOnly ? 'block' : 'none';
+
+    // Update lock-in button state — based on server selection, not local preview
+    const canLockIn = !!serverCharId && !localPlayer?.lockedIn && !isPlaygroundOnly;
     this.lockInBtn.disabled = !canLockIn;
     this.lockInBtn.style.opacity = canLockIn ? '1' : '0.4';
     this.lockInBtn.style.pointerEvents = canLockIn ? 'auto' : 'none';
@@ -737,8 +764,9 @@ export class GameLobbyScreen {
         const leftSide = document.createElement('div');
         leftSide.style.cssText = 'display: flex; align-items: center; gap: 8px; min-width: 0;';
 
-        // Character portrait (or initial fallback)
-        const charInfo = CHARACTER_LIST.find(c => c.id === p.characterId);
+        // Character portrait (or initial fallback) — hide playground-only selections
+        const rawCharInfo = CHARACTER_LIST.find(c => c.id === p.characterId);
+        const charInfo = rawCharInfo?.playgroundOnly ? undefined : rawCharInfo;
         const portraitUrl = charInfo ? this.getPortrait(charInfo.name) : undefined;
         const avatar = document.createElement('div');
         avatar.style.cssText = `
@@ -786,7 +814,7 @@ export class GameLobbyScreen {
           nameRow.appendChild(crownSvg);
         }
 
-        const charName = CHARACTER_LIST.find(c => c.id === p.characterId)?.name ?? '—';
+        const charName = charInfo?.name ?? '—';
         const charSpan = document.createElement('div');
         charSpan.textContent = charName;
         charSpan.style.cssText = 'font-size: 11px; color: rgba(140,150,180,0.5);';
@@ -873,6 +901,42 @@ export class GameLobbyScreen {
     }
   }
 
+  /** Re-run preview/card/warning visuals after a local playground-only toggle. */
+  private refreshLocalPreview(): void {
+    const localPlayer = this.players.find(p => p.userId === this.localUserId);
+    const serverCharId = (localPlayer?.characterId as CharacterId) ?? null;
+    const displayCharId = this.previewOnlyCharId ?? serverCharId;
+
+    this.setPreviewCharacter(displayCharId);
+    this.updateCharInfo(displayCharId);
+
+    // Re-highlight cards
+    const cards = this.charGridEl.children;
+    for (let i = 0; i < cards.length; i++) {
+      const card = cards[i] as HTMLElement;
+      const isSelected = card.dataset.charId === displayCharId;
+      if (isSelected) {
+        card.style.borderColor = 'rgba(100,200,140,0.5)';
+        card.style.background = 'rgba(20,40,30,0.85)';
+        card.style.boxShadow = '0 0 15px rgba(100,200,140,0.1), inset 0 0 20px rgba(100,200,140,0.05)';
+      } else {
+        card.style.borderColor = 'rgba(100,120,200,0.08)';
+        card.style.background = 'rgba(12,15,28,0.85)';
+        card.style.boxShadow = 'none';
+      }
+    }
+
+    // Warning + lock-in state
+    const isPlaygroundOnly = !!this.previewOnlyCharId;
+    this.playgroundWarningEl.style.display = isPlaygroundOnly ? 'block' : 'none';
+
+    const canLockIn = !!serverCharId && !localPlayer?.lockedIn && !isPlaygroundOnly;
+    this.lockInBtn.disabled = !canLockIn;
+    this.lockInBtn.style.opacity = canLockIn ? '1' : '0.4';
+    this.lockInBtn.style.pointerEvents = canLockIn ? 'auto' : 'none';
+    this.lockInBtn.style.animation = canLockIn ? 'glby-glow-pulse 2s ease-in-out infinite' : 'none';
+  }
+
   // ── 3D Character preview ──────────────────────────────────────────
 
   private setPreviewCharacter(charId: CharacterId | null): void {
@@ -895,6 +959,7 @@ export class GameLobbyScreen {
     }
 
     const model = createCharacter(charId);
+    if (charId === 'rabbi-zehnwirth') model.group.position.y = -0.25;
     this.previewScene.add(model.group);
     this.previewModel = model;
     this.previewCanvas.style.cursor = 'grab';
