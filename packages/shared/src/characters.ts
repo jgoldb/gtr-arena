@@ -49,6 +49,11 @@ export interface CharacterStats {
     sweepStart?: SfxEntry;
     sweepSpin?: SfxEntry;
     discombobulate?: SfxEntry;
+    chemicalSpill?: SfxEntry;
+    retardStrength?: SfxEntry;
+    fullRetard?: SfxEntry;
+    crotchRot?: SfxEntry;
+    kaboom?: SfxEntry;
   };
 }
 
@@ -108,6 +113,11 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       autoAttackHit2: { file: 'auto-attack2.ogg', volume: 3 },
       bottleChuck: { file: 'bottle-chuck.ogg', volume: 3 },
       discombobulate: { file: 'discombobulate.ogg', volume: 2 },
+      chemicalSpill: { file: 'chemical-spill.ogg', volume: 3 },
+      retardStrength: { file: 'retard-strength.ogg', volume: 3 },
+      fullRetard: { file: 'full-retard.ogg', volume: 3 },
+      crotchRot: { file: 'crotch-rot.ogg', volume: 3 },
+      kaboom: { file: 'kaboom.ogg', volume: 3 },
     },
   },
   'crackhead': {

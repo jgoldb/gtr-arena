@@ -134,6 +134,7 @@ export class Engine {
   private bandageHealVisual: BandageHealVisual | null = null;
   private bandageLoopHandle: LoopHandle | null = null;
   private castSpellLoopHandle: LoopHandle | null = null;
+  private fullRetardLoopHandle: LoopHandle | null = null;
   private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
@@ -1005,6 +1006,8 @@ export class Engine {
     }
     if (definition.id === 'crotch-rot') {
       this.buffSystem.apply(target, RottenCrotchStun);
+      const struckSfx = getCharacterSfx(target.characterId)?.struck;
+      if (struckSfx) soundEffects.play(struckSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), struckSfx.volume, target.mesh.uuid);
     }
     if (definition.id === 'overdosing') {
       this.buffSystem.apply(target, ODStunDebuff);
@@ -1154,12 +1157,20 @@ export class Engine {
       elapsed: 0,
       nextTickAt: 1,
     };
+
+    // Start looping SFX
+    const frSfx = getCharacterSfx(this.playerController.characterId)?.fullRetard;
+    if (frSfx) this.fullRetardLoopHandle = soundEffects.playLoop(frSfx.url, undefined, undefined, frSfx.volume);
   }
 
   private cleanupFullRetardFumes(): void {
     if (!this.fullRetardAura) return;
     disposeGroup(this.scene, this.fullRetardAura.group);
     this.fullRetardAura = null;
+    if (this.fullRetardLoopHandle) {
+      this.fullRetardLoopHandle.stop();
+      this.fullRetardLoopHandle = null;
+    }
   }
 
   private updateFullRetardAura(dt: number): void {

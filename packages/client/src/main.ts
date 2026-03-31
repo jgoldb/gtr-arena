@@ -2518,9 +2518,23 @@ async function startPlayground(): Promise<void> {
         soundEffects.play(discSfx.url, dist, pan, discSfx.volume);
       }
     }
-    if (ability.id === 'kaboom') engine.executeKaboom();
-    if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
+    if (ability.id === 'kaboom') {
+      const kaboomSfx = getCharacterSfx(engine.playerController.characterId)?.kaboom;
+      if (kaboomSfx) soundEffects.play(kaboomSfx.url, undefined, undefined, kaboomSfx.volume);
+      engine.executeKaboom();
+    }
+    if (ability.id === 'chemical-spill') {
+      const csSfx = getCharacterSfx(engine.playerController.characterId)?.chemicalSpill;
+      if (csSfx) soundEffects.play(csSfx.url, undefined, undefined, csSfx.volume);
+      engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
+    }
+    if (ability.id === 'retard-strength') {
+      const rsSfx = getCharacterSfx(engine.playerController.characterId)?.retardStrength;
+      if (rsSfx) soundEffects.play(rsSfx.url, undefined, undefined, rsSfx.volume);
+    }
     if (ability.id === 'crotch-rot') {
+      const crSfx = getCharacterSfx(engine.playerController.characterId)?.crotchRot;
+      if (crSfx) soundEffects.play(crSfx.url, undefined, undefined, crSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target && !target.dead) {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
@@ -3040,9 +3054,23 @@ async function startUISetup(): Promise<void> {
         soundEffects.play(discSfx.url, dist, pan, discSfx.volume);
       }
     }
-    if (ability.id === 'kaboom') engine.executeKaboom();
-    if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
+    if (ability.id === 'kaboom') {
+      const kaboomSfx = getCharacterSfx(engine.playerController.characterId)?.kaboom;
+      if (kaboomSfx) soundEffects.play(kaboomSfx.url, undefined, undefined, kaboomSfx.volume);
+      engine.executeKaboom();
+    }
+    if (ability.id === 'chemical-spill') {
+      const csSfx = getCharacterSfx(engine.playerController.characterId)?.chemicalSpill;
+      if (csSfx) soundEffects.play(csSfx.url, undefined, undefined, csSfx.volume);
+      engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
+    }
+    if (ability.id === 'retard-strength') {
+      const rsSfx = getCharacterSfx(engine.playerController.characterId)?.retardStrength;
+      if (rsSfx) soundEffects.play(rsSfx.url, undefined, undefined, rsSfx.volume);
+    }
     if (ability.id === 'crotch-rot') {
+      const crSfx = getCharacterSfx(engine.playerController.characterId)?.crotchRot;
+      if (crSfx) soundEffects.play(crSfx.url, undefined, undefined, crSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target && !target.dead) {
         engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);

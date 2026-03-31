@@ -173,6 +173,8 @@ export class ClientEngine {
   private bandageLoops = new Map<string, LoopHandle>();
   // Dr. Retardo cast-spell loop SFX (keyed by entity ID)
   private castSpellLoops = new Map<string, LoopHandle>();
+  // Full Retard looping SFX (keyed by entity ID)
+  private fullRetardLoops = new Map<string, LoopHandle>();
 
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
@@ -721,7 +723,13 @@ export class ClientEngine {
         const oldIds = new Set(this.localBuffs.map(b => b.id));
         const newIds = new Set(buffSnap.buffs.map(b => b.id));
         for (const b of buffSnap.buffs) {
-          if (!oldIds.has(b.id)) this.onBuffApplied?.(buffSnap.entityId, b);
+          if (!oldIds.has(b.id)) {
+            this.onBuffApplied?.(buffSnap.entityId, b);
+            if (b.id === 'rotten-crotch') {
+              const struckSfx = getCharacterSfx(this.playerController.characterId)?.struck;
+              if (struckSfx) soundEffects.play(struckSfx.url, undefined, undefined, struckSfx.volume);
+            }
+          }
         }
         for (const b of this.localBuffs) {
           if (!newIds.has(b.id)) this.onBuffExpired?.(buffSnap.entityId, b);
@@ -756,6 +764,11 @@ export class ClientEngine {
       }
       const entity = this.remoteEntities.get(buffSnap.entityId);
       if (entity) {
+        // Detect rotten-crotch application for struck SFX
+        if (buffSnap.buffs.some(b => b.id === 'rotten-crotch') && !entity.buffs.some(b => b.id === 'rotten-crotch')) {
+          const struckSfx = getCharacterSfx(entity.characterId)?.struck;
+          if (struckSfx) soundEffects.play(struckSfx.url, this.distToEntity(entity.id), this.panToEntity(entity.id), struckSfx.volume, entity.id);
+        }
         entity.buffs = buffSnap.buffs;
         entity.drTimers = buffSnap.drTimers;
         const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
@@ -892,6 +905,19 @@ export class ClientEngine {
       if (msg.abilityId === 'discombobulate' && sfx?.discombobulate) {
         const spatialId = msg.targetId ?? msg.entityId;
         soundEffects.play(sfx.discombobulate.url, this.distToEntity(spatialId), this.panToEntity(spatialId), sfx.discombobulate.volume, spatialId);
+      }
+      if (msg.abilityId === 'chemical-spill' && sfx?.chemicalSpill) {
+        soundEffects.play(sfx.chemicalSpill.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.chemicalSpill.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'retard-strength' && sfx?.retardStrength) {
+        soundEffects.play(sfx.retardStrength.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.retardStrength.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'crotch-rot' && sfx?.crotchRot) {
+        const spatialId = msg.targetId ?? msg.entityId;
+        soundEffects.play(sfx.crotchRot.url, this.distToEntity(spatialId), this.panToEntity(spatialId), sfx.crotchRot.volume, spatialId);
+      }
+      if (msg.abilityId === 'kaboom' && sfx?.kaboom) {
+        soundEffects.play(sfx.kaboom.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.kaboom.volume, msg.entityId);
       }
     }
     // Shared ability SFX (all characters)
@@ -2360,6 +2386,12 @@ export class ClientEngine {
         const pos = this.playerController.mesh.position;
         const visual = createFullRetardAura(this.scene, pos.x, pos.z, this.playerController.autoAttackRange);
         this.fullRetardAuras.set(this.localEntityId, { ...visual, elapsed: 0 });
+        // Start looping SFX
+        const frSfx = getCharacterSfx(this.playerController.characterId)?.fullRetard;
+        if (frSfx) {
+          const handle = soundEffects.playLoop(frSfx.url, undefined, undefined, frSfx.volume, this.localEntityId);
+          if (handle) this.fullRetardLoops.set(this.localEntityId, handle);
+        }
       }
     }
 
@@ -2370,6 +2402,12 @@ export class ClientEngine {
         if (!this.fullRetardAuras.has(entity.id)) {
           const visual = createFullRetardAura(this.scene, entity.mesh.position.x, entity.mesh.position.z, 1.5);
           this.fullRetardAuras.set(entity.id, { ...visual, elapsed: 0 });
+          // Start looping SFX
+          const frSfx = getCharacterSfx(entity.characterId)?.fullRetard;
+          if (frSfx) {
+            const handle = soundEffects.playLoop(frSfx.url, this.distToEntity(entity.id), this.panToEntity(entity.id), frSfx.volume, entity.id);
+            if (handle) this.fullRetardLoops.set(entity.id, handle);
+          }
         }
       }
     }
@@ -2379,6 +2417,9 @@ export class ClientEngine {
       if (!activeIds.has(entityId)) {
         disposeGroup(this.scene, aura.group);
         this.fullRetardAuras.delete(entityId);
+        // Stop looping SFX
+        const loop = this.fullRetardLoops.get(entityId);
+        if (loop) { loop.stop(); this.fullRetardLoops.delete(entityId); }
         continue;
       }
 
@@ -2489,6 +2530,8 @@ export class ClientEngine {
     this.bandageLoops.clear();
     for (const handle of this.castSpellLoops.values()) handle.stop();
     this.castSpellLoops.clear();
+    for (const handle of this.fullRetardLoops.values()) handle.stop();
+    this.fullRetardLoops.clear();
     this.input.dispose();
     this.targetingSystem.dispose();
     this.mapManager.dispose();

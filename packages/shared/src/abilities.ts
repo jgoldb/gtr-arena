@@ -445,6 +445,7 @@ export const Discombobulate: Ability = {
   castTime: 1.5,
   damage: 0,
   requiresHostileTarget: true,
+  requiresFacing: false,
   description:
     "Confuse the enemy target, causing them to lose control of their character's movement for 5 seconds.",
   appliesDebuff: DiscombobulateDebuff,
@@ -517,6 +518,7 @@ export const CrotchRot: Ability = {
   castTime: 0.5,
   damage: 0,
   requiresHostileTarget: true,
+  requiresFacing: false,
   description:
     'Deals 540 damage over 9 seconds. Stuns for 2 seconds when effect ends.',
   appliesDebuff: CrotchRotDot,
