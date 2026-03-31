@@ -135,6 +135,7 @@ export class Engine {
   private bandageLoopHandle: LoopHandle | null = null;
   private castSpellLoopHandle: LoopHandle | null = null;
   private fullRetardLoopHandle: LoopHandle | null = null;
+  private odLoopHandle: LoopHandle | null = null;
   private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
@@ -326,6 +327,14 @@ export class Engine {
         const jimmyLegsSfx = getCharacterSfx(attacker.characterId)?.jimmyLegs;
         if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), jimmyLegsSfx.volume, attacker.mesh.uuid);
       }
+      if (abilityId === 'shank') {
+        const shankSfx = getCharacterSfx(attacker.characterId)?.shank;
+        if (shankSfx) soundEffects.play(shankSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), shankSfx.volume, attacker.mesh.uuid);
+      }
+      if (abilityId === 'gank') {
+        const gankSfx = getCharacterSfx(attacker.characterId)?.gank;
+        if (gankSfx) soundEffects.play(gankSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), gankSfx.volume, attacker.mesh.uuid);
+      }
     };
 
     // Auto-target attacker when player has no target (not while blinded)
@@ -341,6 +350,8 @@ export class Engine {
 
     // Preload combat sound effects
     soundEffects.init();
+
+    this.setupDumpsterDiveSfx();
 
     // Fall damage (WoW-style: no damage below threshold, then scales with distance)
     this.playerController.onFallDamage = (fallDistance: number) => {
@@ -426,6 +437,16 @@ export class Engine {
     this.applyStartingBuffs();
   }
 
+  private setupDumpsterDiveSfx(): void {
+    if ('onDumpsterEmerge' in this.playerController.model) {
+      (this.playerController.model as any).onDumpsterEmerge = (phase: 1 | 2) => {
+        const sfx = getCharacterSfx(this.playerController.characterId);
+        const entry = phase === 1 ? sfx?.dumpsterDive1 : sfx?.dumpsterDive2;
+        if (entry) soundEffects.play(entry.url, 0, 0, entry.volume);
+      };
+    }
+  }
+
   setCharacter(id: CharacterId): void {
     this.stopResting();
     this.stopAutoAttack();
@@ -434,6 +455,7 @@ export class Engine {
     this.combatSystem.leaveCombat(this.playerController);
     this.combatSystem.clearCooldowns();
     this.playerController.setCharacter(id);
+    this.setupDumpsterDiveSfx();
     this.playerController.dead = false;
     if (this.arenaPreparationActive) {
       this.buffSystem.apply(this.playerController, ArenaPreparationBuff);
@@ -1011,6 +1033,9 @@ export class Engine {
     }
     if (definition.id === 'overdosing') {
       this.buffSystem.apply(target, ODStunDebuff);
+      this.stopODLoop();
+      const struckSfx = getCharacterSfx(target.characterId)?.struck;
+      if (struckSfx) soundEffects.play(struckSfx.url, this.playerController.mesh.position.distanceTo(target.mesh.position), this.sfxPan(target.mesh.position), struckSfx.volume, target.mesh.uuid);
     }
     if (definition.id === 'od-stun') {
       // Set Tweaking to 100 stacks
@@ -1170,6 +1195,28 @@ export class Engine {
     if (this.fullRetardLoopHandle) {
       this.fullRetardLoopHandle.stop();
       this.fullRetardLoopHandle = null;
+    }
+  }
+
+  private startODLoop(): void {
+    if (this.odLoopHandle) return;
+    const odSfx = getCharacterSfx(this.playerController.characterId)?.od;
+    if (odSfx) this.odLoopHandle = soundEffects.playLoop(odSfx.url, undefined, undefined, odSfx.volume);
+  }
+
+  private stopODLoop(): void {
+    if (this.odLoopHandle) {
+      this.odLoopHandle.stop();
+      this.odLoopHandle = null;
+    }
+  }
+
+  private updateODLoop(): void {
+    const hasBuff = this.buffSystem.hasBuff(this.playerController, 'overdosing');
+    if (hasBuff && !this.odLoopHandle) {
+      this.startODLoop();
+    } else if (!hasBuff && this.odLoopHandle) {
+      this.stopODLoop();
     }
   }
 
@@ -2093,6 +2140,7 @@ export class Engine {
     this.updatePendingAoeImpacts(deltaTime);
     this.updateKnockbacks(deltaTime);
     this.updateFullRetardAura(deltaTime);
+    this.updateODLoop();
     this.updateCrotchRotVisuals(deltaTime);
     this.updateDiscombobEffects(deltaTime);
     this.updateChannelBeam();
@@ -2143,6 +2191,7 @@ export class Engine {
     }
     this.stopBandageLoop();
     this.stopCastSpellLoop();
+    this.stopODLoop();
     this.mapManager.dispose();
     this.playerController.dispose();
     this.renderer.dispose();

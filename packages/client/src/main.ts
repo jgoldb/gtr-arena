@@ -2505,6 +2505,10 @@ async function startPlayground(): Promise<void> {
       const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
       if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
     }
+    if (ability.id === 'pocket-sand') {
+      const psSfx = getCharacterSfx(engine.playerController.characterId)?.pocketSand;
+      if (psSfx) soundEffects.play(psSfx.url, undefined, undefined, psSfx.volume);
+    }
     if (ability.id === 'sweep') {
       const sweepStartSfx = getCharacterSfx(engine.playerController.characterId)?.sweepStart;
       if (sweepStartSfx) soundEffects.play(sweepStartSfx.url, undefined, undefined, sweepStartSfx.volume);
@@ -2547,6 +2551,8 @@ async function startPlayground(): Promise<void> {
       }
     }
     if (ability.id === 'crack-rock') {
+      const crackRockSfx = getCharacterSfx(engine.playerController.characterId)?.crackRock;
+      if (crackRockSfx) soundEffects.play(crackRockSfx.url, undefined, undefined, crackRockSfx.volume);
       engine.combatSystem.applyHeal(engine.playerController, 400);
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
       if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
@@ -2560,12 +2566,16 @@ async function startPlayground(): Promise<void> {
       }
     }
     if (ability.id === 'tweaker-sprint') {
+      const tsSfx = getCharacterSfx(engine.playerController.characterId)?.tweakerSprint;
+      if (tsSfx) soundEffects.play(tsSfx.url, undefined, undefined, tsSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target && !target.dead) {
         engine.startTweakerSprintCharge(target);
       }
     }
     if (ability.id === 'sticky-fingers') {
+      const sfSfx = getCharacterSfx(engine.playerController.characterId)?.stickyFingers;
+      if (sfSfx) soundEffects.play(sfSfx.url, undefined, undefined, sfSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target) {
         const stealable = engine.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
@@ -3041,6 +3051,10 @@ async function startUISetup(): Promise<void> {
       const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
       if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
     }
+    if (ability.id === 'pocket-sand') {
+      const psSfx = getCharacterSfx(engine.playerController.characterId)?.pocketSand;
+      if (psSfx) soundEffects.play(psSfx.url, undefined, undefined, psSfx.volume);
+    }
     if (ability.id === 'sweep') {
       const sweepStartSfx = getCharacterSfx(engine.playerController.characterId)?.sweepStart;
       if (sweepStartSfx) soundEffects.play(sweepStartSfx.url, undefined, undefined, sweepStartSfx.volume);
@@ -3083,6 +3097,8 @@ async function startUISetup(): Promise<void> {
       }
     }
     if (ability.id === 'crack-rock') {
+      const crackRockSfx = getCharacterSfx(engine.playerController.characterId)?.crackRock;
+      if (crackRockSfx) soundEffects.play(crackRockSfx.url, undefined, undefined, crackRockSfx.volume);
       engine.combatSystem.applyHeal(engine.playerController, 400);
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
       if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
@@ -3096,12 +3112,16 @@ async function startUISetup(): Promise<void> {
       }
     }
     if (ability.id === 'tweaker-sprint') {
+      const tsSfx = getCharacterSfx(engine.playerController.characterId)?.tweakerSprint;
+      if (tsSfx) soundEffects.play(tsSfx.url, undefined, undefined, tsSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target && !target.dead) {
         engine.startTweakerSprintCharge(target);
       }
     }
     if (ability.id === 'sticky-fingers') {
+      const sfSfx = getCharacterSfx(engine.playerController.characterId)?.stickyFingers;
+      if (sfSfx) soundEffects.play(sfSfx.url, undefined, undefined, sfSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target) {
         const stealable = engine.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
