@@ -656,7 +656,7 @@ export class ServerEngine {
   // skip distance validation (handles reconnects, knockbacks, etc.).
   private static readonly VALIDATION_GAP_THRESHOLD = 0.5; // 500ms
 
-  updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean, vx: number, vz: number, moveFlags?: number, moveSpeed?: number, vy?: number, turnSpeed?: number): void {
+  updateEntityPosition(entityId: string, x: number, y: number, z: number, rotationY: number, isMoving: boolean, vx: number, vz: number, moveFlags?: number, moveSpeed?: number, vy?: number, turnSpeed?: number, grounded?: boolean): void {
     const entity = this.getEntity(entityId);
     if (!entity || entity.dead || this.frozenEntities.has(entityId)) return;
     // During a charge, the server is authoritative about position — ignore client updates
@@ -711,6 +711,7 @@ export class ServerEngine {
     if (moveSpeed !== undefined) entity.moveSpeed = moveSpeed;
     if (vy !== undefined) entity.vy = vy;
     if (turnSpeed !== undefined) entity.turnSpeed = turnSpeed;
+    if (grounded !== undefined) entity.grounded = grounded;
     if (isMoving) this.cancelResting(entityId);
 
     // Immediately relay to other clients for low-latency dead reckoning.
@@ -1224,7 +1225,7 @@ export class ServerEngine {
       this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Already casting' });
       return;
     }
-    if (entity.isMoving) {
+    if (entity.isMoving || !entity.grounded) {
       this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Cannot cast while moving' });
       return;
     }
@@ -1340,8 +1341,8 @@ export class ServerEngine {
 
     casting.elapsed += dt;
 
-    // Cancel if dead, stunned, or moving
-    if (entity.dead || entity.stunned || entity.isMoving) {
+    // Cancel if dead, stunned, moving, or falling
+    if (entity.dead || entity.stunned || entity.isMoving || !entity.grounded) {
       this.cancelCasting(entity.id);
       return;
     }

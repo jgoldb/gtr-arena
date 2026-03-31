@@ -510,7 +510,7 @@ export class Engine {
     if (this.casting) {
       return { success: false, error: 'casting', errorMessage: 'Already casting' };
     }
-    if (this.playerController.isMoving) {
+    if (this.playerController.isMoving || !this.playerController.grounded) {
       return { success: false, error: 'moving', errorMessage: 'Cannot cast while moving' };
     }
     const validation = this.combatSystem.validateAbility(
@@ -1923,12 +1923,13 @@ export class Engine {
     if (this.casting) {
       this.casting.elapsed += deltaTime;
 
-      // Cancel if dead, stunned, moving, or jumping
+      // Cancel if dead, stunned, moving, jumping, or falling
       const castMoving =
         this.input.isKeyDown('KeyW') || this.input.isKeyDown('KeyS') ||
         this.input.isKeyDown('KeyA') || this.input.isKeyDown('KeyD') ||
         (this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right')) ||
-        this.input.isBindDown(keybindManager.getCode('jump'));
+        this.input.isBindDown(keybindManager.getCode('jump')) ||
+        !this.playerController.grounded;
 
       if (this.playerController.dead || playerStunned || castMoving) {
         this.cancelCasting();

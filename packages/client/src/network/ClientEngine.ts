@@ -1086,7 +1086,7 @@ export class ClientEngine {
           // Return to starting height — PlayerController physics will handle
           // the fall if knocked off a ledge (gravity, grounded detection, etc.)
           this.playerController.mesh.position.y = kb.startY;
-          (this.playerController as any).grounded = false;
+          this.playerController.grounded = false;
           this.playerController.velocityY = 0;
           (this.playerController as any).fallPeakY = kb.startY;
         } else {
@@ -1260,9 +1260,9 @@ export class ClientEngine {
       pc.mana = Math.max(0, pc.mana - effectiveCost);
     }
 
-    // Predict cast bar for cast-time abilities (only if not moving — server rejects casts while moving)
+    // Predict cast bar for cast-time abilities (only if not moving/falling — server rejects casts while moving)
     let castPredicted = false;
-    if (ability.castTime && !pc.isMoving) {
+    if (ability.castTime && !pc.isMoving && pc.grounded) {
       this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
       this.localCastingAbilityId = abilityId;
       this.localCastingElapsed = 0;
@@ -1696,8 +1696,8 @@ export class ClientEngine {
     }
     this.gKeyWasDown = gKeyDown;
 
-    // Cancel casting on jump
-    if (this.localCastingAbilityId && this.input.isBindDown(keybindManager.getCode('jump'))) {
+    // Cancel casting on jump or falling
+    if (this.localCastingAbilityId && (this.input.isBindDown(keybindManager.getCode('jump')) || !this.playerController.grounded)) {
       this.sendCancelCast();
     }
 
@@ -2141,6 +2141,7 @@ export class ClientEngine {
       moveSpeed: this.playerController.currentMoveSpeed,
       vy: this.playerController.velocityY,
       turnSpeed: this.playerController.turnSpeed,
+      grounded: this.playerController.grounded,
     });
   }
 
