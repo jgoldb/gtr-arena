@@ -409,6 +409,10 @@ export class PlayerController implements Targetable {
         this.airVelocity.copy(moveDir).multiplyScalar(effectiveSpeed * this.airDriftFraction);
       }
       this.mesh.position.addScaledVector(this.airVelocity, deltaTime);
+      // Allow right-click to change facing direction while airborne (no movement change)
+      if (rightHeld) {
+        this.targetRotation = Math.atan2(-Math.sin(cameraAzimuth), -Math.cos(cameraAzimuth));
+      }
     }
 
     // Smooth rotation
