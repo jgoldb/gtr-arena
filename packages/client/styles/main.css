@@ -24,6 +24,13 @@ body {
   z-index: 100;
 }
 
+#character-selector-container,
+#map-selector-container,
+#npc-spawner-container {
+  width: 150px;
+  margin-left: auto;
+}
+
 #unit-frames {
   position: fixed;
   top: 12px;

@@ -79,7 +79,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       bucketSplash: { file: 'bucket-splash.ogg', volume: 8 },
       mop: { file: 'mop.ogg', volume: 3 },
       bigBoot: { file: 'big-boot.ogg', volume: 3 },
-      fartBomb: { file: 'fart-bomb.ogg', volume: 3 },
+      fartBomb: { file: 'fart-bomb.ogg', volume: 1.5 },
       jimmyLegs: { file: 'jimmy-legs.ogg', volume: 3 },
       janitorsHelper: { file: 'janitors-helper.ogg', volume: 3 },
       sweepStart: { file: 'sweep_1.ogg', volume: 3 },

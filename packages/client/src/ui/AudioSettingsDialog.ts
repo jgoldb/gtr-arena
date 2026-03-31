@@ -131,7 +131,7 @@ export class AudioSettingsDialog {
     musicSlider.type = 'range';
     musicSlider.min = '0';
     musicSlider.max = '100';
-    musicSlider.value = String(Math.round(audioSettings.musicVolume * 100));
+    musicSlider.value = String(Math.round(audioSettings.rawMusicVolume * 100));
     musicSlider.style.cssText = `
       flex: 1; height: 6px; -webkit-appearance: none; appearance: none;
       background: rgba(60, 80, 140, 0.4); border-radius: 3px; outline: none;
@@ -314,7 +314,7 @@ export class AudioSettingsDialog {
       slider.value = String(Math.round(audioSettings.masterVolume * 100));
       pctLabel.textContent = slider.value + '%';
       checkbox.checked = audioSettings.enableMusic;
-      musicSlider.value = String(Math.round(audioSettings.musicVolume * 100));
+      musicSlider.value = String(Math.round(audioSettings.rawMusicVolume * 100));
       musicPctLabel.textContent = musicSlider.value + '%';
       sfxCheckbox.checked = audioSettings.enableSfx;
       sfxSlider.value = String(Math.round(audioSettings.sfxVolume * 100));

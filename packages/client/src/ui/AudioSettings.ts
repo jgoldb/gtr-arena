@@ -14,7 +14,7 @@ export interface AudioSettingsData {
 const defaults: AudioSettingsData = {
   masterVolume: 0.25,
   enableMusic: true,
-  musicVolume: 1.0,
+  musicVolume: 0.5,
   enableSfx: true,
   sfxVolume: 0.5,
   enableAmbient: true,
@@ -67,7 +67,8 @@ class AudioSettingsStore {
 
   get masterVolume(): number { return this.data.masterVolume; }
   get enableMusic(): boolean { return this.data.enableMusic; }
-  get musicVolume(): number { return this.data.musicVolume; }
+  get rawMusicVolume(): number { return this.data.musicVolume; }
+  get musicVolume(): number { return this.data.musicVolume * 2; }
   get enableSfx(): boolean { return this.data.enableSfx; }
   get sfxVolume(): number { return this.data.sfxVolume; }
   get enableAmbient(): boolean { return this.data.enableAmbient; }
