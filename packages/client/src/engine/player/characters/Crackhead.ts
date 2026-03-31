@@ -52,6 +52,12 @@ export class Crackhead extends CharacterModel {
   private dumpsterDiveOrigin = new THREE.Vector3();
   /** Whether the emerge position has been snapped to current character pos. */
   private dumpsterEmergeSnapped = false;
+  /** Fired once when the dumpster first rises from the ground. */
+  private dumpsterSfx1Fired = false;
+  /** Fired once when the dumpster re-emerges the second time. */
+  private dumpsterSfx2Fired = false;
+  /** Callback for dumpster emerge sound effects (phase 1 = first rise, 2 = second rise). */
+  onDumpsterEmerge: ((phase: 1 | 2) => void) | null = null;
 
   // Stolen buff animation state
   private crashOutActive = false;
@@ -1142,6 +1148,8 @@ export class Crackhead extends CharacterModel {
       if (active && !this.dumpsterDiveActive) {
         this.dumpsterDiveActive = true;
         this.dumpsterDiveElapsed = 0;
+        this.dumpsterSfx1Fired = false;
+        this.dumpsterSfx2Fired = false;
       } else if (!active && this.dumpsterDiveActive) {
         this.dumpsterDiveActive = false;
         this.cleanupDumpster();
@@ -1374,6 +1382,11 @@ export class Crackhead extends CharacterModel {
       // Match character facing
       this.dumpsterGroup.rotation.y = parent.rotation.y;
       scene.add(this.dumpsterGroup);
+      // SFX: dumpster first emerges from the ground
+      if (!this.dumpsterSfx1Fired) {
+        this.dumpsterSfx1Fired = true;
+        this.onDumpsterEmerge?.(1);
+      }
     }
 
     // ── Animation phases (all normalized 0-1 within total duration) ──
@@ -1411,6 +1424,11 @@ export class Crackhead extends CharacterModel {
       this.dumpsterEmergeSnapped = true;
       this.dumpsterDiveOrigin.set(currentPos.x, currentPos.y, currentPos.z);
       dumpster.rotation.y = parent.rotation.y;
+      // SFX: dumpster re-emerges from the ground
+      if (!this.dumpsterSfx2Fired) {
+        this.dumpsterSfx2Fired = true;
+        this.onDumpsterEmerge?.(2);
+      }
     }
 
     const ox = this.dumpsterDiveOrigin.x;

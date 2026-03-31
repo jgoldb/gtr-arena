@@ -2551,6 +2551,8 @@ async function startPlayground(): Promise<void> {
       }
     }
     if (ability.id === 'crack-rock') {
+      const crackRockSfx = getCharacterSfx(engine.playerController.characterId)?.crackRock;
+      if (crackRockSfx) soundEffects.play(crackRockSfx.url, undefined, undefined, crackRockSfx.volume);
       engine.combatSystem.applyHeal(engine.playerController, 400);
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
       if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
@@ -2570,6 +2572,8 @@ async function startPlayground(): Promise<void> {
       }
     }
     if (ability.id === 'sticky-fingers') {
+      const sfSfx = getCharacterSfx(engine.playerController.characterId)?.stickyFingers;
+      if (sfSfx) soundEffects.play(sfSfx.url, undefined, undefined, sfSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target) {
         const stealable = engine.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
@@ -3091,6 +3095,8 @@ async function startUISetup(): Promise<void> {
       }
     }
     if (ability.id === 'crack-rock') {
+      const crackRockSfx = getCharacterSfx(engine.playerController.characterId)?.crackRock;
+      if (crackRockSfx) soundEffects.play(crackRockSfx.url, undefined, undefined, crackRockSfx.volume);
       engine.combatSystem.applyHeal(engine.playerController, 400);
       engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
       if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
@@ -3110,6 +3116,8 @@ async function startUISetup(): Promise<void> {
       }
     }
     if (ability.id === 'sticky-fingers') {
+      const sfSfx = getCharacterSfx(engine.playerController.characterId)?.stickyFingers;
+      if (sfSfx) soundEffects.play(sfSfx.url, undefined, undefined, sfSfx.volume);
       const target = engine.targetingSystem.currentTarget;
       if (target) {
         const stealable = engine.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);

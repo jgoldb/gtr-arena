@@ -286,6 +286,15 @@ export class ClientEngine {
     // Preload combat sound effects
     soundEffects.init();
 
+    // Dumpster Dive emerge SFX (local Crackhead player)
+    if ('onDumpsterEmerge' in this.playerController.model) {
+      (this.playerController.model as any).onDumpsterEmerge = (phase: 1 | 2) => {
+        const sfx = getCharacterSfx(this.playerController.characterId);
+        const entry = phase === 1 ? sfx?.dumpsterDive1 : sfx?.dumpsterDive2;
+        if (entry) soundEffects.play(entry.url, 0, 0, entry.volume);
+      };
+    }
+
     // Track tab visibility so we can fast-forward client-side timers on restore
     this.onVisibilityChange = () => {
       if (document.hidden) {
@@ -307,6 +316,15 @@ export class ClientEngine {
     mesh.position.set(snap.x, snap.y, snap.z);
     mesh.rotation.y = snap.rotationY;
     this.scene.add(mesh);
+
+    // Dumpster Dive emerge SFX (remote Crackhead players)
+    if ('onDumpsterEmerge' in model) {
+      (model as any).onDumpsterEmerge = (phase: 1 | 2) => {
+        const sfx = getCharacterSfx(snap.characterId as CharacterId);
+        const entry = phase === 1 ? sfx?.dumpsterDive1 : sfx?.dumpsterDive2;
+        if (entry) soundEffects.play(entry.url, this.distToEntity(snap.id), this.panToEntity(snap.id), entry.volume, snap.id);
+      };
+    }
 
     const entity: RemoteEntity = {
       id: snap.id,
@@ -927,6 +945,12 @@ export class ClientEngine {
       }
       if (msg.abilityId === 'pocket-sand' && sfx?.pocketSand) {
         soundEffects.play(sfx.pocketSand.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.pocketSand.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'sticky-fingers' && sfx?.stickyFingers) {
+        soundEffects.play(sfx.stickyFingers.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.stickyFingers.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'crack-rock' && sfx?.crackRock) {
+        soundEffects.play(sfx.crackRock.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.crackRock.volume, msg.entityId);
       }
     }
     // Shared ability SFX (all characters)

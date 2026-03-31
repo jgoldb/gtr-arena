@@ -350,6 +350,8 @@ export class Engine {
     // Preload combat sound effects
     soundEffects.init();
 
+    this.setupDumpsterDiveSfx();
+
     // Fall damage (WoW-style: no damage below threshold, then scales with distance)
     this.playerController.onFallDamage = (fallDistance: number) => {
       if (this.godMode || this.playerController.dead) return;
@@ -434,6 +436,16 @@ export class Engine {
     this.applyStartingBuffs();
   }
 
+  private setupDumpsterDiveSfx(): void {
+    if ('onDumpsterEmerge' in this.playerController.model) {
+      (this.playerController.model as any).onDumpsterEmerge = (phase: 1 | 2) => {
+        const sfx = getCharacterSfx(this.playerController.characterId);
+        const entry = phase === 1 ? sfx?.dumpsterDive1 : sfx?.dumpsterDive2;
+        if (entry) soundEffects.play(entry.url, 0, 0, entry.volume);
+      };
+    }
+  }
+
   setCharacter(id: CharacterId): void {
     this.stopResting();
     this.stopAutoAttack();
@@ -442,6 +454,7 @@ export class Engine {
     this.combatSystem.leaveCombat(this.playerController);
     this.combatSystem.clearCooldowns();
     this.playerController.setCharacter(id);
+    this.setupDumpsterDiveSfx();
     this.playerController.dead = false;
     if (this.arenaPreparationActive) {
       this.buffSystem.apply(this.playerController, ArenaPreparationBuff);
