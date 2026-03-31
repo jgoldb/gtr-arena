@@ -5,7 +5,7 @@ export class DebugPanel {
   private gui: GUI;
 
   constructor(engine: Engine, container: HTMLElement) {
-    this.gui = new GUI({ container, title: 'Debug' });
+    this.gui = new GUI({ container, title: 'Debug'});
     this.gui.close();
 
     this.setupCameraControls(engine);
