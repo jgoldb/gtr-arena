@@ -133,6 +133,7 @@ export class Engine {
   private channelBeamTarget: Targetable | null = null;
   private bandageHealVisual: BandageHealVisual | null = null;
   private bandageLoopHandle: LoopHandle | null = null;
+  private castSpellLoopHandle: LoopHandle | null = null;
   private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
@@ -400,7 +401,7 @@ export class Engine {
   }
 
   /** Stereo pan (-1 left, +1 right) for a world position relative to the player's facing. */
-  private sfxPan(sourcePos: THREE.Vector3): number {
+  sfxPan(sourcePos: THREE.Vector3): number {
     const pos = this.playerController.mesh.position;
     const rotY = this.playerController.mesh.rotation.y;
     const dx = sourcePos.x - pos.x;
@@ -572,6 +573,12 @@ export class Engine {
       damageMultiplier: isChannel ? this.buffSystem.getDamageDealtMultiplier(this.playerController) : 1,
     };
 
+    // Dr. Retardo cast-spell loop SFX (any cast/channel except bandage)
+    if (this.playerController.characterId === 'dr-retardo' && ability.id !== 'bandage') {
+      const castSpellSfx = getSharedSfx().castSpell;
+      if (castSpellSfx) this.castSpellLoopHandle = soundEffects.playLoop(castSpellSfx.url, undefined, undefined, castSpellSfx.volume);
+    }
+
     // Apply blockedByTargetDebuff at channel start (e.g. Recently Bandaged)
     if (isChannel && target && ability.id === 'bandage') {
       this.buffSystem.apply(target, RecentlyBandagedDebuff);
@@ -605,6 +612,7 @@ export class Engine {
     if (!this.casting) return;
     this.removeChannelAura();
     this.stopBandageLoop();
+    this.stopCastSpellLoop();
     this.casting = null;
   }
 
@@ -612,6 +620,13 @@ export class Engine {
     if (this.bandageLoopHandle) {
       this.bandageLoopHandle.stop();
       this.bandageLoopHandle = null;
+    }
+  }
+
+  private stopCastSpellLoop(): void {
+    if (this.castSpellLoopHandle) {
+      this.castSpellLoopHandle.stop();
+      this.castSpellLoopHandle = null;
     }
   }
 
@@ -687,6 +702,7 @@ export class Engine {
     if (!this.casting) return;
     const { ability, target } = this.casting;
     this.casting = null;
+    this.stopCastSpellLoop();
 
     // Clear the interrupt cooldown so useAbility's validation passes
     this.combatSystem.clearCooldown(ability.id);
@@ -1985,6 +2001,7 @@ export class Engine {
         if (this.casting && this.casting.elapsed >= this.casting.totalTime) {
           this.removeChannelAura();
           this.stopBandageLoop();
+          this.stopCastSpellLoop();
           this.casting = null;
         }
       }
@@ -2114,6 +2131,7 @@ export class Engine {
       this.bandageHealVisual = null;
     }
     this.stopBandageLoop();
+    this.stopCastSpellLoop();
     this.mapManager.dispose();
     this.playerController.dispose();
     this.renderer.dispose();

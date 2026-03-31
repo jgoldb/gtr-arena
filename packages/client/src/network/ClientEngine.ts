@@ -171,6 +171,8 @@ export class ClientEngine {
 
   // Bandage loop SFX (keyed by entity ID)
   private bandageLoops = new Map<string, LoopHandle>();
+  // Dr. Retardo cast-spell loop SFX (keyed by entity ID)
+  private castSpellLoops = new Map<string, LoopHandle>();
 
   // Full Retard aura visual (per entity)
   private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
@@ -621,6 +623,7 @@ export class ClientEngine {
             this.pendingPrediction = null;
           }
           this.updateBandageLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
+          this.updateCastSpellLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
           this.localCastingAbilityId = delta.castingAbilityId!;
         }
         if (delta.castingElapsed !== undefined) this.localCastingElapsed = delta.castingElapsed;
@@ -647,6 +650,7 @@ export class ClientEngine {
       if (delta.isAutoAttacking !== undefined) entity.isAutoAttacking = delta.isAutoAttacking;
       if ('castingAbilityId' in delta) {
         this.updateBandageLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
+        this.updateCastSpellLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
         entity.castingAbilityId = delta.castingAbilityId!;
       }
       if (delta.castingElapsed !== undefined) entity.castingElapsed = delta.castingElapsed;
@@ -679,6 +683,7 @@ export class ClientEngine {
     pc.setAutoAttacking(snap.isAutoAttacking);
     pc.setStunned(snap.stunned);
     this.updateBandageLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
+    this.updateCastSpellLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
     this.localCastingAbilityId = snap.castingAbilityId;
     this.localCastingElapsed = snap.castingElapsed;
     this.localCastingTotalTime = snap.castingTotalTime;
@@ -699,6 +704,7 @@ export class ClientEngine {
     entity.isMoving = snap.isMoving;
     entity.isAutoAttacking = snap.isAutoAttacking;
     this.updateBandageLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
+    this.updateCastSpellLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
     entity.castingAbilityId = snap.castingAbilityId;
     entity.castingElapsed = snap.castingElapsed;
     entity.castingTotalTime = snap.castingTotalTime;
@@ -882,6 +888,10 @@ export class ClientEngine {
       }
       if (msg.abilityId === 'sweep-finish' && sfx?.sweepSpin) {
         soundEffects.play(sfx.sweepSpin.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.sweepSpin.volume, msg.entityId);
+      }
+      if (msg.abilityId === 'discombobulate' && sfx?.discombobulate) {
+        const spatialId = msg.targetId ?? msg.entityId;
+        soundEffects.play(sfx.discombobulate.url, this.distToEntity(spatialId), this.panToEntity(spatialId), sfx.discombobulate.volume, spatialId);
       }
     }
     // Shared ability SFX (all characters)
@@ -1280,6 +1290,7 @@ export class ClientEngine {
     let castPredicted = false;
     if (ability.castTime && !pc.isMoving && pc.grounded) {
       this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
+      this.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
       this.localCastingAbilityId = abilityId;
       this.localCastingElapsed = 0;
       this.localCastingTotalTime = ability.castTime;
@@ -1357,6 +1368,7 @@ export class ClientEngine {
     // Revert predicted cast bar
     if (pred.castPredicted && this.localCastingAbilityId === pred.abilityId) {
       this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, null);
+      this.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, null);
       this.localCastingAbilityId = null;
       this.localCastingElapsed = 0;
       this.localCastingTotalTime = 0;
@@ -2446,11 +2458,37 @@ export class ClientEngine {
     }
   }
 
+  /** Start or stop Dr. Retardo's cast-spell loop SFX when casting state changes. */
+  private updateCastSpellLoop(entityId: string, prev: string | null, next: string | null): void {
+    if (prev === next) return;
+    const charId = entityId === this.localEntityId
+      ? this.playerController?.characterId
+      : this.remoteEntities.get(entityId)?.characterId;
+    if (charId !== 'dr-retardo') return;
+    // Stop existing loop
+    if (prev && prev !== 'bandage') {
+      const handle = this.castSpellLoops.get(entityId);
+      if (handle) { handle.stop(); this.castSpellLoops.delete(entityId); }
+    }
+    // Start new loop
+    if (next && next !== 'bandage') {
+      const sfx = getSharedSfx().castSpell;
+      if (sfx) {
+        const dist = entityId === this.localEntityId ? undefined : this.distToEntity(entityId);
+        const pan = entityId === this.localEntityId ? undefined : this.panToEntity(entityId);
+        const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, entityId);
+        if (handle) this.castSpellLoops.set(entityId, handle);
+      }
+    }
+  }
+
   destroy(): void {
     this.stop();
     this.blindEffect.deactivate();
     for (const handle of this.bandageLoops.values()) handle.stop();
     this.bandageLoops.clear();
+    for (const handle of this.castSpellLoops.values()) handle.stop();
+    this.castSpellLoops.clear();
     this.input.dispose();
     this.targetingSystem.dispose();
     this.mapManager.dispose();

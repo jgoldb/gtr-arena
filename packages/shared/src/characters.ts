@@ -48,6 +48,7 @@ export interface CharacterStats {
     janitorsHelper?: SfxEntry;
     sweepStart?: SfxEntry;
     sweepSpin?: SfxEntry;
+    discombobulate?: SfxEntry;
   };
 }
 
@@ -106,6 +107,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       autoAttackHit: { file: 'auto-attack1.ogg', volume: 3 },
       autoAttackHit2: { file: 'auto-attack2.ogg', volume: 3 },
       bottleChuck: { file: 'bottle-chuck.ogg', volume: 3 },
+      discombobulate: { file: 'discombobulate.ogg', volume: 2 },
     },
   },
   'crackhead': {
@@ -211,6 +213,7 @@ const SHARED_SFX_BASE = '/audio/sfx/abilities/shared/';
 const SHARED_SFX_DEFS: Record<string, SfxEntry> = {
   pvpTrinket: { file: 'pvp-trinket.ogg', volume: 3 },
   bandage: { file: 'bandage.ogg', volume: 5, loop: true },
+  castSpell: { file: 'cast-spell.ogg', volume: 4, loop: true },
 };
 
 export type ResolvedSharedSfx = { [K in keyof typeof SHARED_SFX_DEFS]?: ResolvedSfx };

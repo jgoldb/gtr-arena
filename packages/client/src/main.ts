@@ -2510,6 +2510,14 @@ async function startPlayground(): Promise<void> {
       if (sweepStartSfx) soundEffects.play(sweepStartSfx.url, undefined, undefined, sweepStartSfx.volume);
       engine.startSweepCharge();
     }
+    if (ability.id === 'discombobulate') {
+      const discSfx = getCharacterSfx(engine.playerController.characterId)?.discombobulate;
+      if (discSfx) {
+        const dist = targetPos ? engine.playerController.mesh.position.distanceTo(targetPos) : undefined;
+        const pan = targetPos ? engine.sfxPan(targetPos) : undefined;
+        soundEffects.play(discSfx.url, dist, pan, discSfx.volume);
+      }
+    }
     if (ability.id === 'kaboom') engine.executeKaboom();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
     if (ability.id === 'crotch-rot') {
@@ -3023,6 +3031,14 @@ async function startUISetup(): Promise<void> {
       const sweepStartSfx = getCharacterSfx(engine.playerController.characterId)?.sweepStart;
       if (sweepStartSfx) soundEffects.play(sweepStartSfx.url, undefined, undefined, sweepStartSfx.volume);
       engine.startSweepCharge();
+    }
+    if (ability.id === 'discombobulate') {
+      const discSfx = getCharacterSfx(engine.playerController.characterId)?.discombobulate;
+      if (discSfx) {
+        const dist = targetPos ? engine.playerController.mesh.position.distanceTo(targetPos) : undefined;
+        const pan = targetPos ? engine.sfxPan(targetPos) : undefined;
+        soundEffects.play(discSfx.url, dist, pan, discSfx.volume);
+      }
     }
     if (ability.id === 'kaboom') engine.executeKaboom();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
