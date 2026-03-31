@@ -137,6 +137,7 @@ export class Engine {
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
   private autoAttackTarget: Targetable | null = null;
+  private aaSfxToggle = new Map<Targetable, boolean>(); // per-entity toggle for alternating auto-attack SFX
   private rangedResumeDelay = 0; // GCD-length delay before first/resumed ranged shot
   private rangedWasMoving = false; // tracks movement→stop transition for ranged delay
   private dumpsterDiveAutoTarget: Targetable | null = null;
@@ -300,7 +301,13 @@ export class Engine {
 
     this.combatSystem.onAutoAttackDamageDealt = (attacker, isCrit) => {
       const sfx = getCharacterSfx(attacker.characterId);
-      const aaSfx = (isCrit && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+      let aaSfx = (isCrit && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+      // Alternate between two auto-attack sounds when available (e.g. Dr. Retardo's flask/test tube)
+      if (!isCrit && sfx?.autoAttackHit2) {
+        const toggle = this.aaSfxToggle.get(attacker) ?? false;
+        aaSfx = toggle ? sfx.autoAttackHit2 : sfx.autoAttackHit;
+        this.aaSfxToggle.set(attacker, !toggle);
+      }
       if (aaSfx) soundEffects.play(aaSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), aaSfx.volume, attacker.mesh.uuid);
     };
 
@@ -664,6 +671,12 @@ export class Engine {
         const dz = target.mesh.position.z - impact.groundPos.z;
         if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
         this.combatSystem.applyAoeDamage(impact.owner, target, impact.ability);
+      }
+
+      // Play impact sound effect
+      if (impact.ability.id === 'bottle-chuck') {
+        const bcSfx = getCharacterSfx(impact.owner.characterId)?.bottleChuck;
+        if (bcSfx) soundEffects.play(bcSfx.url, this.playerController.mesh.position.distanceTo(impact.groundPos), this.sfxPan(impact.groundPos), bcSfx.volume);
       }
 
       this.pendingAoeImpacts.splice(i, 1);

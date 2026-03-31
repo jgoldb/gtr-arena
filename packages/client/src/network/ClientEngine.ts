@@ -77,6 +77,7 @@ export class ClientEngine {
 
   // Remote entities (other players) — interpolated from server state
   private remoteEntities = new Map<string, RemoteEntity>();
+  private aaSfxToggle = new Map<string, boolean>(); // per-entity toggle for alternating auto-attack SFX
 
   // Snapshot interpolation buffer — smoothly interpolates remote entity positions
   // between two known server states instead of exponential chase lerp
@@ -776,7 +777,13 @@ export class ClientEngine {
         : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
       if (charId) {
         const sfx = getCharacterSfx(charId);
-        const aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+        let aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
+        // Alternate between two auto-attack sounds when available (e.g. Dr. Retardo's flask/test tube)
+        if (msg.combatType !== 'crit' && sfx?.autoAttackHit2) {
+          const toggle = this.aaSfxToggle.get(msg.sourceEntityId) ?? false;
+          aaSfx = toggle ? sfx.autoAttackHit2 : sfx.autoAttackHit;
+          this.aaSfxToggle.set(msg.sourceEntityId, !toggle);
+        }
         if (aaSfx) soundEffects.play(aaSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), aaSfx.volume, msg.sourceEntityId);
       }
     }
@@ -807,6 +814,15 @@ export class ClientEngine {
       if (charId) {
         const jimmyLegsSfx = getCharacterSfx(charId)?.jimmyLegs;
         if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), jimmyLegsSfx.volume, msg.sourceEntityId);
+      }
+    }
+    if (msg.abilityId === 'bottle-chuck' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
+      const charId = msg.sourceEntityId === this.localEntityId
+        ? this.playerController.characterId
+        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
+      if (charId) {
+        const bcSfx = getCharacterSfx(charId)?.bottleChuck;
+        if (bcSfx) soundEffects.play(bcSfx.url, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId), bcSfx.volume, msg.targetEntityId);
       }
     }
 

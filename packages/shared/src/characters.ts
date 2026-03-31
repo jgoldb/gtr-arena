@@ -34,6 +34,7 @@ export interface CharacterStats {
   playgroundOnly?: boolean;
   soundEffects?: {
     autoAttackHit?: SfxEntry;
+    autoAttackHit2?: SfxEntry;
     autoAttackCrit?: SfxEntry;
     struck?: SfxEntry;
     dodge?: SfxEntry;
@@ -42,6 +43,7 @@ export interface CharacterStats {
     mop?: SfxEntry;
     bigBoot?: SfxEntry;
     fartBomb?: SfxEntry;
+    bottleChuck?: SfxEntry;
     jimmyLegs?: SfxEntry;
     janitorsHelper?: SfxEntry;
     sweepStart?: SfxEntry;
@@ -100,6 +102,11 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     hpRegen: 24,
     manaRegen: 48,
     abilities: [Attack, BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket, Bandage],
+    soundEffects: {
+      autoAttackHit: { file: 'auto-attack1.ogg', volume: 3 },
+      autoAttackHit2: { file: 'auto-attack2.ogg', volume: 3 },
+      bottleChuck: { file: 'bottle-chuck.ogg', volume: 3 },
+    },
   },
   'crackhead': {
     id: 'crackhead',
