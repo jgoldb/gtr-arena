@@ -340,7 +340,7 @@ export class GameSession {
         // player_state messages before the new game_start is processed, which would
         // overwrite the fresh spawn position.
         if (!this.readyPlayers.has(userId) && !this.countdownStarted) break;
-        this.engine.updateEntityPosition(entityId, msg.x, msg.y, msg.z, msg.rotationY, msg.isMoving, msg.vx, msg.vz, msg.moveFlags, msg.moveSpeed, msg.vy, msg.turnSpeed);
+        this.engine.updateEntityPosition(entityId, msg.x, msg.y, msg.z, msg.rotationY, msg.isMoving, msg.vx, msg.vz, msg.moveFlags, msg.moveSpeed, msg.vy, msg.turnSpeed, msg.grounded);
         break;
       case 'use_ability':
         this.engine.requestAbility(

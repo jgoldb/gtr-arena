@@ -37,7 +37,7 @@ export class PlayerController implements Targetable {
   private targetRotation = 0;
   private movementAzimuth = 0;
   velocityY = 0;
-  private grounded = true;
+  grounded = true;
   private fallPeakY = 0;
   private inWater = false;
   private spaceWasDown = false;

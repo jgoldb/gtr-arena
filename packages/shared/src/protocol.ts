@@ -80,6 +80,8 @@ export interface C2S_PlayerState {
   vy?: number;
   /** Angular velocity (rad/sec) — enables arc-based dead reckoning during turns. */
   turnSpeed?: number;
+  /** Whether the player is on the ground (used to cancel casting while falling). */
+  grounded?: boolean;
 }
 
 export interface C2S_UseAbility {
