@@ -640,6 +640,40 @@ function showAdmin(): void {
   };
   document.body.appendChild(adminScreen.element);
 
+  // Lobby escape menu for admin screen
+  const adminMenuButtons: EscapeMenuButton[] = [
+    {
+      label: 'Back to Lobby',
+      onClick: () => adminScreen?.onBack?.(),
+      color: 'rgba(60, 60, 100, 0.8)',
+      hoverColor: 'rgba(70, 70, 120, 0.9)',
+    },
+    {
+      label: 'Logout',
+      onClick: () => {
+        adminScreen?.destroy();
+        adminScreen = null;
+        lobbyScreen?.onLogout?.();
+      },
+      color: 'rgba(160, 50, 50, 0.8)',
+      hoverColor: 'rgba(180, 60, 60, 0.9)',
+    },
+  ];
+  lobbyEscapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {},
+    customButtons: adminMenuButtons,
+    onKeybinds: () => {
+      lobbyEscapeMenu?.close();
+      keybindMenu.open(() => lobbyEscapeMenu?.open());
+    },
+    onAudio: () => {
+      lobbyEscapeMenu?.close();
+      new AudioSettingsDialog(() => lobbyEscapeMenu?.open()).open();
+    },
+  });
+  lobbyEscapeMenu.element.style.zIndex = '1050';
+  document.body.appendChild(lobbyEscapeMenu.element);
+
   // Request user list from server
   network!.send({ type: 'admin_get_users' });
 }
@@ -656,6 +690,30 @@ function showGameLobby(): void {
 
   gameLobbyScreen = new GameLobbyScreen(network!, localUserId, getPortrait);
   document.body.appendChild(gameLobbyScreen.element);
+
+  // Lobby escape menu for game lobby screen
+  const gameLobbyMenuButtons: EscapeMenuButton[] = [
+    {
+      label: 'Leave Game',
+      onClick: () => network?.send({ type: 'leave_game' }),
+      color: 'rgba(160, 50, 50, 0.8)',
+      hoverColor: 'rgba(180, 60, 60, 0.9)',
+    },
+  ];
+  lobbyEscapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {},
+    customButtons: gameLobbyMenuButtons,
+    onKeybinds: () => {
+      lobbyEscapeMenu?.close();
+      keybindMenu.open(() => lobbyEscapeMenu?.open());
+    },
+    onAudio: () => {
+      lobbyEscapeMenu?.close();
+      new AudioSettingsDialog(() => lobbyEscapeMenu?.open()).open();
+    },
+  });
+  lobbyEscapeMenu.element.style.zIndex = '1050';
+  document.body.appendChild(lobbyEscapeMenu.element);
 }
 
 // ── Multiplayer Game ───────────────────────────────────────────────────

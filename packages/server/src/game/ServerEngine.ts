@@ -1456,6 +1456,10 @@ export class ServerEngine {
     if (state.timer >= entity.autoAttackSpeed / atkSpeedMult) {
       // Ranged auto-attacks can't fire while moving, and have a GCD delay on start/resume
       if (isRanged && (entity.isMoving || state.rangedResumeDelay > 0)) return;
+
+      // Don't swing while casting — timer stays ready so swing resumes quickly after cast
+      if (this.castingStates.has(entity.id)) return;
+
       const dx = entity.x - state.target.x;
       const dy = entity.y - state.target.y;
       const dz = entity.z - state.target.z;

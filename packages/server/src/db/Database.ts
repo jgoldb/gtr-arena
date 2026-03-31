@@ -265,6 +265,12 @@ export class GtrDatabase {
     return true;
   }
 
+  resetAllStats(): void {
+    this.db.prepare('UPDATE user_stats SET games_played = 0, wins = 0, losses = 0').run();
+    this.db.prepare('DELETE FROM user_character_stats').run();
+    this.db.prepare('UPDATE users SET last_played = NULL, xp = 0').run();
+  }
+
   deleteUser(userId: number): boolean {
     const row = this.db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(userId) as { id: number; is_admin: number } | undefined;
     if (!row) return false;

@@ -526,6 +526,10 @@ export interface C2S_AdminResetStats {
   targetUserId: number;
 }
 
+export interface C2S_AdminNukeStats {
+  type: 'admin_nuke_stats';
+}
+
 export interface C2S_AdminSetXp {
   type: 'admin_set_xp';
   targetUserId: number;
@@ -772,6 +776,7 @@ export type ClientMessage =
   | C2S_AdminUnbanUser
   | C2S_AdminResetPassword
   | C2S_AdminResetStats
+  | C2S_AdminNukeStats
   | C2S_AdminSetXp
   | C2S_ChangePassword
   | C2S_Ping

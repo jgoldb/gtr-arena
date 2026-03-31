@@ -297,6 +297,9 @@ export class LobbyManager {
       case 'admin_reset_stats':
         this.handleAdminResetStats(userId, msg.targetUserId);
         break;
+      case 'admin_nuke_stats':
+        this.handleAdminNukeStats(userId);
+        break;
       case 'admin_set_xp':
         this.handleAdminSetXp(userId, msg.targetUserId, msg.xp);
         break;
@@ -903,6 +906,30 @@ export class LobbyManager {
 
       this.handleAdminGetUsers(userId);
     }
+  }
+
+  private handleAdminNukeStats(userId: string): void {
+    const user = this.users.get(userId);
+    if (!user || !this.auth.getIsAdmin(userId)) {
+      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
+      return;
+    }
+
+    this.db.resetAllStats();
+
+    const result: S2C_AdminResult = {
+      type: 'admin_result',
+      action: 'nuke_stats',
+      success: true,
+    };
+    this.send(user.socket, result);
+
+    // Notify all online users that their XP was reset
+    for (const u of this.users.values()) {
+      this.send(u.socket, { type: 'xp_update', xp: 0, adminSet: true });
+    }
+
+    this.handleAdminGetUsers(userId);
   }
 
   private handleAdminSetXp(userId: string, targetUserId: number, xp: number): void {

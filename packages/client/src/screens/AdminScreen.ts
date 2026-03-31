@@ -35,11 +35,20 @@ export class AdminScreen {
     title.textContent = 'Admin — User Management';
     title.style.cssText = 'font-size: 18px; font-weight: bold; color: #8899cc;';
 
+    const btnGroup = document.createElement('div');
+    btnGroup.style.cssText = 'display: flex; gap: 8px;';
+
+    const nukeBtn = this.makeButton('Nuke', 'rgba(140, 30, 30, 0.8)');
+    nukeBtn.addEventListener('click', () => this.showNukeConfirm());
+
     const backBtn = this.makeButton('Back to Lobby', 'rgba(60, 40, 40, 0.8)');
     backBtn.addEventListener('click', () => this.onBack?.());
 
+    btnGroup.appendChild(nukeBtn);
+    btnGroup.appendChild(backBtn);
+
     header.appendChild(title);
-    header.appendChild(backBtn);
+    header.appendChild(btnGroup);
 
     // Table container
     const tableWrap = document.createElement('div');
@@ -282,6 +291,65 @@ export class AdminScreen {
     const confirmBtn = this.makeButton('Reset', 'rgba(160, 120, 20, 0.9)');
     confirmBtn.addEventListener('click', () => {
       this.network.send({ type: 'admin_reset_stats', targetUserId: user.id });
+      this.overlay?.remove();
+      this.overlay = null;
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(confirmBtn);
+
+    dialog.appendChild(title);
+    dialog.appendChild(msg);
+    dialog.appendChild(btnRow);
+    this.overlay.appendChild(dialog);
+
+    this.overlay.addEventListener('click', (e) => {
+      if (e.target === this.overlay) {
+        this.overlay?.remove();
+        this.overlay = null;
+      }
+    });
+
+    this.element.appendChild(this.overlay);
+  }
+
+  private showNukeConfirm(): void {
+    if (this.overlay) this.overlay.remove();
+
+    this.overlay = document.createElement('div');
+    this.overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.7);
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(20, 20, 35, 0.98), rgba(10, 10, 20, 0.98));
+      border: 1px solid rgba(200, 60, 60, 0.4);
+      border-radius: 8px; padding: 30px 40px; max-width: 400px;
+    `;
+
+    const title = document.createElement('div');
+    title.textContent = 'Nuke All Stats';
+    title.style.cssText = 'color: #cc4444; font-size: 18px; font-weight: bold; margin-bottom: 12px;';
+
+    const msg = document.createElement('div');
+    msg.textContent = 'Are you sure you want to reset stats for ALL users? This will set games played, wins, losses, XP, and last played to zero for every account. This cannot be undone.';
+    msg.style.cssText = 'color: #aaa; font-size: 14px; line-height: 1.5; margin-bottom: 24px;';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display: flex; gap: 12px; justify-content: flex-end;';
+
+    const cancelBtn = this.makeButton('Cancel', 'rgba(40, 40, 60, 0.8)');
+    cancelBtn.addEventListener('click', () => {
+      this.overlay?.remove();
+      this.overlay = null;
+    });
+
+    const confirmBtn = this.makeButton('Nuke', 'rgba(160, 30, 30, 0.9)');
+    confirmBtn.addEventListener('click', () => {
+      this.network.send({ type: 'admin_nuke_stats' });
       this.overlay?.remove();
       this.overlay = null;
     });

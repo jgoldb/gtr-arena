@@ -1681,6 +1681,9 @@ export class Engine {
       // Ranged auto-attacks can't fire while moving, and have a GCD delay on start/resume
       if (isRangedAutoAttack(getCharacterStats(player.characterId)) && (player.isMoving || this.rangedResumeDelay > 0)) return;
 
+      // Don't swing while casting — timer stays ready so swing resumes quickly after cast
+      if (this.casting) return;
+
       // Check range (3D distance including Y)
       const dx = player.mesh.position.x - target.mesh.position.x;
       const dy = player.mesh.position.y - target.mesh.position.y;
