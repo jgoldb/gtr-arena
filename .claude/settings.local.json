@@ -42,7 +42,8 @@
       "Bash(echo \"EXIT: $?\")",
       "Bash(find /c/Users/Joey/Repos/gtr/packages -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\) ! -path */node_modules/*)",
       "Bash(find /c/Users/Joey/Repos/gtr/packages -type f -name *.ts)",
-      "Bash(find C:UsersJoeyReposgtr/src -type f -name *.ts)"
+      "Bash(find C:UsersJoeyReposgtr/src -type f -name *.ts)",
+      "Bash(find /c/Users/Joey/Repos/gtr -name mop.ogg -o -name mop.*)"
     ]
   }
 }

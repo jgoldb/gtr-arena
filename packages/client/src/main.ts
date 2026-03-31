@@ -2424,7 +2424,15 @@ async function startPlayground(): Promise<void> {
       const splashSfx = getCharacterSfx(engine.playerController.characterId)?.bucketSplash;
       if (splashSfx) soundEffects.play(splashSfx.url, undefined, undefined, splashSfx.volume);
     }
-    if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
+    if (ability.id === 'fart-bomb') {
+      const fartSfx = getCharacterSfx(engine.playerController.characterId)?.fartBomb;
+      if (fartSfx) soundEffects.play(fartSfx.url, undefined, undefined, fartSfx.volume);
+      engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
+    }
+    if (ability.id === 'janitors-helper') {
+      const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
+      if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
+    }
     if (ability.id === 'sweep') engine.startSweepCharge();
     if (ability.id === 'kaboom') engine.executeKaboom();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
@@ -2914,7 +2922,15 @@ async function startUISetup(): Promise<void> {
       const splashSfx = getCharacterSfx(engine.playerController.characterId)?.bucketSplash;
       if (splashSfx) soundEffects.play(splashSfx.url, undefined, undefined, splashSfx.volume);
     }
-    if (ability.id === 'fart-bomb') engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
+    if (ability.id === 'fart-bomb') {
+      const fartSfx = getCharacterSfx(engine.playerController.characterId)?.fartBomb;
+      if (fartSfx) soundEffects.play(fartSfx.url, undefined, undefined, fartSfx.volume);
+      engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
+    }
+    if (ability.id === 'janitors-helper') {
+      const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
+      if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
+    }
     if (ability.id === 'sweep') engine.startSweepCharge();
     if (ability.id === 'kaboom') engine.executeKaboom();
     if (ability.id === 'chemical-spill') engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);

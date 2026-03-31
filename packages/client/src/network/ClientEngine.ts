@@ -772,7 +772,7 @@ export class ClientEngine {
       }
     }
 
-    // Play sound effects for ability hits (mop)
+    // Play sound effects for ability hits (mop, big boot)
     if (msg.abilityId === 'mop' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
       const charId = msg.sourceEntityId === this.localEntityId
         ? this.playerController.characterId
@@ -780,6 +780,24 @@ export class ClientEngine {
       if (charId) {
         const mopSfx = getCharacterSfx(charId)?.mop;
         if (mopSfx) soundEffects.play(mopSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), mopSfx.volume);
+      }
+    }
+    if (msg.abilityId === 'big-boot' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
+      const charId = msg.sourceEntityId === this.localEntityId
+        ? this.playerController.characterId
+        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
+      if (charId) {
+        const bigBootSfx = getCharacterSfx(charId)?.bigBoot;
+        if (bigBootSfx) soundEffects.play(bigBootSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), bigBootSfx.volume);
+      }
+    }
+    if (msg.abilityId === 'jimmy-legs' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
+      const charId = msg.sourceEntityId === this.localEntityId
+        ? this.playerController.characterId
+        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
+      if (charId) {
+        const jimmyLegsSfx = getCharacterSfx(charId)?.jimmyLegs;
+        if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), jimmyLegsSfx.volume);
       }
     }
 
@@ -827,6 +845,12 @@ export class ClientEngine {
       }
       if (msg.abilityId === 'bucket-splash' && sfx?.bucketSplash) {
         soundEffects.play(sfx.bucketSplash.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.bucketSplash.volume);
+      }
+      if (msg.abilityId === 'fart-bomb' && sfx?.fartBomb) {
+        soundEffects.play(sfx.fartBomb.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.fartBomb.volume);
+      }
+      if (msg.abilityId === 'janitors-helper' && sfx?.janitorsHelper) {
+        soundEffects.play(sfx.janitorsHelper.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.janitorsHelper.volume);
       }
     }
 

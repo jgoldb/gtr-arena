@@ -308,6 +308,14 @@ export class Engine {
         const mopSfx = getCharacterSfx(attacker.characterId)?.mop;
         if (mopSfx) soundEffects.play(mopSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), mopSfx.volume);
       }
+      if (abilityId === 'big-boot') {
+        const bigBootSfx = getCharacterSfx(attacker.characterId)?.bigBoot;
+        if (bigBootSfx) soundEffects.play(bigBootSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), bigBootSfx.volume);
+      }
+      if (abilityId === 'jimmy-legs') {
+        const jimmyLegsSfx = getCharacterSfx(attacker.characterId)?.jimmyLegs;
+        if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.playerController.mesh.position.distanceTo(attacker.mesh.position), this.sfxPan(attacker.mesh.position), jimmyLegsSfx.volume);
+      }
     };
 
     // Auto-target attacker when player has no target (not while blinded)

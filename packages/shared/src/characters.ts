@@ -40,6 +40,10 @@ export interface CharacterStats {
     crashOut?: SfxEntry;
     bucketSplash?: SfxEntry;
     mop?: SfxEntry;
+    bigBoot?: SfxEntry;
+    fartBomb?: SfxEntry;
+    jimmyLegs?: SfxEntry;
+    janitorsHelper?: SfxEntry;
   };
 }
 
@@ -72,6 +76,10 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       crashOut: { file: 'crash-out.ogg', volume: 4 },
       bucketSplash: { file: 'bucket-splash.ogg', volume: 8 },
       mop: { file: 'mop.ogg', volume: 3 },
+      bigBoot: { file: 'big-boot.ogg', volume: 3 },
+      fartBomb: { file: 'fart-bomb.ogg', volume: 3 },
+      jimmyLegs: { file: 'jimmy-legs.ogg', volume: 3 },
+      janitorsHelper: { file: 'janitors-helper.ogg', volume: 3 },
     },
   },
   'dr-retardo': {
