@@ -636,6 +636,7 @@ export class AuthScreen {
       "Only one more day til breakfast...",
       "Even Steven!",
       "Gotta get that bitrate goin",
+      "I live on in the machine world"
     ];
     let shuffledThoughts: string[] = [];
     let thoughtIndex = 0;
