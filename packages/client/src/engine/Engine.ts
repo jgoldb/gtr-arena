@@ -2525,6 +2525,7 @@ export class Engine {
     // Stun/sleep state & buff-driven animations — NPCs
     for (const npc of this.npcs) {
       npc.setStunned(this.buffSystem.isStunned(npc) || this.buffSystem.isSleeping(npc));
+      npc.blinded = this.buffSystem.isBlinded(npc);
       npc.model.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(npc, 'crash-out'));
       npc.model.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(npc, 'retard-strength'));
       npc.model.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(npc, 'full-retard'));

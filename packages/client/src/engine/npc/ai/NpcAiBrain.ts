@@ -54,6 +54,10 @@ export class NpcAiBrain {
   private ccReactionTimer = 0;
   private wasCCd = false;
 
+  /** Discombobulate adaptation — tracks how long we've been scrambled */
+  private discombobActive = false;
+  private discombobElapsed = 0;
+
   constructor(
     npc: NpcController,
     engine: AiEngineInterface,
@@ -112,6 +116,43 @@ export class NpcAiBrain {
       // Stun cancels casting/channeling
       if (this.casting) this.cancelCasting();
       return;
+    }
+
+    // Blinded — can't see anything. Lose target, wander aimlessly, cancel casts.
+    const isBlinded = this.engine.buffSystem.isBlinded(this.npc);
+    if (isBlinded) {
+      this.currentTarget = null;
+      this.currentTargetEntity = null;
+      this.npc.autoAttackTarget = null;
+      this.movement.faceTarget = null;
+      if (this.casting) this.cancelCasting();
+      this.movement.intent = { type: 'wander' };
+      this.movement.update(dt);
+      return;
+    }
+
+    // Discombobulate — WASD-style scrambled movement, adapts over time based on difficulty
+    const isDiscombob = this.engine.buffSystem.isDiscombobulated(this.npc);
+    if (isDiscombob) {
+      if (!this.discombobActive) {
+        // Just got discombobulated — generate a key scramble (derangement)
+        this.discombobActive = true;
+        this.discombobElapsed = 0;
+        this.movement.generateDiscombobScramble();
+      }
+      this.discombobElapsed += dt;
+      // Adaptation: NPC "figures out" the scramble over time.
+      // adaptTime: easy ~5s (never fully adapts in 5s debuff), expert ~1.5s
+      const adaptTime = 1.5 + (1 - this.difficulty.abilityUsageRate) * 6;
+      const adaptProgress = Math.min(1, this.discombobElapsed / adaptTime);
+      // Ease-in: adaptation is slow at first, then accelerates as NPC "gets it"
+      this.movement.discombobAdaptation = adaptProgress * adaptProgress;
+    } else {
+      if (this.discombobActive) {
+        this.discombobActive = false;
+        this.movement.discombobActive = false;
+        this.movement.discombobAdaptation = 0;
+      }
     }
 
     // Don't think or move while charging (Engine moves us directly)
@@ -285,10 +326,11 @@ export class NpcAiBrain {
     // Update hazards for movement controller
     this.movement.hazards = world.hazards;
 
-    // No enemies alive — idle
+    // No enemies alive (or all invisible) — drop target and idle
     if (world.enemies.length === 0) {
       this.currentTarget = null;
       this.currentTargetEntity = null;
+      this.npc.autoAttackTarget = null;
       this.movement.intent = { type: 'idle' };
       this.movement.faceTarget = null;
       return;

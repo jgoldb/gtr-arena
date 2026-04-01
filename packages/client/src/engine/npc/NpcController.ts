@@ -38,6 +38,7 @@ export class NpcController implements Targetable {
   private characterModel: CharacterModel;
 
   stunned = false;
+  blinded = false;
   isMoving = false;
 
   /** AI brain — null means zombie/passive mode (existing behavior) */
@@ -153,9 +154,9 @@ export class NpcController implements Targetable {
     }
     this.wasInCombat = this.inCombat;
 
-    // Auto-attack logic (stunned NPCs cannot attack)
+    // Auto-attack logic (stunned/blinded NPCs cannot attack)
     const target = this.autoAttackTarget;
-    if (this.inCombat && target && !target.dead && !this.stunned) {
+    if (this.inCombat && target && !target.dead && !this.stunned && !this.blinded) {
       const dx = target.mesh.position.x - this.mesh.position.x;
       const dz = target.mesh.position.z - this.mesh.position.z;
       const dist = Math.sqrt(dx * dx + dz * dz);

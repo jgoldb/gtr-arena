@@ -11,7 +11,8 @@ export type MovementIntent =
   | { type: 'idle' }
   | { type: 'moveToward'; target: THREE.Vector3; stopDistance: number }
   | { type: 'kiteFrom'; threat: THREE.Vector3; maxRange: number; preferredRange: number }
-  | { type: 'strafeAround'; center: THREE.Vector3; clockwise: boolean; radius: number };
+  | { type: 'strafeAround'; center: THREE.Vector3; clockwise: boolean; radius: number }
+  | { type: 'wander' };
 
 export interface HazardZone {
   center: THREE.Vector3;
@@ -37,6 +38,20 @@ export class MovementController {
 
   /** Updated each think tick with current hazard positions */
   hazards: HazardZone[] = [];
+
+  /** Discombobulate: WASD-style direction scramble (derangement of [0,1,2,3]).
+   *  Indices: 0=forward, 1=left, 2=backward, 3=right.
+   *  When active, the NPC's intended movement components are remapped through this. */
+  discombobActive = false;
+  /** 0 = fully scrambled, 1 = fully adapted (blends scrambled→correct) */
+  discombobAdaptation = 0;
+  private discombobMap: number[] = [0, 1, 2, 3];
+
+  /** Wander state for blind — random direction that changes periodically */
+  private wanderDir = new THREE.Vector3(Math.sin(Math.random() * Math.PI * 2), 0, Math.cos(Math.random() * Math.PI * 2));
+  private wanderTimer = 0;
+  private static readonly WANDER_CHANGE_INTERVAL = 1.2; // seconds between direction changes
+  private static readonly WANDER_SPEED_SCALE = 0.5; // walk, don't sprint
 
   /** Elevation search state — when NPC is directly below/above target */
   private elevationSearchAngle = Math.random() * Math.PI * 2;
@@ -154,6 +169,18 @@ export class MovementController {
         }
         break;
       }
+
+      case 'wander': {
+        // Blinded wander — walk in a random direction, changing periodically
+        this.wanderTimer += dt;
+        if (this.wanderTimer >= MovementController.WANDER_CHANGE_INTERVAL) {
+          this.wanderTimer = 0;
+          const angle = Math.random() * Math.PI * 2;
+          this.wanderDir.set(Math.sin(angle), 0, Math.cos(angle));
+        }
+        desiredDir = this.wanderDir.clone();
+        break;
+      }
     }
 
     // Stuckness detection: if moving but not making progress, find an escape route
@@ -204,8 +231,14 @@ export class MovementController {
       }
     }
 
+    // Apply discombobulate WASD-style direction scramble
+    if (desiredDir && this.discombobActive) {
+      this.applyDiscombobScramble(desiredDir);
+    }
+
     if (desiredDir) {
-      const effectiveSpeed = BASE_SPEED * this.speedMultiplier * this.speedScale;
+      const wanderSlow = this.intent.type === 'wander' ? MovementController.WANDER_SPEED_SCALE : 1;
+      const effectiveSpeed = BASE_SPEED * this.speedMultiplier * this.speedScale * wanderSlow;
       const moveDist = effectiveSpeed * dt;
 
       // Attempt direct movement
@@ -413,6 +446,85 @@ export class MovementController {
 
     if (!inDanger) return null;
     return new THREE.Vector3(avoidX, 0, avoidZ);
+  }
+
+  /**
+   * Generate a WASD-style derangement: a permutation of [0,1,2,3] where no
+   * element maps to itself.  Mirrors PlayerController.generateKeyScramble().
+   * 0=forward, 1=left, 2=backward, 3=right.
+   */
+  generateDiscombobScramble(): void {
+    const indices = [0, 1, 2, 3];
+    let shuffled: number[];
+    do {
+      shuffled = [...indices];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+    } while (shuffled.some((v, i) => v === i));
+    this.discombobMap = shuffled;
+    this.discombobActive = true;
+    this.discombobAdaptation = 0;
+  }
+
+  /**
+   * Decompose desiredDir into forward/left/back/right components relative to
+   * the NPC's facing, remap them through the scramble, then reconstruct.
+   * Blends between scrambled and original based on discombobAdaptation (0→1).
+   */
+  private applyDiscombobScramble(desiredDir: THREE.Vector3): void {
+    const rotY = this.npc.mesh.rotation.y;
+    const fwdX = Math.sin(rotY);
+    const fwdZ = Math.cos(rotY);
+    // right = 90° clockwise from forward
+    const rightX = Math.cos(rotY);
+    const rightZ = -Math.sin(rotY);
+
+    // Project onto local axes
+    const fwdDot = desiredDir.x * fwdX + desiredDir.z * fwdZ;
+    const rightDot = desiredDir.x * rightX + desiredDir.z * rightZ;
+
+    // Separate into 4 positive-only cardinal components
+    // [0]=forward, [1]=left, [2]=backward, [3]=right
+    const components = [
+      Math.max(0, fwdDot),    // forward
+      Math.max(0, -rightDot), // left
+      Math.max(0, -fwdDot),   // backward
+      Math.max(0, rightDot),  // right
+    ];
+
+    // Direction unit vectors for each cardinal
+    // [0]=forward, [1]=left, [2]=backward, [3]=right
+    const dirX = [fwdX, -rightX, -fwdX, rightX];
+    const dirZ = [fwdZ, -rightZ, -fwdZ, rightZ];
+
+    // Reconstruct with scrambled mapping
+    let scrambledX = 0;
+    let scrambledZ = 0;
+    for (let i = 0; i < 4; i++) {
+      const mapped = this.discombobMap[i];
+      scrambledX += dirX[mapped] * components[i];
+      scrambledZ += dirZ[mapped] * components[i];
+    }
+
+    // Normalize scrambled direction
+    const sLen = Math.sqrt(scrambledX * scrambledX + scrambledZ * scrambledZ);
+    if (sLen > 0.001) {
+      scrambledX /= sLen;
+      scrambledZ /= sLen;
+    }
+
+    // Blend: adaptation 0 = full scramble, 1 = original direction
+    const t = this.discombobAdaptation;
+    desiredDir.x = desiredDir.x * t + scrambledX * (1 - t);
+    desiredDir.z = desiredDir.z * t + scrambledZ * (1 - t);
+
+    const len = Math.sqrt(desiredDir.x * desiredDir.x + desiredDir.z * desiredDir.z);
+    if (len > 0.001) {
+      desiredDir.x /= len;
+      desiredDir.z /= len;
+    }
   }
 }
 

@@ -75,6 +75,9 @@ export function buildWorldState(
   for (const entity of allEntities) {
     if (entity === npc || entity.dead) continue;
 
+    // Untargetable entities (e.g. Dumpster Dive) are invisible to NPCs
+    if (buffSystem.isUntargetable(entity)) continue;
+
     const ePos = entity.mesh.position;
     const dx = ePos.x - selfPos.x;
     const dz = ePos.z - selfPos.z;
