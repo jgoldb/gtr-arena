@@ -346,8 +346,23 @@ export class CollisionSystem {
         const sightMinY = Math.min(yAtT0, yAtT1);
         const sightMaxY = Math.max(yAtT0, yAtT1);
 
+        // For ramped colliders, compute tighter Y bounds at the actual
+        // intersection XZ points instead of using the global worst-case range.
+        // This prevents sloped surfaces (archways) from blocking LoS between
+        // entities standing on the same surface.
+        let effectiveMinY = colMinY;
+        let effectiveMaxY = colMaxY;
+        if (col.type === 'box' && col.rotZ !== 0) {
+          const px0 = ax + tRange[0] * dx;
+          const pz0 = az + tRange[0] * dz;
+          const px1 = ax + tRange[1] * dx;
+          const pz1 = az + tRange[1] * dz;
+          effectiveMaxY = Math.max(this.getTopY(col, px0, pz0), this.getTopY(col, px1, pz1));
+          effectiveMinY = Math.min(this.getBottomY(col, px0, pz0), this.getBottomY(col, px1, pz1));
+        }
+
         // No vertical overlap: sight line passes above or below collider
-        if (sightMinY >= colMaxY || sightMaxY <= colMinY) continue;
+        if (sightMinY >= effectiveMaxY || sightMaxY <= effectiveMinY) continue;
       }
 
       return false;

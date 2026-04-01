@@ -27,6 +27,8 @@ export class NpcController implements Targetable {
   inCombat = false;
   dead = false;
   castingAbilityName: string | null = null;
+  castingAbilityId: string | null = null;
+  castingTarget: Targetable | null = null;
   castingElapsed = 0;
   castingTotalTime = 0;
   castingIsChannel = false;
@@ -196,6 +198,21 @@ export class NpcController implements Targetable {
     if (!this.aiBrain && this.resolveGround) {
       const pos = this.mesh.position;
       pos.y = this.resolveGround(pos.x, pos.z, pos.y);
+    }
+
+    // Drive cast/channel animations on the NPC model
+    if (this.castingAbilityId && this.castingTotalTime > 0) {
+      const progress = Math.min(1, this.castingElapsed / this.castingTotalTime);
+      if (this.castingIsChannel) {
+        this.characterModel.setChannelAnimation(this.castingAbilityId, progress);
+        this.characterModel.setCastAnimation(null, 0);
+      } else {
+        this.characterModel.setCastAnimation(this.castingAbilityId, progress);
+        this.characterModel.setChannelAnimation(null, 0);
+      }
+    } else {
+      this.characterModel.setCastAnimation(null, 0);
+      this.characterModel.setChannelAnimation(null, 0);
     }
 
     // Animation input — reflect actual movement state

@@ -135,11 +135,13 @@ export class Engine {
   private crotchRotVisuals = new Map<Targetable, CrotchRotVisual & { elapsed: number }>();
   private channelBeam: THREE.Mesh | null = null;
   private channelBeamTarget: Targetable | null = null;
+  private npcChannelBeams = new Map<NpcController, { beam: THREE.Mesh; target: Targetable }>();
   private bandageHealVisual: BandageHealVisual | null = null;
   private bandageLoopHandle: LoopHandle | null = null;
   private castSpellLoopHandle: LoopHandle | null = null;
   private fullRetardLoopHandle: LoopHandle | null = null;
   private odLoopHandle: LoopHandle | null = null;
+  private npcCastLoops = new Map<NpcController, { handle: LoopHandle; type: 'castSpell' | 'bandage' }>();
   private readonly blindEffect = new BlindEffect();
   private autoAttacking = false;
   private autoAttackTimer = Infinity; // time since last swing; Infinity = first swing is immediate
@@ -500,6 +502,14 @@ export class Engine {
     };
     npc.checkLineOfSight = (a, b) => this.combatSystem.hasLineOfSight(a, b);
     npc.resolveGround = (x, z, y) => this.mapManager.collision.resolve(x, z, y, 0.5).groundY;
+    // Wire up dumpster-dive sfx for NPC crackheads
+    if ('onDumpsterEmerge' in npc.model) {
+      (npc.model as any).onDumpsterEmerge = (phase: 1 | 2) => {
+        const sfx = getCharacterSfx(npc.characterId);
+        const entry = phase === 1 ? sfx?.dumpsterDive1 : sfx?.dumpsterDive2;
+        if (entry) soundEffects.play(entry.url, this.playerController.mesh.position.distanceTo(npc.mesh.position), this.sfxPan(npc.mesh.position), entry.volume);
+      };
+    }
     this.npcs.push(npc);
     this.scene.add(npc.mesh);
     return npc;
@@ -526,6 +536,12 @@ export class Engine {
       }
       this.buffSystem.clearEntity(npc);
       this.cleanupCrotchRotVisual(npc);
+      // Stop any active cast loop SFX
+      const castLoop = this.npcCastLoops.get(npc);
+      if (castLoop) { castLoop.handle.stop(); this.npcCastLoops.delete(npc); }
+      // Remove channel beam
+      const beamEntry = this.npcChannelBeams.get(npc);
+      if (beamEntry) { removeChannelBeam(this.scene, beamEntry.beam); this.npcChannelBeams.delete(npc); }
       this.npcs.splice(idx, 1);
       this.scene.remove(npc.mesh);
       npc.dispose();
@@ -540,6 +556,10 @@ export class Engine {
       }
       this.buffSystem.clearEntity(npc);
       this.cleanupCrotchRotVisual(npc);
+      const castLoop = this.npcCastLoops.get(npc);
+      if (castLoop) { castLoop.handle.stop(); this.npcCastLoops.delete(npc); }
+      const beamEntry = this.npcChannelBeams.get(npc);
+      if (beamEntry) { removeChannelBeam(this.scene, beamEntry.beam); this.npcChannelBeams.delete(npc); }
       this.scene.remove(npc.mesh);
       npc.dispose();
     }
@@ -638,6 +658,42 @@ export class Engine {
     // Trigger animation
     const targetPos = target?.mesh.position.clone();
     npc.model.triggerAbilityAnimation(ability.id, targetPos);
+
+    // Play ability sound effect with spatial audio
+    {
+      const sfxDist = this.playerController.mesh.position.distanceTo(npc.mesh.position);
+      const sfxPan = this.sfxPan(npc.mesh.position);
+      // Character-specific sounds
+      const npcSfx = getCharacterSfx(npc.characterId);
+      if (npcSfx) {
+        const sfxMap: Record<string, { url: string; volume: number } | undefined> = {
+          'crash-out': npcSfx.crashOut,
+          'bucket-splash': npcSfx.bucketSplash,
+          'fart-bomb': npcSfx.fartBomb,
+          'janitors-helper': npcSfx.janitorsHelper,
+          'pocket-sand': npcSfx.pocketSand,
+          'sweep': npcSfx.sweepStart,
+          'discombobulate': npcSfx.discombobulate,
+          'kaboom': npcSfx.kaboom,
+          'chemical-spill': npcSfx.chemicalSpill,
+          'retard-strength': npcSfx.retardStrength,
+          'full-retard': npcSfx.fullRetard,
+          'crotch-rot': npcSfx.crotchRot,
+          'sticky-fingers': npcSfx.stickyFingers,
+          'tweaker-sprint': npcSfx.tweakerSprint,
+          'crack-rock': npcSfx.crackRock,
+          'od': npcSfx.od,
+          'dumpster-dive': npcSfx.dumpsterDive1,
+        };
+        const entry = sfxMap[ability.id];
+        if (entry) soundEffects.play(entry.url, sfxDist, sfxPan, entry.volume);
+      }
+      // Shared sounds
+      if (ability.id === 'pvp-trinket') {
+        const trinketSfx = getSharedSfx().pvpTrinket;
+        if (trinketSfx) soundEffects.play(trinketSfx.url, sfxDist, sfxPan, trinketSfx.volume);
+      }
+    }
 
     // Set cooldown on the NPC's own tracker
     if (npc.aiBrain) {
@@ -906,7 +962,7 @@ export class Engine {
           }
           npc.model.triggerAbilityAnimation('sweep-finish');
           const sweepSpinSfx = getCharacterSfx(npc.characterId)?.sweepSpin;
-          if (sweepSpinSfx) soundEffects.play(sweepSpinSfx.url, undefined, undefined, sweepSpinSfx.volume);
+          if (sweepSpinSfx) soundEffects.play(sweepSpinSfx.url, this.playerController.mesh.position.distanceTo(npc.mesh.position), this.sfxPan(npc.mesh.position), sweepSpinSfx.volume);
         }
 
         // Re-engage auto-attack on current target
@@ -1038,6 +1094,42 @@ export class Engine {
     if (this.castSpellLoopHandle) {
       this.castSpellLoopHandle.stop();
       this.castSpellLoopHandle = null;
+    }
+  }
+
+  /** Track NPC casting loops — start/stop cast-spell and bandage loop SFX as NPCs begin/end casts. */
+  private updateNpcCastLoops(): void {
+    // Determine which NPCs are currently casting
+    const activeCasters = new Set<NpcController>();
+    for (const npc of this.npcs) {
+      if (npc.castingAbilityId && npc.castingTotalTime > 0) {
+        activeCasters.add(npc);
+        // Start loop if not already playing
+        if (!this.npcCastLoops.has(npc)) {
+          const dist = this.playerController.mesh.position.distanceTo(npc.mesh.position);
+          const pan = this.sfxPan(npc.mesh.position);
+          if (npc.castingAbilityId === 'bandage') {
+            const sfx = getSharedSfx().bandage;
+            if (sfx) {
+              const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, npc.mesh.uuid);
+              if (handle) this.npcCastLoops.set(npc, { handle, type: 'bandage' });
+            }
+          } else if (npc.characterId === 'dr-retardo') {
+            const sfx = getSharedSfx().castSpell;
+            if (sfx) {
+              const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, npc.mesh.uuid);
+              if (handle) this.npcCastLoops.set(npc, { handle, type: 'castSpell' });
+            }
+          }
+        }
+      }
+    }
+    // Stop loops for NPCs that stopped casting
+    for (const [npc, loop] of this.npcCastLoops) {
+      if (!activeCasters.has(npc)) {
+        loop.handle.stop();
+        this.npcCastLoops.delete(npc);
+      }
     }
   }
 
@@ -1824,6 +1916,35 @@ export class Engine {
     this.channelBeamTarget = this.casting.target;
   }
 
+  // ── NPC channel beams ───────────────────────────────────
+  private updateNpcChannelBeams(): void {
+    const activeNpcs = new Set<NpcController>();
+    for (const npc of this.npcs) {
+      if (!npc.castingIsChannel || !npc.castingAbilityId || !npc.castingTarget) continue;
+      // Look up the ability to check requiresFriendlyTarget
+      const stats = getCharacterStats(npc.characterId);
+      const ability = stats.abilities.find(a => a?.id === npc.castingAbilityId);
+      if (!ability || ability.requiresFriendlyTarget) continue;
+
+      activeNpcs.add(npc);
+      let entry = this.npcChannelBeams.get(npc);
+      if (!entry) {
+        const beam = createChannelBeam(this.scene);
+        entry = { beam, target: npc.castingTarget };
+        this.npcChannelBeams.set(npc, entry);
+      }
+      entry.target = npc.castingTarget;
+      updateChannelBeamVisual(entry.beam, npc.mesh.position, entry.target.mesh.position, this.clock.elapsedTime);
+    }
+    // Remove beams for NPCs that stopped channeling
+    for (const [npc, entry] of this.npcChannelBeams) {
+      if (!activeNpcs.has(npc)) {
+        removeChannelBeam(this.scene, entry.beam);
+        this.npcChannelBeams.delete(npc);
+      }
+    }
+  }
+
   // ── Bandage heal visual ────────────────────────────────
   private updateBandageHeal(): void {
     if (!this.casting || !this.casting.isChannel || !this.casting.target || !this.casting.ability.requiresFriendlyTarget) {
@@ -2518,6 +2639,7 @@ export class Engine {
 
     this.playerController.update(deltaTime);
     for (const npc of this.npcs) npc.update(deltaTime);
+    this.updateNpcCastLoops();
     // Despawn dead NPCs after their timer expires
     for (let i = this.npcs.length - 1; i >= 0; i--) {
       if (this.npcs[i].shouldDespawn) {
@@ -2534,6 +2656,7 @@ export class Engine {
     this.updateCrotchRotVisuals(deltaTime);
     this.updateDiscombobEffects(deltaTime);
     this.updateChannelBeam();
+    this.updateNpcChannelBeams();
     this.updateBandageHeal();
     this.combatSystem.update(deltaTime);
     this.buffSystem.update(deltaTime);

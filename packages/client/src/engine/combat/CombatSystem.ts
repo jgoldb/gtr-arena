@@ -132,9 +132,8 @@ export class CombatSystem {
 
   private getDistance(a: THREE.Vector3, b: THREE.Vector3): number {
     const dx = a.x - b.x;
-    const dy = a.y - b.y;
     const dz = a.z - b.z;
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    return Math.sqrt(dx * dx + dz * dz);
   }
 
   update(dt: number): void {

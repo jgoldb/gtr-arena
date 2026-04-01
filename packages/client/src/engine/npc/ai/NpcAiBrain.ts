@@ -122,6 +122,21 @@ export class NpcAiBrain {
       this.think();
     }
 
+    // Per-frame elevation routing — immediately corrects movement when target
+    // is elevated, instead of waiting for the next think interval
+    if (this.currentTargetEntity && !this.currentTargetEntity.dead) {
+      const elevDiff = Math.abs(this.currentTargetEntity.mesh.position.y - this.npc.mesh.position.y);
+      if (elevDiff > 2 && this.npc.mesh.position.y < 1) {
+        const waypoint = this.findElevationWaypoint(this.currentTargetEntity.mesh.position);
+        if (waypoint) {
+          this.movement.intent = { type: 'moveToward', target: waypoint, stopDistance: 1.0 };
+        } else {
+          // Near access point — chase target directly to start climbing
+          this.movement.intent = { type: 'moveToward', target: this.currentTargetEntity.mesh.position, stopDistance: 0.5 };
+        }
+      }
+    }
+
     // Movement runs every frame for smooth motion
     this.movement.update(dt);
   }
@@ -158,8 +173,10 @@ export class NpcAiBrain {
       damageMultiplier: this.engine.buffSystem.getDamageDealtMultiplier(this.npc),
     };
 
-    // Set casting state on NPC for nameplate display
+    // Set casting state on NPC for nameplate display, animation, and beam
     this.npc.castingAbilityName = ability.name;
+    this.npc.castingAbilityId = ability.id;
+    this.npc.castingTarget = target;
     this.npc.castingElapsed = 0;
     this.npc.castingTotalTime = ability.castTime;
     this.npc.castingIsChannel = isChannel;
@@ -214,8 +231,10 @@ export class NpcAiBrain {
     const { ability, target, isChannel } = this.casting;
     this.casting = null;
 
-    // Clear nameplate
+    // Clear nameplate, animation, and beam
     this.npc.castingAbilityName = null;
+    this.npc.castingAbilityId = null;
+    this.npc.castingTarget = null;
     this.npc.castingElapsed = 0;
     this.npc.castingTotalTime = 0;
     this.npc.castingIsChannel = false;
@@ -231,6 +250,8 @@ export class NpcAiBrain {
   private cancelCasting(): void {
     this.casting = null;
     this.npc.castingAbilityName = null;
+    this.npc.castingAbilityId = null;
+    this.npc.castingTarget = null;
     this.npc.castingElapsed = 0;
     this.npc.castingTotalTime = 0;
     this.npc.castingIsChannel = false;

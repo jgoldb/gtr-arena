@@ -41,6 +41,17 @@ export class MovementController {
   /** Elevation search state — when NPC is directly below/above target */
   private elevationSearchAngle = Math.random() * Math.PI * 2;
 
+  // --- Stuckness detection & escape ---
+  private stuckCheckTimer = 0;
+  private lastStuckCheckPos = new THREE.Vector3();
+  private stuckDuration = 0;
+  private escapeDir: THREE.Vector3 | null = null;
+  private escapeDirTimer = 0;
+  private static readonly STUCK_CHECK_INTERVAL = 0.35;
+  private static readonly STUCK_DIST_THRESHOLD = 0.25;
+  private static readonly STUCK_ESCAPE_AFTER = 0.7;
+  private static readonly ESCAPE_COMMIT_TIME = 0.4;
+
   constructor(
     npc: NpcController,
     collision: CollisionSystem,
@@ -143,6 +154,37 @@ export class MovementController {
         }
         break;
       }
+    }
+
+    // Stuckness detection: if moving but not making progress, find an escape route
+    if (desiredDir) {
+      this.stuckCheckTimer += dt;
+      if (this.stuckCheckTimer >= MovementController.STUCK_CHECK_INTERVAL) {
+        const sdx = pos.x - this.lastStuckCheckPos.x;
+        const sdz = pos.z - this.lastStuckCheckPos.z;
+        const moved = Math.sqrt(sdx * sdx + sdz * sdz);
+        if (moved < MovementController.STUCK_DIST_THRESHOLD) {
+          this.stuckDuration += this.stuckCheckTimer;
+        } else {
+          this.stuckDuration = 0;
+          this.escapeDir = null;
+        }
+        this.lastStuckCheckPos.set(pos.x, pos.y, pos.z);
+        this.stuckCheckTimer = 0;
+      }
+
+      if (this.stuckDuration >= MovementController.STUCK_ESCAPE_AFTER) {
+        this.escapeDirTimer -= dt;
+        if (!this.escapeDir || this.escapeDirTimer <= 0) {
+          this.escapeDir = this.findEscapeDirection(pos, desiredDir);
+          this.escapeDirTimer = MovementController.ESCAPE_COMMIT_TIME;
+        }
+        desiredDir = this.escapeDir;
+      }
+    } else {
+      this.stuckDuration = 0;
+      this.stuckCheckTimer = 0;
+      this.escapeDir = null;
     }
 
     // Hazard avoidance: if idle or moving, steer away from nearby hazards
@@ -285,6 +327,53 @@ export class MovementController {
     // Otherwise explore in a rotating pattern to eventually find the ramp/slope base
     this.elevationSearchAngle += 0.05;
     return new THREE.Vector3(Math.sin(this.elevationSearchAngle), 0, Math.cos(this.elevationSearchAngle));
+  }
+
+  /**
+   * When stuck, sample directions to find one that makes progress toward the goal.
+   * Tries 12 evenly-spaced angles, prioritising directions that are both clear
+   * of obstacles AND move closer to the intended destination.
+   */
+  private findEscapeDirection(pos: THREE.Vector3, desiredDir: THREE.Vector3): THREE.Vector3 {
+    const testDist = 3.0;
+    const baseAngle = Math.atan2(desiredDir.x, desiredDir.z);
+    const goalX = pos.x + desiredDir.x * 30;
+    const goalZ = pos.z + desiredDir.z * 30;
+    const currentGoalDist = (pos.x - goalX) ** 2 + (pos.z - goalZ) ** 2;
+
+    let bestDir = desiredDir;
+    let bestScore = -Infinity;
+
+    // Sample 12 directions — alternating left/right from the desired heading
+    for (let i = 1; i <= 12; i++) {
+      const sign = i % 2 === 0 ? 1 : -1;
+      const step = Math.ceil(i / 2);
+      const angle = baseAngle + sign * step * (Math.PI / 6);
+      const dx = Math.sin(angle);
+      const dz = Math.cos(angle);
+
+      const resolved = this.collision.resolve(
+        pos.x + dx * testDist, pos.z + dz * testDist, pos.y, COLLISION_RADIUS
+      );
+
+      const actualDx = resolved.x - pos.x;
+      const actualDz = resolved.z - pos.z;
+      const actualDist = Math.sqrt(actualDx * actualDx + actualDz * actualDz);
+
+      // Must actually be able to move in this direction
+      if (actualDist < testDist * 0.3) continue;
+
+      const newGoalDist = (resolved.x - goalX) ** 2 + (resolved.z - goalZ) ** 2;
+      const progress = currentGoalDist - newGoalDist; // positive = closer to goal
+
+      const score = progress + actualDist * 0.5;
+      if (score > bestScore) {
+        bestScore = score;
+        bestDir = new THREE.Vector3(dx, 0, dz);
+      }
+    }
+
+    return bestDir;
   }
 
   /** Snap Y to the ground at current XZ (for moving platforms, pillars, etc.) */
