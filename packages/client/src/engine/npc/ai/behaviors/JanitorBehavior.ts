@@ -162,7 +162,7 @@ export class JanitorBehavior implements CharacterBehavior {
     return {
       type: 'moveToward',
       target: currentTarget.position,
-      stopDistance: this.attackRange * 0.85,
+      stopDistance: this.attackRange * 0.85 - yardsToUnits(1),
     };
   }
 }

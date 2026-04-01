@@ -1,11 +1,17 @@
 import * as THREE from 'three';
 import type { NpcController } from '../NpcController';
 import type { CollisionSystem } from '../../physics/CollisionSystem';
+import type { Targetable } from '../../types';
 
 const BASE_SPEED = 5.6; // Same as player
 const COLLISION_RADIUS = 0.4;
 const ROTATION_SPEED = 12; // radians/sec for smooth rotation
 const ARRIVE_THRESHOLD = 0.15; // close enough to stop
+const GRAVITY = 20; // Same as player
+const GROUND_FOLLOW_THRESHOLD = 1; // Same as player — snap to ground if within this distance
+
+/** Max vertical distance to consider a hazard threatening */
+const HAZARD_Y_THRESHOLD = 2.0;
 
 export type MovementIntent =
   | { type: 'idle' }
@@ -17,6 +23,7 @@ export type MovementIntent =
 export interface HazardZone {
   center: THREE.Vector3;
   radius: number;
+  owner: Targetable;
 }
 
 export class MovementController {
@@ -53,6 +60,12 @@ export class MovementController {
   private static readonly WANDER_CHANGE_INTERVAL = 1.2; // seconds between direction changes
   private static readonly WANDER_SPEED_SCALE = 0.5; // walk, don't sprint
 
+  /** Gravity / falling state */
+  velocityY = 0;
+  grounded = true;
+  private fallPeakY = 0;
+  onFallDamage?: (fallDistance: number) => void;
+
   /** Elevation search state — when NPC is directly below/above target */
   private elevationSearchAngle = Math.random() * Math.PI * 2;
 
@@ -84,7 +97,7 @@ export class MovementController {
   update(dt: number): void {
     if (this.npc.dead || this.npc.stunned) {
       this.npc.isMoving = false;
-      this.resolveGround();
+      this.applyGravity(dt);
       return;
     }
 
@@ -236,6 +249,8 @@ export class MovementController {
       this.applyDiscombobScramble(desiredDir);
     }
 
+    let groundY: number;
+
     if (desiredDir) {
       const wanderSlow = this.intent.type === 'wander' ? MovementController.WANDER_SPEED_SCALE : 1;
       const effectiveSpeed = BASE_SPEED * this.speedMultiplier * this.speedScale * wanderSlow;
@@ -291,12 +306,12 @@ export class MovementController {
         );
         pos.x = slideResolved.x;
         pos.z = slideResolved.z;
-        pos.y = slideResolved.groundY;
+        groundY = slideResolved.groundY;
       } else {
         // Unblocked — use resolved position directly
         pos.x = resolved.x;
         pos.z = resolved.z;
-        pos.y = resolved.groundY;
+        groundY = resolved.groundY;
       }
 
       // Arena boundary clamping
@@ -306,8 +321,37 @@ export class MovementController {
 
       this.npc.isMoving = true;
     } else {
-      // Always resolve ground even when idle (for moving platforms like rising pillars)
-      this.resolveGround();
+      // Idle — still need ground height for gravity
+      groundY = this.collision.resolve(pos.x, pos.z, pos.y, COLLISION_RADIUS).groundY;
+    }
+
+    // Apply gravity (same physics as PlayerController)
+    this.velocityY -= GRAVITY * dt;
+    pos.y += this.velocityY * dt;
+
+    // Track highest point while airborne
+    if (!this.grounded && pos.y > this.fallPeakY) {
+      this.fallPeakY = pos.y;
+    }
+
+    // Landing detection
+    if (pos.y <= groundY) {
+      const wasAirborne = !this.grounded;
+      pos.y = groundY;
+      this.velocityY = 0;
+      this.grounded = true;
+      if (wasAirborne) {
+        const fallDistance = this.fallPeakY - groundY;
+        if (fallDistance > 0) this.onFallDamage?.(fallDistance);
+      }
+    } else if (this.grounded && pos.y - groundY < GROUND_FOLLOW_THRESHOLD) {
+      // Follow descending ground smoothly
+      pos.y = groundY;
+      this.velocityY = 0;
+    } else if (this.grounded && pos.y - groundY >= GROUND_FOLLOW_THRESHOLD) {
+      // Walked off a ledge — start falling
+      this.grounded = false;
+      this.fallPeakY = pos.y;
     }
 
     // Facing: prefer explicit faceTarget, otherwise face movement direction
@@ -409,14 +453,34 @@ export class MovementController {
     return bestDir;
   }
 
-  /** Snap Y to the ground at current XZ (for moving platforms, pillars, etc.) */
-  private resolveGround(): void {
+  /** Apply gravity at current XZ (used when dead/stunned to keep falling) */
+  private applyGravity(dt: number): void {
     const pos = this.npc.mesh.position;
-    const resolved = this.collision.resolve(pos.x, pos.z, pos.y, COLLISION_RADIUS);
-    pos.y = resolved.groundY;
+    const groundY = this.collision.resolve(pos.x, pos.z, pos.y, COLLISION_RADIUS).groundY;
+    this.velocityY -= GRAVITY * dt;
+    pos.y += this.velocityY * dt;
+    if (!this.grounded && pos.y > this.fallPeakY) {
+      this.fallPeakY = pos.y;
+    }
+    if (pos.y <= groundY) {
+      const wasAirborne = !this.grounded;
+      pos.y = groundY;
+      this.velocityY = 0;
+      this.grounded = true;
+      if (wasAirborne) {
+        const fallDistance = this.fallPeakY - groundY;
+        if (fallDistance > 0) this.onFallDamage?.(fallDistance);
+      }
+    } else if (this.grounded && pos.y - groundY < GROUND_FOLLOW_THRESHOLD) {
+      pos.y = groundY;
+      this.velocityY = 0;
+    } else if (this.grounded && pos.y - groundY >= GROUND_FOLLOW_THRESHOLD) {
+      this.grounded = false;
+      this.fallPeakY = pos.y;
+    }
   }
 
-  /** Returns a direction vector pointing away from the nearest hazard, or null if not in danger */
+  /** Returns a direction vector pointing away from the nearest hostile hazard, or null if not in danger */
   private getHazardAvoidanceDir(pos: THREE.Vector3): THREE.Vector3 | null {
     let closestDist = Infinity;
     let avoidX = 0;
@@ -424,6 +488,13 @@ export class MovementController {
     let inDanger = false;
 
     for (const hazard of this.hazards) {
+      // Only avoid hazards from hostile entities
+      if (!this.npc.isHostileTo(hazard.owner)) continue;
+
+      // Ignore hazards on a different vertical level
+      const dy = Math.abs(pos.y - hazard.center.y);
+      if (dy > HAZARD_Y_THRESHOLD) continue;
+
       const dx = pos.x - hazard.center.x;
       const dz = pos.z - hazard.center.z;
       const dist = Math.sqrt(dx * dx + dz * dz);

@@ -585,6 +585,23 @@ export class Engine {
     const profile = DIFFICULTY_PRESETS[difficulty];
     const aiEngine = this.getAiEngineInterface();
     npc.aiBrain = new NpcAiBrain(npc, aiEngine, behavior, profile);
+
+    // Fall damage for AI NPCs (same formula as player)
+    npc.aiBrain.movement.onFallDamage = (fallDistance: number) => {
+      if (npc.dead) return;
+      const SAFE_FALL = 8;   // ~13 yards — no damage below this
+      const FATAL_FALL = 40; // ~67 yards — 100% HP damage
+      if (fallDistance <= SAFE_FALL) return;
+      const pct = Math.min(1, (fallDistance - SAFE_FALL) / (FATAL_FALL - SAFE_FALL));
+      const damage = Math.round(npc.maxHp * pct);
+      if (damage <= 0) return;
+      npc.hp = Math.max(0, npc.hp - damage);
+      this.combatSystem.onCombatText?.(npc, damage, 'damage');
+      if (npc.hp <= 0 && !npc.dead) {
+        npc.die();
+      }
+    };
+
     return npc;
   }
 
@@ -603,11 +620,11 @@ export class Engine {
         getHazards: () => {
           const hazards: HazardInfo[] = [];
           for (const cloud of this.gasClouds) {
-            hazards.push({ center: cloud.center, radius: cloud.radius });
+            hazards.push({ center: cloud.center, radius: cloud.radius, owner: cloud.owner });
           }
           for (const pool of this.chemicalPools) {
             if (!pool.consumed) {
-              hazards.push({ center: pool.center, radius: pool.radius });
+              hazards.push({ center: pool.center, radius: pool.radius, owner: pool.owner });
             }
           }
           return hazards;

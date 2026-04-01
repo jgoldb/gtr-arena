@@ -3,6 +3,7 @@ import type { WorldState, EntityInfo } from '../WorldState';
 import type { NpcCooldownTracker } from '../NpcCooldownTracker';
 import type { DifficultyProfile } from '../DifficultyProfile';
 import type { MovementIntent } from '../MovementController';
+import { yardsToUnits, MELEE_RANGE_THRESHOLD } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
 
 export interface ScoredAction {
@@ -41,10 +42,12 @@ export interface CharacterBehavior {
 export class BaseBehavior implements CharacterBehavior {
   readonly characterId: CharacterId;
   private readonly attackRange: number;
+  private readonly isMelee: boolean;
 
   constructor(characterId: CharacterId, attackRange: number) {
     this.characterId = characterId;
     this.attackRange = attackRange;
+    this.isMelee = attackRange <= MELEE_RANGE_THRESHOLD;
   }
 
   scoreActions(): ScoredAction[] {
@@ -61,7 +64,7 @@ export class BaseBehavior implements CharacterBehavior {
     return {
       type: 'moveToward',
       target: currentTarget.position,
-      stopDistance: this.attackRange * 0.85, // get slightly closer than max range
+      stopDistance: this.attackRange * 0.85 - (this.isMelee ? yardsToUnits(1) : 0),
     };
   }
 }

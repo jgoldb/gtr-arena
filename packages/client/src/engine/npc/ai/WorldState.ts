@@ -36,6 +36,7 @@ export interface SelfInfo {
 export interface HazardInfo {
   center: THREE.Vector3;
   radius: number;
+  owner: Targetable;
 }
 
 export interface WorldState {

@@ -694,11 +694,75 @@ export class CelestialBallroomScript extends ArenaScript {
       });
     }
 
+    // Flattened mound bases — squished wider so you can walk up from any angle
+    for (const p of points) {
+      if (p.y >= 0) {
+        this.addArchBaseMound(p, radius, material);
+        break;
+      }
+    }
+    for (let i = points.length - 1; i >= 0; i--) {
+      if (points[i].y >= 0) {
+        this.addArchBaseMound(points[i], radius, material);
+        break;
+      }
+    }
+
     // Register archway base positions as elevation access points for NPC pathfinding
     const startPt = points[0];
     const endPt = points[points.length - 1];
     this.collision.addElevationAccessPoint({ x: startPt.x, z: startPt.z });
     this.collision.addElevationAccessPoint({ x: endPt.x, z: endPt.z });
+  }
+
+  /** Cone-shaped base at an archway foot — visual + radial ramp colliders */
+  private addArchBaseMound(
+    basePos: THREE.Vector3,
+    tubeRadius: number,
+    material: THREE.ShaderMaterial,
+  ): void {
+    const spread = tubeRadius * 3;           // XZ radius of the mound
+    const moundHeight = tubeRadius;          // peak matches the tube top
+
+    // Visual: faceted cone — linear profile matches the ramp colliders exactly
+    const coneGeo = new THREE.ConeGeometry(spread, moundHeight, 16, 1, true);
+    const coneMesh = new THREE.Mesh(coneGeo, material);
+    coneMesh.position.set(basePos.x, moundHeight / 2, basePos.z);
+    coneMesh.name = 'archBaseMound';
+    this.group.add(coneMesh);
+
+    // Collision: radial ramp colliders (linear slope from ground at edge to peak)
+    // topY = centerY + localX * sin(rotZ) + halfH * cos(rotZ)
+    // localX: -halfW at outer edge (topY=0), +halfW at inner edge (topY=moundHeight)
+    const numRamps = 12;
+    const rampHalfW = spread / 2;
+    const rampHalfD = (Math.PI * spread) / numRamps;
+    const rotZ = Math.asin(moundHeight / (2 * rampHalfW));
+    const sinRot = Math.sin(rotZ);
+    const cosRot = Math.cos(rotZ);
+    const halfH = 1.5;
+    // From: 0 = centerY - rampHalfW * sinRot + halfH * cosRot  (outer edge at ground)
+    const centerY = rampHalfW * sinRot - halfH * cosRot;
+
+    for (let i = 0; i < numRamps; i++) {
+      const theta = (i / numRamps) * Math.PI * 2;
+      const inwardAngle = theta + Math.PI;
+      const cx = basePos.x + Math.cos(theta) * rampHalfW;
+      const cz = basePos.z + Math.sin(theta) * rampHalfW;
+
+      this.collision.addCollider({
+        type: 'box',
+        cx,
+        cz,
+        halfW: rampHalfW,
+        halfD: rampHalfD,
+        cosY: Math.cos(inwardAngle),
+        sinY: Math.sin(inwardAngle),
+        centerY,
+        halfH,
+        rotZ,
+      });
+    }
   }
 
   // ---------------------------------------------------------------------------

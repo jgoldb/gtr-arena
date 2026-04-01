@@ -216,10 +216,17 @@ export class NpcController implements Targetable {
       this.characterModel.setChannelAnimation(null, 0);
     }
 
-    // Animation input — reflect actual movement state
-    const animInput: AnimationInput = this.isMoving
-      ? { isMoving: true, isGrounded: true, velocityY: 0, turnSpeed: 0, speedMultiplier: 1, strafeDirection: 0 }
-      : IDLE_INPUT;
+    // Animation input — reflect actual movement and gravity state
+    const isGrounded = this.aiBrain ? this.aiBrain.movement.grounded : true;
+    const velY = this.aiBrain ? this.aiBrain.movement.velocityY : 0;
+    const animInput: AnimationInput = {
+      isMoving: this.isMoving,
+      isGrounded,
+      velocityY: velY,
+      turnSpeed: 0,
+      speedMultiplier: 1,
+      strafeDirection: 0,
+    };
     this.characterModel.update(dt, animInput);
   }
 
