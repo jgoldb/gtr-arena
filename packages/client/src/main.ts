@@ -639,6 +639,12 @@ function showAuth(): void {
   cleanupCurrentState();
   currentState = 'auth';
   hideGameUI();
+  if (updatePending) {
+    sessionStorage.setItem('gtr_updated', '1');
+    location.reload();
+    return;
+  }
+  checkForUpdate();
 
   authScreen = new AuthScreen((result) => {
     sessionStorage.setItem('gtr_username', result.username);
