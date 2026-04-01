@@ -638,10 +638,6 @@ export class GameLobbyScreen {
     // Determine what to preview: playground-only local pick overrides server selection
     const localPlayer = this.players.find(p => p.userId === this.localUserId);
     const serverCharId = (localPlayer?.characterId as CharacterId) ?? null;
-    // If the server just confirmed a real selection, clear any playground preview
-    if (serverCharId && !CHARACTER_LIST.find(c => c.id === serverCharId)?.playgroundOnly) {
-      this.previewOnlyCharId = null;
-    }
     const displayCharId = this.previewOnlyCharId ?? serverCharId;
     this.setPreviewCharacter(displayCharId);
     this.updateCharInfo(displayCharId);
