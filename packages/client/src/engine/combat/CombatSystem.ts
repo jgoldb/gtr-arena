@@ -207,7 +207,8 @@ export class CombatSystem {
     ability: Ability,
     attacker: Targetable,
     attackerRotY: number,
-    target: Targetable | null
+    target: Targetable | null,
+    skipGlobalCooldown = false
   ): CombatResult {
     if (attacker.dead) {
       return { success: false, error: 'dead', errorMessage: 'You are dead' };
@@ -225,7 +226,7 @@ export class CombatSystem {
       return { success: false, error: 'locked', errorMessage: 'Cannot use while Dumpster Diving' };
     }
     const isGod = this.godModeEntities.has(attacker);
-    if (!isGod && this.cooldowns.has(ability.id)) {
+    if (!isGod && !skipGlobalCooldown && this.cooldowns.has(ability.id)) {
       return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
     }
     if (ability.requiresHostileTarget) {
@@ -289,9 +290,11 @@ export class CombatSystem {
     ability: Ability,
     attacker: Targetable,
     attackerRotY: number,
-    target: Targetable | null
+    target: Targetable | null,
+    /** When true, skips global cooldown/GCD checks and won't set global cooldowns (for NPC AI with own tracker) */
+    skipGlobalCooldown = false
   ): CombatResult {
-    const validation = this.validateAbility(ability, attacker, attackerRotY, target);
+    const validation = this.validateAbility(ability, attacker, attackerRotY, target, skipGlobalCooldown);
     if (!validation.success) return validation;
 
     // Success — apply effects
@@ -391,7 +394,7 @@ export class CombatSystem {
       this.buffSystem.apply(attacker, ability.appliesSelfBuff);
     }
 
-    if (!this.godModeEntities.has(attacker)) {
+    if (!this.godModeEntities.has(attacker) && !skipGlobalCooldown) {
       this.setCooldown(ability.id, ability.cooldown);
     }
 

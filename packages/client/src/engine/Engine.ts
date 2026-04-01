@@ -3,12 +3,16 @@ import { Renderer } from './renderer/Renderer';
 import { InputManager } from './input/InputManager';
 import { MapManager } from './map/MapManager';
 import { PlayerController } from './player/PlayerController';
-import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, ODStunDebuff, ParanoidDebuff, RecentlyBandagedDebuff, type Ability } from './combat/Ability';
+import { GLOBAL_COOLDOWN, yardsToUnits, ArenaPreparationBuff, RestingBuff, Sweep, RottenCrotchStun, KaboomStun, TweakerSprint, TweakerSprintSlow, ODStunDebuff, ParanoidDebuff, RecentlyBandagedDebuff, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, type Ability } from './combat/Ability';
 import type { BuffDefinition } from './combat/BuffSystem';
 import { CharacterId } from './player/characters';
 import { getCharacterStats, getCharacterSfx, getSharedSfx, isRangedAutoAttack, BULLET_SPEED } from '@gtr/shared';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
+import { NpcAiBrain, type AiEngineInterface } from './npc/ai/NpcAiBrain';
+import { createCharacterBehavior } from './npc/ai/behaviors';
+import { DIFFICULTY_PRESETS, type DifficultyLevel } from './npc/ai/DifficultyProfile';
+import type { HazardInfo } from './npc/ai/WorldState';
 import { TargetingSystem } from './targeting/TargetingSystem';
 import { CombatSystem } from './combat/CombatSystem';
 import { RegenSystem } from './combat/RegenSystem';
@@ -162,6 +166,15 @@ export class Engine {
     damage: number;
     savedAutoAttackTarget: Targetable | null;
   } | null = null;
+  private npcCharges: Map<NpcController, {
+    type: 'sweep' | 'tweaker-sprint';
+    elapsed: number;
+    duration: number;
+    direction: THREE.Vector3;
+    speed: number;
+    hitTargets: Set<Targetable>;
+    maxDamage: number;
+  }> = new Map();
 
   // Casting system (also used for channels)
   private casting: {
@@ -409,6 +422,12 @@ export class Engine {
         this.arenaPreparationActive = false;
         this.buffSystem.remove(this.playerController, ArenaPreparationBuff.id);
       };
+      // In single player, clicking "Open Gates" immediately opens the doors
+      if ('onVoteOpenGates' in script) {
+        (script as any).onVoteOpenGates = () => {
+          script.forceOpenDoors?.();
+        };
+      }
     }
   }
 
@@ -529,6 +548,375 @@ export class Engine {
 
   getNpcs(): readonly NpcController[] {
     return this.npcs;
+  }
+
+  // ── AI NPC Spawning ─────────────────────────────────
+
+  spawnAiNpc(
+    characterId: CharacterId,
+    position: THREE.Vector3,
+    team: number,
+    name: string,
+    difficulty: DifficultyLevel = 'medium'
+  ): NpcController {
+    const npc = this.spawnNpc(characterId, position, team, name);
+    const behavior = createCharacterBehavior(characterId);
+    const profile = DIFFICULTY_PRESETS[difficulty];
+    const aiEngine = this.getAiEngineInterface();
+    npc.aiBrain = new NpcAiBrain(npc, aiEngine, behavior, profile);
+    return npc;
+  }
+
+  private aiEngineInterface: AiEngineInterface | null = null;
+
+  private getAiEngineInterface(): AiEngineInterface {
+    if (!this.aiEngineInterface) {
+      this.aiEngineInterface = {
+        buffSystem: this.buffSystem,
+        combatSystem: this.combatSystem,
+        getCollisionSystem: () => this.mapManager.collision,
+        getArenaBounds: () => this.arenaPreparationActive
+          ? this.mapManager.getNpcSpawnBounds()
+          : this.mapManager.getBounds(),
+        getAllTargetables: () => [this.playerController as Targetable, ...this.npcs],
+        getHazards: () => {
+          const hazards: HazardInfo[] = [];
+          for (const cloud of this.gasClouds) {
+            hazards.push({ center: cloud.center, radius: cloud.radius });
+          }
+          for (const pool of this.chemicalPools) {
+            if (!pool.consumed) {
+              hazards.push({ center: pool.center, radius: pool.radius });
+            }
+          }
+          return hazards;
+        },
+        npcUseAbility: (npc, abilityId, target, groundPos) => {
+          return this.npcUseAbility(npc, abilityId, target, groundPos);
+        },
+        npcApplyChannelTick: (npc, target, tickDamage, healAmount, damageMultiplier) => {
+          if (target.isHostileTo(npc) && tickDamage > 0) {
+            this.combatSystem.applyChannelTickDamage(npc, target, tickDamage, damageMultiplier);
+          }
+          if (!target.isHostileTo(npc) && healAmount > 0) {
+            this.combatSystem.applyHeal(target, healAmount);
+          }
+        },
+        isNpcCharging: (npc) => this.npcCharges.has(npc),
+        isArenaPreparationActive: () => this.arenaPreparationActive,
+      };
+    }
+    return this.aiEngineInterface;
+  }
+
+  // ── NPC Ability Execution ────────────────────────────
+
+  /**
+   * Execute an ability for an AI NPC. Handles validation, damage, and post-success effects.
+   * Returns true if the ability was successfully used.
+   */
+  npcUseAbility(npc: NpcController, abilityId: string, target: Targetable | null, groundPos?: THREE.Vector3): boolean {
+    const stats = getCharacterStats(npc.characterId);
+    const ability = stats.abilities.find(a => a?.id === abilityId);
+    if (!ability) return false;
+
+    // Skip auto-attack toggle
+    if (ability.isAutoAttack) return false;
+
+    // Check NPC's own cooldown tracker (if AI-controlled)
+    if (npc.aiBrain && !npc.aiBrain.cooldowns.isReady(abilityId)) return false;
+
+    // Ground-targeted abilities (Bottle Chuck)
+    if (ability.groundTargeted && groundPos) {
+      return this.npcUseGroundTargetAbility(npc, ability, groundPos);
+    }
+
+    // Use the combat system for validation and damage — skip global cooldown tracking
+    const result = this.combatSystem.useAbility(ability, npc, npc.mesh.rotation.y, target, /* skipGlobalCooldown */ true);
+    if (!result.success) return false;
+
+    // Trigger animation
+    const targetPos = target?.mesh.position.clone();
+    npc.model.triggerAbilityAnimation(ability.id, targetPos);
+
+    // Set cooldown on the NPC's own tracker
+    if (npc.aiBrain) {
+      npc.aiBrain.cooldowns.setCooldown(ability.id, ability.cooldown);
+      npc.aiBrain.cooldowns.triggerGcd();
+    }
+
+    // ── Post-success side effects ──
+
+    if (ability.id === 'pvp-trinket') {
+      this.buffSystem.removeAllCCEffects(npc);
+    }
+
+    if (ability.id === 'fart-bomb') {
+      this.spawnGasCloud(npc.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, npc);
+    }
+
+    if (ability.id === 'chemical-spill') {
+      this.spawnChemicalPool(npc.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, npc, 2);
+    }
+
+    if (ability.id === 'crotch-rot' && target && !target.dead) {
+      this.spawnDot(target, CrotchRotDot, 12, 3, 720, npc);
+    }
+
+    if (ability.id === 'sweep') {
+      this.startNpcSweepCharge(npc);
+    }
+
+    if (ability.id === 'tweaker-sprint' && target) {
+      this.startNpcTweakerSprintCharge(npc, target);
+    }
+
+    if (ability.id === 'kaboom') {
+      this.npcExecuteKaboom(npc);
+    }
+
+    // Crackhead tweaking stacks
+    if (['shank', 'pocket-sand', 'sticky-fingers', 'dumpster-dive', 'tweaker-sprint', 'gank'].includes(ability.id)) {
+      this.buffSystem.addStacks(npc, 'tweaking', 15);
+      if (this.buffSystem.getStacks(npc, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(npc, 'paranoid')) {
+        this.buffSystem.apply(npc, ParanoidDebuff);
+      }
+    }
+
+    if (ability.id === 'crack-rock') {
+      this.combatSystem.applyHeal(npc, 400);
+      this.buffSystem.addStacks(npc, 'tweaking', 25);
+      if (this.buffSystem.getStacks(npc, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(npc, 'paranoid')) {
+        this.buffSystem.apply(npc, ParanoidDebuff);
+      }
+    }
+
+    if (ability.id === 'gank' && target) {
+      if (target.dead || target.hp / target.maxHp < 0.30) {
+        npc.aiBrain?.cooldowns.clearCooldown('gank');
+      }
+    }
+
+    if (ability.id === 'sticky-fingers' && target) {
+      const stealable = this.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
+      if (stealable.length > 0) {
+        const stolen = stealable[Math.floor(Math.random() * stealable.length)];
+        const remainingTime = stolen.remaining;
+        this.buffSystem.remove(target, stolen.definition.id);
+        this.buffSystem.apply(npc, stolen.definition);
+        this.buffSystem.setRemaining(npc, stolen.definition.id, remainingTime);
+      } else {
+        const drain = Math.min(150, target.mana);
+        target.mana -= drain;
+        npc.mana = Math.min(npc.mana + 150, npc.maxMana);
+      }
+    }
+
+    // Melee abilities should engage auto-attack
+    if (ability.isMelee && target && target.isHostileTo(npc) && !target.dead) {
+      npc.autoAttackTarget = target;
+    }
+
+    return true;
+  }
+
+  private npcUseGroundTargetAbility(npc: NpcController, ability: Ability, groundPos: THREE.Vector3): boolean {
+    if (npc.dead) return false;
+    if (this.buffSystem.isStunned(npc)) return false;
+
+    // Range check to ground position
+    const dx = groundPos.x - npc.mesh.position.x;
+    const dz = groundPos.z - npc.mesh.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (ability.range && dist > ability.range + yardsToUnits(2)) return false;
+
+    // Mana check
+    const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(npc));
+    if (npc.mana < effectiveCost) return false;
+
+    // Cooldown check
+    if (npc.aiBrain && !npc.aiBrain.cooldowns.isReady(ability.id)) return false;
+
+    // Deduct mana
+    npc.mana -= effectiveCost;
+
+    // Set cooldown
+    if (npc.aiBrain) {
+      npc.aiBrain.cooldowns.setCooldown(ability.id, ability.cooldown);
+      npc.aiBrain.cooldowns.triggerGcd();
+    }
+
+    // Animation
+    npc.model.triggerAbilityAnimation(ability.id, groundPos);
+
+    // Schedule AoE impact with delay
+    this.pendingAoeImpacts.push({
+      ability,
+      groundPos: groundPos.clone(),
+      delay: Engine.BOTTLE_CHUCK_IMPACT_DELAY,
+      elapsed: 0,
+      owner: npc,
+    });
+
+    return true;
+  }
+
+  private npcExecuteKaboom(npc: NpcController): void {
+    const rotY = npc.mesh.rotation.y;
+    const forwardX = Math.sin(rotY);
+    const forwardZ = Math.cos(rotY);
+    const range = Engine.KABOOM_CONE_RANGE;
+    const cosHalf = Math.cos(Engine.KABOOM_CONE_HALF_ANGLE);
+
+    this.spawnKaboomGust(npc.mesh.position, rotY, range);
+
+    // Check all entities (player + other NPCs)
+    const allTargets: Targetable[] = [this.playerController, ...this.npcs];
+    for (const t of allTargets) {
+      if (t === npc || t.dead || !t.isHostileTo(npc) || this.buffSystem.isUntargetable(t)) continue;
+      const dx = t.mesh.position.x - npc.mesh.position.x;
+      const dz = t.mesh.position.z - npc.mesh.position.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist > range || dist < 0.01) continue;
+
+      const toTargetX = dx / dist;
+      const toTargetZ = dz / dist;
+      const dot = forwardX * toTargetX + forwardZ * toTargetZ;
+      if (dot < cosHalf) continue;
+
+      this.combatSystem.enterCombat(npc);
+      this.combatSystem.enterCombat(t);
+      this.activeKnockbacks.push({
+        target: t,
+        dirX: toTargetX,
+        dirZ: toTargetZ,
+        distance: Engine.KABOOM_KNOCKBACK_DISTANCE,
+        duration: Engine.KABOOM_KNOCKBACK_DURATION,
+        elapsed: 0,
+      });
+    }
+  }
+
+  // ── NPC Charges ─────────────────────────────────────────
+
+  startNpcSweepCharge(npc: NpcController): void {
+    const rotY = npc.mesh.rotation.y;
+    const direction = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
+
+    this.npcCharges.set(npc, {
+      type: 'sweep',
+      elapsed: 0,
+      duration: Sweep.chargeDuration!,
+      direction,
+      speed: Sweep.chargeSpeed!,
+      hitTargets: new Set(),
+      maxDamage: Sweep.chargeMaxDamage!,
+    });
+  }
+
+  startNpcTweakerSprintCharge(npc: NpcController, target: Targetable): void {
+    const dx = target.mesh.position.x - npc.mesh.position.x;
+    const dz = target.mesh.position.z - npc.mesh.position.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist < 0.01) return;
+
+    const direction = new THREE.Vector3(dx / dist, 0, dz / dist);
+    npc.mesh.rotation.y = Math.atan2(direction.x, direction.z);
+
+    const speed = TweakerSprint.chargeSpeed!;
+    const chargeDist = Math.max(0, dist - yardsToUnits(1));
+    const duration = chargeDist / speed;
+
+    this.npcCharges.set(npc, {
+      type: 'tweaker-sprint',
+      elapsed: 0,
+      duration,
+      direction,
+      speed,
+      hitTargets: new Set(),
+      maxDamage: TweakerSprint.chargeMaxDamage!,
+    });
+  }
+
+  private updateNpcCharges(dt: number): void {
+    for (const [npc, charge] of this.npcCharges) {
+      if (npc.dead || this.buffSystem.isStunned(npc)) {
+        this.npcCharges.delete(npc);
+        continue;
+      }
+
+      charge.elapsed += dt;
+
+      // Move NPC forward
+      npc.mesh.position.addScaledVector(charge.direction, charge.speed * dt);
+
+      // Clamp to arena bounds
+      const bounds = this.mapManager.getNpcSpawnBounds();
+      const margin = 0.4;
+      npc.mesh.position.x = Math.max(bounds.minX + margin, Math.min(bounds.maxX - margin, npc.mesh.position.x));
+      npc.mesh.position.z = Math.max(bounds.minZ + margin, Math.min(bounds.maxZ - margin, npc.mesh.position.z));
+
+      // Resolve collision
+      const resolved = this.mapManager.collision.resolve(
+        npc.mesh.position.x, npc.mesh.position.z, npc.mesh.position.y, 0.4
+      );
+      npc.mesh.position.x = resolved.x;
+      npc.mesh.position.z = resolved.z;
+      if (npc.mesh.position.y <= resolved.groundY) {
+        npc.mesh.position.y = resolved.groundY;
+      }
+
+      // Hit detection against all hostile entities
+      const hitRadius = 1.0;
+      const allTargets: Targetable[] = [this.playerController, ...this.npcs];
+      for (const t of allTargets) {
+        if (t === npc || t.dead || charge.hitTargets.has(t) || !t.isHostileTo(npc) || this.buffSystem.isUntargetable(t)) continue;
+        const tdx = npc.mesh.position.x - t.mesh.position.x;
+        const tdz = npc.mesh.position.z - t.mesh.position.z;
+        const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
+        if (tdist <= hitRadius) {
+          charge.hitTargets.add(t);
+          if (charge.type === 'sweep') {
+            const damagePercent = Math.min(1, charge.elapsed / charge.duration);
+            const baseDamage = Math.round(charge.maxDamage * damagePercent);
+            if (baseDamage > 0) {
+              this.combatSystem.applySweepDamage(npc, t, baseDamage);
+            }
+          } else {
+            // tweaker-sprint: flat damage + slow
+            this.combatSystem.applySweepDamage(npc, t, charge.maxDamage);
+            this.buffSystem.apply(t, TweakerSprintSlow);
+          }
+        }
+      }
+
+      // End charge
+      if (charge.elapsed >= charge.duration) {
+        if (charge.type === 'sweep') {
+          // AoE burst at end: full damage to all hostiles in melee range
+          const meleeRange = npc.model.autoAttackRange;
+          for (const t of allTargets) {
+            if (t === npc || t.dead || !t.isHostileTo(npc) || this.buffSystem.isUntargetable(t)) continue;
+            const tdx = npc.mesh.position.x - t.mesh.position.x;
+            const tdz = npc.mesh.position.z - t.mesh.position.z;
+            const tdist = Math.sqrt(tdx * tdx + tdz * tdz);
+            if (tdist <= meleeRange) {
+              this.combatSystem.applySweepDamage(npc, t, charge.maxDamage);
+            }
+          }
+          npc.model.triggerAbilityAnimation('sweep-finish');
+          const sweepSpinSfx = getCharacterSfx(npc.characterId)?.sweepSpin;
+          if (sweepSpinSfx) soundEffects.play(sweepSpinSfx.url, undefined, undefined, sweepSpinSfx.volume);
+        }
+
+        // Re-engage auto-attack on current target
+        if (npc.aiBrain?.currentTargetEntity && !npc.aiBrain.currentTargetEntity.dead) {
+          npc.autoAttackTarget = npc.aiBrain.currentTargetEntity;
+        }
+
+        this.npcCharges.delete(npc);
+      }
+    }
   }
 
   // ── Casting ─────────────────────────────────────────
@@ -702,8 +1090,9 @@ export class Engine {
 
       // Impact! Damage all hostiles in radius
       const radius = impact.ability.aoeRadius ?? 0;
-      for (const target of this.npcs) {
-        if (target.dead || !target.isHostileTo(impact.owner) || this.buffSystem.isUntargetable(target)) continue;
+      const aoeTargets: Targetable[] = [this.playerController, ...this.npcs];
+      for (const target of aoeTargets) {
+        if (target === impact.owner || target.dead || !target.isHostileTo(impact.owner) || this.buffSystem.isUntargetable(target)) continue;
         const dx = target.mesh.position.x - impact.groundPos.x;
         const dy = target.mesh.position.y - impact.groundPos.y;
         const dz = target.mesh.position.z - impact.groundPos.z;
@@ -2101,6 +2490,7 @@ export class Engine {
     // Sweep charge: move player before collision resolution in player update
     this.updateSweepCharge(deltaTime);
     this.updateTweakerSprintCharge(deltaTime);
+    this.updateNpcCharges(deltaTime);
 
     // Cancel charges if stunned
     if (playerStunned && this.sweepCharge) {

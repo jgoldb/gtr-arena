@@ -4,6 +4,7 @@ import { createCharacter, CharacterId } from '../player/characters';
 import type { Targetable } from '../types';
 import { createTargetingHitArea } from '../targeting/targetingHitArea';
 import { getCharacterStats, isRangedAutoAttack, GLOBAL_COOLDOWN } from '@gtr/shared';
+import type { NpcAiBrain } from './ai/NpcAiBrain';
 
 const IDLE_INPUT: AnimationInput = {
   isMoving: false,
@@ -36,6 +37,9 @@ export class NpcController implements Targetable {
 
   stunned = false;
   isMoving = false;
+
+  /** AI brain — null means zombie/passive mode (existing behavior) */
+  aiBrain: NpcAiBrain | null = null;
 
   // NPC auto-attack
   autoAttackTarget: Targetable | null = null;
@@ -126,6 +130,11 @@ export class NpcController implements Targetable {
       return;
     }
 
+    // AI brain update (if present — otherwise zombie mode)
+    if (this.aiBrain) {
+      this.aiBrain.update(dt);
+    }
+
     // Combat state transitions
     if (this.inCombat && !this.wasInCombat) {
       // Entered combat — begin auto-attacking
@@ -182,13 +191,18 @@ export class NpcController implements Targetable {
       }
     }
 
-    // Track moving ground (e.g. elevator platforms)
-    if (this.resolveGround) {
+    // Track moving ground (e.g. elevator platforms) — only for zombie NPCs
+    // AI NPCs get ground resolution from MovementController
+    if (!this.aiBrain && this.resolveGround) {
       const pos = this.mesh.position;
       pos.y = this.resolveGround(pos.x, pos.z, pos.y);
     }
 
-    this.characterModel.update(dt, IDLE_INPUT);
+    // Animation input — reflect actual movement state
+    const animInput: AnimationInput = this.isMoving
+      ? { isMoving: true, isGrounded: true, velocityY: 0, turnSpeed: 0, speedMultiplier: 1, strafeDirection: 0 }
+      : IDLE_INPUT;
+    this.characterModel.update(dt, animInput);
   }
 
   getPosition(): THREE.Vector3 {

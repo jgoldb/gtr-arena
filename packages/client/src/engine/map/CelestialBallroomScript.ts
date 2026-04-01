@@ -590,7 +590,7 @@ export class CelestialBallroomScript extends ArenaScript {
     // Arch 1: Grand Celestial Sweep — wide, sweeping, western side
     // Curve starts/ends underground so the tube emerges naturally from the ground
     const arch1Curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-34, -2.2, 23),
+      new THREE.Vector3(-34, -3.0, 23),
       new THREE.Vector3(-30, 0, 20),
       new THREE.Vector3(-24, 4, 14),
       new THREE.Vector3(-16, 8, 7),
@@ -600,13 +600,13 @@ export class CelestialBallroomScript extends ArenaScript {
       new THREE.Vector3(-16, 8, -7),
       new THREE.Vector3(-24, 4, -12),
       new THREE.Vector3(-30, 0, -16),
-      new THREE.Vector3(-34, -2.2, -19),
+      new THREE.Vector3(-34, -3.0, -19),
     ]);
-    this.buildArchway(arch1Curve, 2.2, 8, 1.5, diamondMat);
+    this.buildArchway(arch1Curve, 3.0, 8, 1.5, diamondMat);
 
     // Arch 2: Crystal Spire — taller, steeper, asymmetric descent, eastern side
     const arch2Curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(34, -1.8, -22),
+      new THREE.Vector3(34, -2.6, -22),
       new THREE.Vector3(30, 0, -19),
       new THREE.Vector3(24, 4, -15),
       new THREE.Vector3(18, 9, -10),
@@ -616,9 +616,9 @@ export class CelestialBallroomScript extends ArenaScript {
       new THREE.Vector3(18, 8.5, 6),
       new THREE.Vector3(24, 3.5, 11),
       new THREE.Vector3(30, 0, 15),
-      new THREE.Vector3(34, -1.8, 18),
+      new THREE.Vector3(34, -2.6, 18),
     ]);
-    this.buildArchway(arch2Curve, 1.8, 6, 1.2, diamondMat);
+    this.buildArchway(arch2Curve, 2.6, 6, 1.2, diamondMat);
 
     // Floating sparkle particles around both arches
     this.createArchSparkles(arch1Curve, arch2Curve);
@@ -693,6 +693,12 @@ export class CelestialBallroomScript extends ArenaScript {
         rotZ,
       });
     }
+
+    // Register archway base positions as elevation access points for NPC pathfinding
+    const startPt = points[0];
+    const endPt = points[points.length - 1];
+    this.collision.addElevationAccessPoint({ x: startPt.x, z: startPt.z });
+    this.collision.addElevationAccessPoint({ x: endPt.x, z: endPt.z });
   }
 
   // ---------------------------------------------------------------------------

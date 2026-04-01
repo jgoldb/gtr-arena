@@ -76,7 +76,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
   'janitor': {
     id: 'janitor',
     displayName: 'The Janitor',
-    baseMaxHp: 3008,
+    baseMaxHp: 300899,
     baseMaxMana: 1042,
     autoAttackDamageMin: 163,
     autoAttackDamageMax: 200,

@@ -44,13 +44,20 @@ const PLAYER_HEIGHT = 1.8;
 const STEP_HEIGHT = 0.5;
 const WATER_WADE_DEPTH = 0.3;
 
+export interface ElevationAccessPoint {
+  readonly x: number;
+  readonly z: number;
+}
+
 export class CollisionSystem {
   private colliders: Collider[] = [];
   private waterZones: WaterZone[] = [];
+  private elevationAccessPoints: ElevationAccessPoint[] = [];
 
   buildFromObstacles(obstacles: ObstacleConfig[]): void {
     this.colliders = [];
     this.waterZones = [];
+    this.elevationAccessPoints = [];
 
     for (const obs of obstacles) {
       if (obs.type === 'water') {
@@ -422,5 +429,13 @@ export class CollisionSystem {
 
   getWaterZones(): readonly WaterZone[] {
     return this.waterZones;
+  }
+
+  addElevationAccessPoint(point: ElevationAccessPoint): void {
+    this.elevationAccessPoints.push(point);
+  }
+
+  getElevationAccessPoints(): readonly ElevationAccessPoint[] {
+    return this.elevationAccessPoints;
   }
 }
