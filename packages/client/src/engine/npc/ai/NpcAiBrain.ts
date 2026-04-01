@@ -4,7 +4,7 @@ import type { Targetable } from '../../types';
 import type { BuffSystem } from '../../combat/BuffSystem';
 import type { CombatSystem } from '../../combat/CombatSystem';
 import type { CollisionSystem } from '../../physics/CollisionSystem';
-import type { Ability } from '@gtr/shared';
+import { getCharacterStats, yardsToUnits, type Ability } from '@gtr/shared';
 import { MovementController } from './MovementController';
 import { NpcCooldownTracker } from './NpcCooldownTracker';
 import type { DifficultyProfile } from './DifficultyProfile';
@@ -43,6 +43,7 @@ export class NpcAiBrain {
   private difficulty: DifficultyProfile;
   readonly movement: MovementController;
   readonly cooldowns: NpcCooldownTracker;
+  private abilityLookup: Map<string, Ability>;
 
   private thinkTimer = 0;
   private currentTarget: EntityInfo | null = null;
@@ -60,6 +61,14 @@ export class NpcAiBrain {
     this.behavior = behavior;
     this.difficulty = difficulty;
     this.cooldowns = new NpcCooldownTracker();
+
+    // Build ability lookup from character definition
+    this.abilityLookup = new Map();
+    const stats = getCharacterStats(npc.characterId);
+    for (const ability of stats.abilities) {
+      if (ability) this.abilityLookup.set(ability.id, ability);
+    }
+
     this.movement = new MovementController(
       npc,
       engine.getCollisionSystem(),
@@ -338,6 +347,9 @@ export class NpcAiBrain {
       );
 
       if (actions.length > 0) {
+        // Apply general smart filters (penalize wasteful uses)
+        this.applySmartFilters(actions, world);
+
         // Apply difficulty fuzzing
         this.fuzzScores(actions);
 
@@ -428,6 +440,70 @@ export class NpcAiBrain {
     if (Math.random() > this.difficulty.interruptChance) return;
 
     this.engine.npcUseAbility(this.npc, 'pvp-trinket', null);
+  }
+
+  /**
+   * Apply general-purpose intelligence filters to scored actions.
+   * Penalizes wasteful ability uses: heals at high HP, defensive buffs with no
+   * pressure, targeted abilities out of range. The difficulty's `wastefulness`
+   * parameter controls how strict these checks are — easy bots waste more.
+   */
+  private applySmartFilters(actions: ScoredAction[], world: WorldState): void {
+    const w = this.difficulty.wastefulness;
+    // penaltyScale: 0.3 for easy → 0.98 for expert
+    const penaltyScale = 1 - w;
+
+    for (const action of actions) {
+      if (!action.abilityId) continue;
+      const ability = this.abilityLookup.get(action.abilityId);
+      if (!ability) continue;
+
+      // ── Self-heal at high HP ──
+      // Self-cast heal (no target = self): skip when healthy
+      if (ability.healAmount && !ability.requiresHostileTarget && !action.target) {
+        // threshold: easy ~0.86, expert ~0.66 — expert skips healing above 66% HP
+        const threshold = 0.65 + 0.30 * w;
+        if (world.self.hpPercent > threshold) {
+          action.score -= 100 * penaltyScale;
+        }
+      }
+
+      // ── Ally heal at high HP ──
+      if (ability.healAmount && action.target) {
+        const isAlly = !world.self.entity.isHostileTo(action.target.entity);
+        if (isAlly) {
+          const threshold = 0.65 + 0.30 * w;
+          if (action.target.hpPercent > threshold) {
+            action.score -= 100 * penaltyScale;
+          }
+        }
+      }
+
+      // ── Defensive self-buff with no pressure ──
+      // Shield / damage-reduction buffs are wasteful at high HP with no nearby threats
+      if (ability.appliesSelfBuff && !ability.requiresHostileTarget && !ability.healAmount) {
+        const buff = ability.appliesSelfBuff;
+        const isDefensive = buff.shieldAmount != null
+          || buff.shieldReflectPercent != null
+          || buff.effects.some(e => e.type === 'damageTakenPercent' && e.value < 0);
+        if (isDefensive) {
+          const threatRange = yardsToUnits(8);
+          const noNearbyThreat = !world.enemies.some(e => e.distance < threatRange);
+          const hpThreshold = 0.60 + 0.30 * w;
+          if (world.self.hpPercent > hpThreshold && noNearbyThreat) {
+            action.score -= 80 * penaltyScale;
+          }
+        }
+      }
+
+      // ── Targeted ability out of range (safety net) ──
+      if (ability.range && action.target) {
+        const rangeBuffer = ability.range * (1 + w * 0.3);
+        if (action.target.distance > rangeBuffer) {
+          action.score -= 80 * penaltyScale;
+        }
+      }
+    }
   }
 
   private fuzzScores(actions: ScoredAction[]): void {

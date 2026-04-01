@@ -455,6 +455,7 @@ function cleanupCurrentState(): void {
   singlePlayerScreen?.destroy();
   singlePlayerScreen = null;
   practiceMusic.fadeOut();
+  soundEffects.fadeOutAll();
   cleanupMultiplayerUI();
   cleanupPlaygroundUI();
   toggleGodModeOverlay(false);
@@ -3009,7 +3010,8 @@ async function startSinglePlayer(config: SinglePlayerConfig): Promise<void> {
     }
 
     combatText.update(dt);
-    nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
+    const visibleNpcs = engine.getNpcs().filter(n => !bs.isUntargetable(n));
+    nameplates.update(engine.playerController, visibleNpcs, (target) => {
       return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
     }, bs.isBlinded(engine.playerController));
 
@@ -3574,7 +3576,8 @@ async function startPlayground(): Promise<void> {
     }
 
     combatText.update(dt);
-    nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
+    const visibleNpcs = engine.getNpcs().filter(n => !bs.isUntargetable(n));
+    nameplates.update(engine.playerController, visibleNpcs, (target) => {
       return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
     }, bs.isBlinded(engine.playerController));
 
@@ -4114,7 +4117,8 @@ async function startUISetup(): Promise<void> {
     }
 
     combatText.update(dt);
-    nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
+    const visibleNpcs = engine.getNpcs().filter(n => !bs.isUntargetable(n));
+    nameplates.update(engine.playerController, visibleNpcs, (target) => {
       return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
     }, bs.isBlinded(engine.playerController));
 

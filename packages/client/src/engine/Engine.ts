@@ -248,6 +248,7 @@ export class Engine {
     this.targetingSystem = new TargetingSystem(
       this.camera, this.scene, canvas, () => this.playerController
     );
+    this.targetingSystem.isUntargetable = (target) => this.buffSystem.isUntargetable(target);
     this.regenSystem = new RegenSystem(() => [this.playerController, ...this.npcs]);
     this.buffSystem = new BuffSystem();
     this.regenSystem.setBuffSystem(this.buffSystem);
@@ -2428,10 +2429,17 @@ export class Engine {
     }
     this.rKeyWasDown = rKeyDown;
 
+    // Drop target if it became untargetable (e.g. NPC dumpster-diving)
+    const ct = this.targetingSystem.currentTarget;
+    if (ct && ct !== this.playerController && this.buffSystem.isUntargetable(ct)) {
+      this.targetingSystem.currentTarget = null;
+    }
+
     // Tab targeting — nearest hostile in front within 30 yards (blocked while blinded)
     const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
     if (tabDown && !this.tabKeyWasDown && !this.buffSystem.isBlinded(this.playerController)) {
-      this.targetingSystem.selectNearestHostileInFront(this.npcs, yardsToUnits(30));
+      const visibleNpcs = this.npcs.filter(n => !this.buffSystem.isUntargetable(n));
+      this.targetingSystem.selectNearestHostileInFront(visibleNpcs, yardsToUnits(30));
     }
     this.tabKeyWasDown = tabDown;
 
@@ -2514,9 +2522,18 @@ export class Engine {
       this.blindEffect.deactivate();
     }
 
-    // Stun/sleep state — NPCs
+    // Stun/sleep state & buff-driven animations — NPCs
     for (const npc of this.npcs) {
       npc.setStunned(this.buffSystem.isStunned(npc) || this.buffSystem.isSleeping(npc));
+      npc.model.setAbilityBuffActive('crash-out', this.buffSystem.hasBuff(npc, 'crash-out'));
+      npc.model.setAbilityBuffActive('retard-strength', this.buffSystem.hasBuff(npc, 'retard-strength'));
+      npc.model.setAbilityBuffActive('full-retard', this.buffSystem.hasBuff(npc, 'full-retard'));
+      const npcDumpsterDiving = this.buffSystem.hasBuff(npc, 'dumpster-diving');
+      if ('dumpsterDiveHostile' in npc.model) {
+        (npc.model as any).dumpsterDiveHostile = npcDumpsterDiving;
+      }
+      npc.model.setAbilityBuffActive('dumpster-diving', npcDumpsterDiving);
+      npc.model.setAbilityBuffActive('overdosing', this.buffSystem.hasBuff(npc, 'overdosing'));
     }
 
     // Update casting / channeling

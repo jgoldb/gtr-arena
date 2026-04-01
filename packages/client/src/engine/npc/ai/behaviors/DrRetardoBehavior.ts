@@ -148,15 +148,18 @@ export class DrRetardoBehavior implements CharacterBehavior {
 
     // ── Kaboom (knockback, self-peel) ──
     if (cooldowns.isReady('kaboom') && selfMana >= 235) {
-      let score = 10;
       const nearbyEnemies = world.enemies.filter(e => e.distance <= yardsToUnits(8));
-      // Great for peeling melee off self
-      if (nearbyEnemies.length > 0) score += 40;
-      if (nearbyEnemies.length > 1) score += 20;
-      actions.push({
-        type: 'ability', score, abilityId: 'kaboom',
-        execute: () => {},
-      });
+      if (nearbyEnemies.length > 0) {
+        let score = 30;
+        // Great for peeling melee off self
+        if (nearbyEnemies.length > 1) score += 20;
+        // Extra value when being pressured at low HP
+        if (selfHpPct < 0.4) score += 15;
+        actions.push({
+          type: 'ability', score, abilityId: 'kaboom',
+          execute: () => {},
+        });
+      }
     }
 
     // ── PvP Trinket (break CC) ──
