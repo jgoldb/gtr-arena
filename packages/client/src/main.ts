@@ -60,6 +60,7 @@ let awaitingReconnectResult = false;
 let updatePending = false;
 let updateCheckPromise: Promise<void> | null = null;
 let updateSnackbarEl: HTMLElement | null = null;
+let authUpdateInterval: ReturnType<typeof setInterval> | null = null;
 
 // Active screens / engines
 let authScreen: AuthScreen | null = null;
@@ -440,6 +441,7 @@ function toggleGodModeOverlay(active: boolean): void {
 }
 
 function cleanupCurrentState(): void {
+  if (authUpdateInterval) { clearInterval(authUpdateInterval); authUpdateInterval = null; }
   authScreen?.destroy();
   authScreen = null;
   authEscapeMenu?.dispose();
@@ -645,6 +647,7 @@ function showAuth(): void {
     return;
   }
   checkForUpdate();
+  authUpdateInterval = setInterval(() => checkForUpdate(), 30_000);
 
   authScreen = new AuthScreen((result) => {
     sessionStorage.setItem('gtr_username', result.username);
