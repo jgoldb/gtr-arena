@@ -58,7 +58,7 @@ export class JanitorBehavior implements CharacterBehavior {
 
     // ── Big Boot (3s stun) ──
     if (cooldowns.isReady('big-boot') && selfMana >= 180 && targetDist <= MELEE_RANGE) {
-      let score = 25;
+      let score = 45;
       // Very high score to interrupt channels/casts
       if (currentTarget.isChanneling || currentTarget.isCasting) {
         score += 60 * difficulty.interruptChance;
@@ -75,20 +75,20 @@ export class JanitorBehavior implements CharacterBehavior {
 
     // ── Fart Bomb (self-centered AoE DoT + slow) ──
     if (cooldowns.isReady('fart-bomb') && selfMana >= 140) {
-      let score = 20;
-      // Count nearby enemies
       const nearbyEnemies = world.enemies.filter(e => e.distance <= yardsToUnits(5));
-      score += nearbyEnemies.length * 15;
-      if (nearbyEnemies.length === 0) score = 0; // No point if nobody is close
-      actions.push({
-        type: 'ability', score, abilityId: 'fart-bomb',
-        execute: () => {},
-      });
+      if (nearbyEnemies.length > 0) {
+        let score = 30;
+        score += nearbyEnemies.length * 15;
+        actions.push({
+          type: 'ability', score, abilityId: 'fart-bomb',
+          execute: () => {},
+        });
+      }
     }
 
     // ── Crash Out (+300% auto-attack speed) ──
-    if (cooldowns.isReady('crash-out') && selfMana >= 280) {
-      let score = 15;
+    if (cooldowns.isReady('crash-out') && selfMana >= 280 && targetDist <= MELEE_RANGE) {
+      let score = 30;
       // Best used when target is stunned or debuffed (burst window)
       if (currentTarget.isStunned) score += 30;
       if (targetHasDebuff('covered-in-piss')) score += 25;
@@ -96,21 +96,17 @@ export class JanitorBehavior implements CharacterBehavior {
       if (world.self.hpPercent > 0.6) score += 10;
       // Less useful at low HP (defensive)
       if (world.self.hpPercent < 0.3) score -= 20;
-      if (targetDist <= MELEE_RANGE) {
-        actions.push({
-          type: 'ability', score, abilityId: 'crash-out',
-          execute: () => {},
-        });
-      }
+      actions.push({
+        type: 'ability', score, abilityId: 'crash-out',
+        execute: () => {},
+      });
     }
 
     // ── Jimmy Legs (slow, or root if already slowed) ──
     if (cooldowns.isReady('jimmy-legs') && selfMana >= 100 && targetDist <= MELEE_RANGE) {
-      let score = 30;
+      let score = 40;
       // Higher if target already has Jimmy Legs (root upgrade)
       if (targetHasDebuff('jimmy-legs')) score += 35;
-      // Good for chasing
-      if (targetDist > this.attackRange * 1.5) score += 15;
       if (currentTarget.inLineOfSight) {
         actions.push({
           type: 'ability', score, abilityId: 'jimmy-legs', target: currentTarget,
@@ -135,28 +131,23 @@ export class JanitorBehavior implements CharacterBehavior {
       }
     }
 
-    // ── Sweep (charge gap-closer) ──
+    // ── Sweep (charge gap-closer, max damage at ~20yd) ──
     if (cooldowns.isReady('sweep') && selfMana >= 130) {
-      let score = 20;
-      // Great gap closer when target is far
-      if (targetDist > yardsToUnits(8)) score += 40;
-      if (targetDist > yardsToUnits(12)) score += 20;
-      // Not useful in melee
-      if (targetDist <= MELEE_RANGE) score -= 30;
-      if (currentTarget.inLineOfSight) {
+      // Sweep damage scales with distance traveled — peak at ~20 yards
+      const distYards = targetDist / yardsToUnits(1);
+      if (distYards >= 5 && distYards <= 30 && currentTarget.inLineOfSight) {
+        let score = 25;
+        // Score peaks around 15-20 yards (sweet spot for max damage)
+        if (distYards >= 10) score += 30;
+        if (distYards >= 15) score += 25;
+        if (distYards >= 20) score += 10;
+        // Too far means we'll overshoot or miss
+        if (distYards > 25) score -= 20;
         actions.push({
           type: 'ability', score, abilityId: 'sweep', target: currentTarget,
           execute: () => {},
         });
       }
-    }
-
-    // ── PvP Trinket (break CC) ──
-    if (cooldowns.isReady('pvp-trinket') && (world.self.isStunned || world.self.isSleeping || world.self.isBlinded)) {
-      actions.push({
-        type: 'ability', score: 200, abilityId: 'pvp-trinket',
-        execute: () => {},
-      });
     }
 
     return actions;

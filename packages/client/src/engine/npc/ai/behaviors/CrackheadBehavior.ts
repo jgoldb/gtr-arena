@@ -31,9 +31,11 @@ export class CrackheadBehavior implements CharacterBehavior {
 
     // ── Shank (melee, +50% from behind) ──
     if (cooldowns.isReady('shank') && selfMana >= 145 && targetDist <= MELEE_RANGE) {
-      let score = 40;
-      // Much higher when behind target
-      if (currentTarget.iAmBehindThem) score += 35;
+      let score = 30;
+      // Much higher when behind target (backstab bonus)
+      if (currentTarget.iAmBehindThem) score += 50;
+      // Penalize frontal shanks — better to reposition first
+      if (!currentTarget.iAmBehindThem && currentTarget.facingMe) score -= 10;
       if (currentTarget.inLineOfSight) {
         actions.push({
           type: 'ability', score, abilityId: 'shank', target: currentTarget,
@@ -88,16 +90,20 @@ export class CrackheadBehavior implements CharacterBehavior {
 
     // ── Dumpster Dive (vanish, escape) ──
     if (cooldowns.isReady('dumpster-dive') && selfMana >= 80) {
-      let score = 5;
-      // Defensive — high score when low HP
-      if (selfHpPct < 0.25) score += 60;
-      if (selfHpPct < 0.15) score += 40;
-      // Don't use when target is about to die
-      if (targetHpPct < 0.2) score -= 30;
-      actions.push({
-        type: 'ability', score, abilityId: 'dumpster-dive',
-        execute: () => {},
-      });
+      // Only use when enemies are nearby and we're under pressure
+      const enemiesNearby = world.enemies.some(e => e.distance <= yardsToUnits(10));
+      if (enemiesNearby && selfHpPct < 0.35) {
+        let score = 15;
+        // Defensive — high score when low HP
+        if (selfHpPct < 0.25) score += 50;
+        if (selfHpPct < 0.15) score += 40;
+        // Don't use when target is about to die
+        if (targetHpPct < 0.2) score -= 30;
+        actions.push({
+          type: 'ability', score, abilityId: 'dumpster-dive',
+          execute: () => {},
+        });
+      }
     }
 
     // ── Gank (execute, resets if target < 30% HP) ──
@@ -131,25 +137,19 @@ export class CrackheadBehavior implements CharacterBehavior {
     }
 
     // ── OD (mega burst, then crash) ──
-    if (cooldowns.isReady('od') && selfMana >= 200) {
-      let score = 10;
+    if (cooldowns.isReady('od') && selfMana >= 200 && targetDist <= MELEE_RANGE) {
+      let score = 15;
       // Best when target is locked down and we can burst
-      if (currentTarget.isStunned && targetDist <= MELEE_RANGE) score += 40;
+      if (currentTarget.isStunned) score += 40;
       // Better at higher HP (we'll be stunned after)
       if (selfHpPct > 0.6) score += 15;
       if (selfHpPct < 0.3) score -= 20; // risky when low
-      actions.push({
-        type: 'ability', score, abilityId: 'od',
-        execute: () => {},
-      });
-    }
-
-    // ── PvP Trinket (break CC) ──
-    if (cooldowns.isReady('pvp-trinket') && (world.self.isStunned || world.self.isSleeping || world.self.isBlinded)) {
-      actions.push({
-        type: 'ability', score: 200, abilityId: 'pvp-trinket',
-        execute: () => {},
-      });
+      if (currentTarget.inLineOfSight) {
+        actions.push({
+          type: 'ability', score, abilityId: 'od',
+          execute: () => {},
+        });
+      }
     }
 
     return actions;

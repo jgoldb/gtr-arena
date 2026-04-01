@@ -4,7 +4,7 @@ import type { Targetable } from '../../types';
 import type { BuffSystem } from '../../combat/BuffSystem';
 import type { CombatSystem } from '../../combat/CombatSystem';
 import type { CollisionSystem } from '../../physics/CollisionSystem';
-import { getCharacterStats, yardsToUnits, type Ability } from '@gtr/shared';
+import { getCharacterStats, yardsToUnits, Bandage, RecentlyBandagedDebuff, type Ability } from '@gtr/shared';
 import { MovementController } from './MovementController';
 import { NpcCooldownTracker } from './NpcCooldownTracker';
 import type { DifficultyProfile } from './DifficultyProfile';
@@ -49,6 +49,10 @@ export class NpcAiBrain {
   private currentTarget: EntityInfo | null = null;
   currentTargetEntity: Targetable | null = null;
   private casting: NpcCastingState | null = null;
+
+  /** CC break reaction timer — counts down from reactionDelayMs before trinket is attempted */
+  private ccReactionTimer = 0;
+  private wasCCd = false;
 
   constructor(
     npc: NpcController,
@@ -99,13 +103,14 @@ export class NpcAiBrain {
     this.movement.speedMultiplier = this.engine.buffSystem.getMovementSpeedMultiplier(this.npc);
     this.movement.updateBounds(this.engine.getArenaBounds());
 
+    // Check CC break (trinket) for all CC types — covers stun, sleep, and blind
+    this.checkCCBreak(dt);
+
     if (this.npc.stunned) {
       this.movement.intent = { type: 'idle' };
       this.movement.update(dt);
       // Stun cancels casting/channeling
       if (this.casting) this.cancelCasting();
-      // Check if we should trinket out of CC
-      this.checkCCBreak();
       return;
     }
 
@@ -162,10 +167,9 @@ export class NpcAiBrain {
       // Channels: deduct mana and set cooldown upfront (player behavior)
       this.npc.mana -= effectiveCost;
       this.cooldowns.setCooldown(ability.id, ability.cooldown);
+      this.cooldowns.triggerGcd();
     }
-    // Regular casts: mana/cooldown handled on completion via npcUseAbility
-
-    this.cooldowns.triggerGcd();
+    // Regular casts: mana/cooldown/GCD handled on completion via npcUseAbility
 
     const isChannel = !!ability.isChannel;
     const totalTicks = ability.channelTicks ?? 1;
@@ -192,6 +196,11 @@ export class NpcAiBrain {
 
     // Trigger animation
     this.npc.model.triggerAbilityAnimation(ability.id, target?.mesh.position.clone());
+
+    // Apply blockedByTargetDebuff at channel start (e.g. Recently Bandaged)
+    if (isChannel && ability.id === 'bandage' && target) {
+      this.engine.buffSystem.apply(target, RecentlyBandagedDebuff);
+    }
 
     return true;
   }
@@ -346,6 +355,9 @@ export class NpcAiBrain {
         world, this.cooldowns, this.difficulty, this.currentTarget
       );
 
+      // Score common abilities (Bandage) available to all characters
+      this.scoreCommonActions(actions, world);
+
       if (actions.length > 0) {
         // Apply general smart filters (penalize wasteful uses)
         this.applySmartFilters(actions, world);
@@ -359,7 +371,11 @@ export class NpcAiBrain {
         // Try to execute the best action
         const best = actions[0];
         if (best && best.score > 0 && best.abilityId) {
-          const target = best.target?.entity ?? null;
+          let target = best.target?.entity ?? null;
+          // Self-targeting for self-heal channels (e.g. Bandage)
+          if (!target && best.ability?.isChannel && best.ability?.healAmount && !best.ability?.requiresHostileTarget) {
+            target = this.npc;
+          }
           if (best.isCastTime && best.ability) {
             // Cast-time or channel ability — start casting
             this.startCasting(best.ability, target);
@@ -368,6 +384,34 @@ export class NpcAiBrain {
             const groundPos = best.target?.position;
             this.engine.npcUseAbility(this.npc, best.abilityId, target, groundPos);
           }
+        }
+      }
+    }
+  }
+
+  /**
+   * Score common abilities available to all characters (e.g. Bandage).
+   * Appends scored actions to the provided array.
+   */
+  private scoreCommonActions(actions: ScoredAction[], world: WorldState): void {
+    // ── Bandage (8s channel, heal 1000) ──
+    if (this.abilityLookup.has('bandage') && this.cooldowns.isReady('bandage')) {
+      // Check for Recently Bandaged debuff
+      const hasRecentlyBandaged = world.self.debuffs.some(b => b.definition.id === 'recently-bandaged');
+      if (!hasRecentlyBandaged && world.self.hpPercent < 0.5) {
+        const closestEnemyDist = world.enemies.length > 0 ? world.enemies[0].distance : Infinity;
+        // Only bandage when enemies are far enough away (>15yd) that we won't be interrupted
+        if (closestEnemyDist > yardsToUnits(15)) {
+          let score = 20;
+          // Score scales with missing HP
+          score += (1 - world.self.hpPercent) * 60;
+          // Much higher when very low
+          if (world.self.hpPercent < 0.3) score += 30;
+          actions.push({
+            type: 'ability', score, abilityId: 'bandage',
+            ability: Bandage, isCastTime: true,
+            execute: () => {},
+          });
         }
       }
     }
@@ -429,15 +473,35 @@ export class NpcAiBrain {
     this.currentTarget = bestTarget;
   }
 
-  private checkCCBreak(): void {
+  private checkCCBreak(dt: number): void {
     const isCC = this.engine.buffSystem.isStunned(this.npc)
       || this.engine.buffSystem.isSleeping(this.npc)
       || this.engine.buffSystem.isBlinded(this.npc);
-    if (!isCC) return;
+
+    if (!isCC) {
+      this.wasCCd = false;
+      this.ccReactionTimer = 0;
+      return;
+    }
+
     if (!this.cooldowns.isReady('pvp-trinket')) return;
 
-    // Use trinket based on difficulty reaction chance
-    if (Math.random() > this.difficulty.interruptChance) return;
+    // Start reaction timer when CC is first detected
+    if (!this.wasCCd) {
+      this.wasCCd = true;
+      this.ccReactionTimer = this.difficulty.reactionDelayMs / 1000;
+    }
+
+    // Wait for reaction time to elapse
+    this.ccReactionTimer -= dt;
+    if (this.ccReactionTimer > 0) return;
+
+    // Roll for trinket use (one attempt per CC application)
+    if (Math.random() > this.difficulty.interruptChance) {
+      // Failed the roll — don't retry every frame; wait for next CC application
+      this.wasCCd = false;
+      return;
+    }
 
     this.engine.npcUseAbility(this.npc, 'pvp-trinket', null);
   }

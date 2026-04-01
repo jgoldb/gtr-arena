@@ -394,7 +394,8 @@ export class ServerEngine {
       const casting = this.castingStates.get(target.id);
       if (casting) {
         if (casting.isChannel) {
-          casting.totalTime = Math.max(0, casting.totalTime - ServerEngine.CAST_PUSHBACK);
+          // Channel pushback: lose 35% of full channel duration per hit (WoW-style)
+          casting.totalTime = Math.max(casting.elapsed, casting.totalTime - casting.originalCastTime * 0.35);
         } else {
           const maxTime = casting.originalCastTime * 2;
           casting.totalTime = Math.min(casting.totalTime + ServerEngine.CAST_PUSHBACK, maxTime);

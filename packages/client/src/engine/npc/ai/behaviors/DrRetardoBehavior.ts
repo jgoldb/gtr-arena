@@ -91,44 +91,51 @@ export class DrRetardoBehavior implements CharacterBehavior {
 
     // ── Chemical Spill (self-centered AoE) ──
     if (cooldowns.isReady('chemical-spill') && selfMana >= 175) {
-      let score = 20;
-      const nearbyEnemies = world.enemies.filter(e => e.distance <= yardsToUnits(3));
-      const nearbyAllies = world.allies.filter(e => e.distance <= yardsToUnits(3));
-      score += nearbyEnemies.length * 20;
-      score += nearbyAllies.length * 10;
-      // Good for self-speed when being chased
-      if (world.enemies.some(e => e.distance < yardsToUnits(6))) score += 15;
-      actions.push({
-        type: 'ability', score, abilityId: 'chemical-spill',
-        execute: () => {},
-      });
+      const nearbyEnemies = world.enemies.filter(e => e.distance <= yardsToUnits(6));
+      const nearbyAllies = world.allies.filter(e => e.distance <= yardsToUnits(6));
+      if (nearbyEnemies.length > 0 || nearbyAllies.length > 0) {
+        let score = 20;
+        score += nearbyEnemies.length * 20;
+        score += nearbyAllies.length * 10;
+        // Extra value when being chased in melee
+        if (world.enemies.some(e => e.distance < yardsToUnits(4))) score += 15;
+        actions.push({
+          type: 'ability', score, abilityId: 'chemical-spill',
+          execute: () => {},
+        });
+      }
     }
 
     // ── Retard Strength (shield + reflect + damage buff) ──
     if (cooldowns.isReady('retard-strength') && selfMana >= 300) {
-      let score = 15;
-      // High score when about to take damage (melee enemy in range)
-      if (world.enemies.some(e => e.distance < yardsToUnits(5))) score += 30;
-      // Higher when HP is dropping
-      if (selfHpPct < 0.5) score += 25;
-      if (selfHpPct < 0.3) score += 20;
-      actions.push({
-        type: 'ability', score, abilityId: 'retard-strength',
-        execute: () => {},
-      });
+      // Only use when enemies are within engagement range
+      const enemiesInRange = world.enemies.some(e => e.distance < yardsToUnits(15));
+      if (enemiesInRange) {
+        let score = 15;
+        // High score when about to take damage (melee enemy in range)
+        if (world.enemies.some(e => e.distance < yardsToUnits(5))) score += 30;
+        // Higher when HP is dropping
+        if (selfHpPct < 0.5) score += 25;
+        if (selfHpPct < 0.3) score += 20;
+        actions.push({
+          type: 'ability', score, abilityId: 'retard-strength',
+          execute: () => {},
+        });
+      }
     }
 
     // ── Full Retard (1s cast, melee AoE aura) ──
     if (cooldowns.isReady('full-retard') && selfMana >= 360) {
-      let score = 10;
       const nearbyEnemies = world.enemies.filter(e => e.distance <= MELEE_RANGE);
-      score += nearbyEnemies.length * 25;
-      if (nearbyEnemies.length === 0) score = 0;
-      actions.push({
-        type: 'ability', score, abilityId: 'full-retard',
-        ability: FullRetard, isCastTime: true,
-        execute: () => {},
-      });
+      if (nearbyEnemies.length > 0) {
+        let score = 25;
+        score += nearbyEnemies.length * 25;
+        actions.push({
+          type: 'ability', score, abilityId: 'full-retard',
+          ability: FullRetard, isCastTime: true,
+          execute: () => {},
+        });
+      }
     }
 
     // ── Crotch Rot (0.5s cast, DoT → stun) ──
@@ -148,11 +155,13 @@ export class DrRetardoBehavior implements CharacterBehavior {
 
     // ── Kaboom (knockback, self-peel) ──
     if (cooldowns.isReady('kaboom') && selfMana >= 235) {
-      const nearbyEnemies = world.enemies.filter(e => e.distance <= yardsToUnits(8));
+      const nearbyEnemies = world.enemies.filter(e => e.distance <= yardsToUnits(10));
       if (nearbyEnemies.length > 0) {
-        let score = 30;
+        let score = 40;
         // Great for peeling melee off self
         if (nearbyEnemies.length > 1) score += 20;
+        // Extra value when enemies are very close (melee pressure)
+        if (nearbyEnemies.some(e => e.distance <= MELEE_RANGE)) score += 20;
         // Extra value when being pressured at low HP
         if (selfHpPct < 0.4) score += 15;
         actions.push({
@@ -160,14 +169,6 @@ export class DrRetardoBehavior implements CharacterBehavior {
           execute: () => {},
         });
       }
-    }
-
-    // ── PvP Trinket (break CC) ──
-    if (cooldowns.isReady('pvp-trinket') && (world.self.isStunned || world.self.isSleeping || world.self.isBlinded)) {
-      actions.push({
-        type: 'ability', score: 200, abilityId: 'pvp-trinket',
-        execute: () => {},
-      });
     }
 
     return actions;

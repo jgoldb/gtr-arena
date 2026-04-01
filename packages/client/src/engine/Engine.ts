@@ -265,8 +265,8 @@ export class Engine {
       }
       if (target === this.playerController && this.casting) {
         if (this.casting.isChannel) {
-          // Channel pushback: reduce remaining time (loses ticks)
-          this.casting.totalTime = Math.max(0, this.casting.totalTime - Engine.CAST_PUSHBACK);
+          // Channel pushback: lose 35% of full channel duration per hit (WoW-style)
+          this.casting.totalTime = Math.max(this.casting.elapsed, this.casting.totalTime - this.casting.originalCastTime * 0.35);
         } else {
           // Cast pushback: increase cast time (capped at 2x original)
           const maxTime = this.casting.originalCastTime * 2;
