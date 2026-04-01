@@ -230,6 +230,20 @@ export class GameLobbyScreen {
 
     leftPanel.appendChild(this.charGridEl);
 
+    // Leave button at bottom of left panel
+    this.leaveBtn = document.createElement('button');
+    this.leaveBtn.className = 'glby-btn';
+    this.leaveBtn.textContent = 'Leave Game';
+    this.leaveBtn.style.cssText = `
+      margin-top: 16px; padding: 10px 20px; font-size: 13px; font-weight: 600;
+      background: rgba(60,60,80,0.6); color: #aaa; border: 1px solid rgba(100,100,140,0.2);
+      border-radius: 6px; cursor: pointer; outline: none;
+    `;
+    this.leaveBtn.addEventListener('click', () => {
+      this.network.send({ type: 'leave_game' });
+    });
+    leftPanel.appendChild(this.leaveBtn);
+
     // ═══════════ CENTER PANEL: Preview + Status ═══════════
     const centerPanel = document.createElement('div');
     centerPanel.style.cssText = `
@@ -466,7 +480,7 @@ export class GameLobbyScreen {
 
     // ── Playground-only warning ────────────────────────────────────
     this.playgroundWarningEl = document.createElement('div');
-    this.playgroundWarningEl.textContent = 'This character is not yet available in multiplayer.';
+    this.playgroundWarningEl.textContent = 'This character is not playable yet.';
     this.playgroundWarningEl.style.cssText = `
       display: none; text-align: center; font-size: 11px; font-weight: 500;
       color: #e05050; margin-top: 16px; padding: 6px 10px;
@@ -475,44 +489,23 @@ export class GameLobbyScreen {
     `;
     rightPanel.appendChild(this.playgroundWarningEl);
 
-    // ── Buttons ─────────────────────────────────────────────────────
-    const btnRow = document.createElement('div');
-    btnRow.style.cssText = 'display: flex; gap: 10px; margin-top: 10px;';
-
-    this.leaveBtn = document.createElement('button');
-    this.leaveBtn.className = 'glby-btn';
-    this.leaveBtn.textContent = 'Leave';
-    this.leaveBtn.style.cssText = `
-      padding: 12px 24px; font-size: 13px; font-weight: 500;
-      background: linear-gradient(to bottom, #7a3232, #5e2424);
-      color: rgba(220,225,240,0.9);
-      border: 1px solid rgba(255,100,100,0.12); border-radius: 6px;
-      cursor: pointer; outline: none; flex: 1;
-    `;
-    this.leaveBtn.addEventListener('click', () => {
-      this.network.send({ type: 'leave_game' });
-    });
-
+    // ── Lock In Button ────────────────────────────────────────────────
     this.lockInBtn = document.createElement('button');
     this.lockInBtn.className = 'glby-btn';
     this.lockInBtn.textContent = 'Lock In';
     this.lockInBtn.disabled = true;
     this.lockInBtn.style.cssText = `
-      padding: 12px 24px; font-size: 13px; font-weight: 700;
+      margin-top: 10px; padding: 16px 32px; font-size: 20px; font-weight: 900; letter-spacing: 4px;
       background: linear-gradient(to bottom, #2d7a3e, #1e5e2a);
       color: rgba(220,225,240,0.9);
       border: 1px solid rgba(100,255,100,0.12); border-radius: 6px;
-      cursor: pointer; outline: none; flex: 1.5;
+      cursor: pointer; outline: none;
       opacity: 0.4; pointer-events: none;
-      letter-spacing: 0.5px;
     `;
     this.lockInBtn.addEventListener('click', () => {
       this.network.send({ type: 'lock_in' });
     });
-
-    btnRow.appendChild(this.leaveBtn);
-    btnRow.appendChild(this.lockInBtn);
-    rightPanel.appendChild(btnRow);
+    rightPanel.appendChild(this.lockInBtn);
 
     // ── Assemble ────────────────────────────────────────────────────
     layout.appendChild(leftPanel);

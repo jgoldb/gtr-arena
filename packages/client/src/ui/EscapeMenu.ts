@@ -5,6 +5,7 @@ export interface EscapeMenuButton {
   onClick: () => void;
   color?: string;
   hoverColor?: string;
+  spaceBefore?: boolean;
 }
 
 export interface EscapeMenuCallbacks {
@@ -134,6 +135,9 @@ export class EscapeMenu {
           btnDef.color ?? 'rgba(60, 60, 100, 0.8)',
           btnDef.hoverColor ?? 'rgba(70, 70, 120, 0.9)',
         );
+        if (btnDef.spaceBefore) {
+          btn.style.marginTop = '20px';
+        }
         if (i === callbacks.customButtons.length - 1) {
           btn.style.marginBottom = '0';
         }

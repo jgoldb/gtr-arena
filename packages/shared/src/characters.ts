@@ -50,6 +50,7 @@ export interface CharacterStats {
     sweepSpin?: SfxEntry;
     discombobulate?: SfxEntry;
     chemicalSpill?: SfxEntry;
+    chemicalSpillTrigger?: SfxEntry;
     retardStrength?: SfxEntry;
     fullRetard?: SfxEntry;
     crotchRot?: SfxEntry;
@@ -112,8 +113,8 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     autoAttackDamageMax: 35,
     autoAttackSpeed: 1.5,
     autoAttackRange: 1.4,
-    critChance: 0.07,
-    dodgeChance: 0.05,
+    critChance: 0.25,
+    dodgeChance: 0.17,
     hpRegen: 24,
     manaRegen: 48,
     abilities: [Attack, BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket, Bandage],
@@ -126,6 +127,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       bottleChuck: { file: 'bottle-chuck.ogg', volume: 3 },
       discombobulate: { file: 'discombobulate.ogg', volume: 2 },
       chemicalSpill: { file: 'chemical-spill.ogg', volume: 3 },
+      chemicalSpillTrigger: { file: 'chemical-spill2.ogg', volume: 3 },
       retardStrength: { file: 'retard-strength.ogg', volume: 3 },
       fullRetard: { file: 'full-retard.ogg', volume: 3 },
       crotchRot: { file: 'crotch-rot.ogg', volume: 3 },

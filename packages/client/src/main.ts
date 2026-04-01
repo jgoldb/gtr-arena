@@ -4,6 +4,7 @@ import { AuthScreen } from './screens/AuthScreen';
 import { LobbyScreen } from './screens/LobbyScreen';
 import { GameLobbyScreen } from './screens/GameLobbyScreen';
 import { AdminScreen } from './screens/AdminScreen';
+import { SinglePlayerScreen, type SinglePlayerConfig } from './screens/SinglePlayerScreen';
 import { NetworkManager } from './network/NetworkManager';
 import { ClientEngine } from './network/ClientEngine';
 import { UnitFrame } from './ui/UnitFrame';
@@ -26,7 +27,7 @@ import { UnitFramePositioner } from './ui/UnitFramePositioner';
 import { DeathFrame } from './ui/DeathFrame';
 import { ChatWindow } from './ui/ChatWindow';
 import { renderPortraits } from './ui/PortraitRenderer';
-import { getCharacterStats, getCharacterSfx, getSharedSfx, xpToLevel, CHARACTER_LIST, type CharacterId } from '@gtr/shared';
+import { getCharacterStats, getCharacterSfx, getSharedSfx, xpToLevel, CHARACTER_LIST, CHARACTERS, type CharacterId } from '@gtr/shared';
 import { GLOBAL_COOLDOWN, type Ability } from './engine/combat/Ability';
 import type { Targetable } from './engine/types';
 
@@ -37,7 +38,7 @@ if (!canvas) throw new Error('Canvas element not found');
 
 // Prevent browser context menu during gameplay
 document.addEventListener('contextmenu', (e) => {
-  if (currentState === 'playground' || currentState === 'multiplayer' || currentState === 'ui-setup') {
+  if (currentState === 'playground' || currentState === 'multiplayer' || currentState === 'ui-setup' || currentState === 'single-player') {
     e.preventDefault();
   }
 });
@@ -48,7 +49,7 @@ const getPortrait = (modelName: string) => portraits.get(modelName);
 
 // ── State ──────────────────────────────────────────────────────────────
 
-type AppState = 'auth' | 'lobby' | 'game-lobby' | 'multiplayer' | 'playground' | 'ui-setup';
+type AppState = 'auth' | 'lobby' | 'game-lobby' | 'multiplayer' | 'playground' | 'ui-setup' | 'single-player';
 let currentState: AppState = 'auth';
 let network: NetworkManager | null = null;
 let localUserId = '';
@@ -65,6 +66,7 @@ let authScreen: AuthScreen | null = null;
 let lobbyScreen: LobbyScreen | null = null;
 let gameLobbyScreen: GameLobbyScreen | null = null;
 let adminScreen: AdminScreen | null = null;
+let singlePlayerScreen: SinglePlayerScreen | null = null;
 let clientEngine: ClientEngine | null = null;
 const reconnectOverlay = new ReconnectOverlay();
 
@@ -197,14 +199,144 @@ const lobbyMusic = {
   },
 };
 
+// ── Practice Music (plays during UI Setup) ────────────────────────────
+const practiceMusic = {
+  audioCtx: null as AudioContext | null,
+  gainNode: null as GainNode | null,
+  sourceNode: null as AudioBufferSourceNode | null,
+  fadingOut: false,
+  _startId: 0,
+  get volume(): number { return audioSettings.windowFocused ? audioSettings.masterVolume * audioSettings.musicVolume : 0; },
+
+  onVisibilityChange(): void {
+    if (this.fadingOut || !this.audioCtx || !this.gainNode) return;
+    const ctx = this.audioCtx;
+    const gain = this.gainNode;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    if (!audioSettings.windowFocused) {
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
+    } else {
+      gain.gain.linearRampToValueAtTime(this.volume, ctx.currentTime + 0.5);
+    }
+  },
+
+  resumeAudioCtx(): void {
+    if (!this.audioCtx || this.fadingOut) return;
+    this.audioCtx.resume().then(() => {
+      const handler = this._onUserGesture;
+      if (handler) for (const evt of ['pointerdown', 'keydown'] as const) {
+        document.removeEventListener(evt, handler);
+      }
+      if (!this.fadingOut && this.gainNode && this.audioCtx && !document.hidden) {
+        this.gainNode.gain.linearRampToValueAtTime(this.volume, this.audioCtx.currentTime + 2);
+      }
+    });
+  },
+
+  _onVisibilityChange: null as (() => void) | null,
+  _onUserGesture: null as (() => void) | null,
+
+  async start(): Promise<void> {
+    if (!audioSettings.enableMusic) return;
+    if (this.audioCtx && !this.fadingOut) return;
+    const id = ++this._startId;
+    if (this.fadingOut) {
+      await new Promise<void>(r => setTimeout(r, 1700));
+    }
+    if (id !== this._startId) return;
+    this.fadingOut = false;
+    try {
+      const ctx = new AudioContext();
+      this.audioCtx = ctx;
+      const gain = ctx.createGain();
+      this.gainNode = gain;
+      gain.gain.value = 0;
+      gain.connect(ctx.destination);
+
+      const resp = await fetch('/audio/music/practice.ogg');
+      const buf = await resp.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(buf);
+
+      if (this.fadingOut || id !== this._startId) {
+        ctx.close();
+        this.audioCtx = null;
+        this.gainNode = null;
+        return;
+      }
+
+      const source = ctx.createBufferSource();
+      this.sourceNode = source;
+      source.buffer = audioBuf;
+      source.loop = true;
+      source.connect(gain);
+      source.start();
+
+      this._onVisibilityChange = () => this.onVisibilityChange();
+      this._onUserGesture = () => this.resumeAudioCtx();
+      document.addEventListener('visibilitychange', this._onVisibilityChange);
+
+      if (ctx.state === 'suspended') {
+        for (const evt of ['pointerdown', 'keydown'] as const) {
+          document.addEventListener(evt, this._onUserGesture, { once: false });
+        }
+      } else if (!document.hidden) {
+        gain.gain.linearRampToValueAtTime(this.volume, ctx.currentTime + 2);
+      }
+    } catch {
+      // Audio playback not available — silent fail
+    }
+  },
+
+  fadeOut(): void {
+    this._startId++;
+    this.fadingOut = true;
+    if (this._onVisibilityChange) {
+      document.removeEventListener('visibilitychange', this._onVisibilityChange);
+    }
+    if (this._onUserGesture) {
+      const handler = this._onUserGesture;
+      for (const evt of ['pointerdown', 'keydown'] as const) {
+        document.removeEventListener(evt, handler);
+      }
+    }
+    if (!this.audioCtx || !this.gainNode) return;
+    const ctx = this.audioCtx;
+    const gain = this.gainNode;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 1.5);
+    setTimeout(() => {
+      this.sourceNode?.stop();
+      ctx.close();
+      this.audioCtx = null;
+      this.gainNode = null;
+      this.sourceNode = null;
+    }, 1600);
+  },
+
+  applyVolume(): void {
+    if (!this.audioCtx || !this.gainNode || this.fadingOut) return;
+    const ctx = this.audioCtx;
+    const gain = this.gainNode;
+    gain.gain.cancelScheduledValues(ctx.currentTime);
+    gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(this.volume, ctx.currentTime + 0.15);
+  },
+};
+
 // React to audio settings changes
 audioSettings.onChange((s) => {
   if (!s.enableMusic) {
     lobbyMusic.fadeOut();
+    practiceMusic.fadeOut();
   } else if (lobbyMusic.audioCtx && !lobbyMusic.fadingOut) {
     lobbyMusic.applyVolume();
   } else if (currentState === 'lobby') {
     lobbyMusic.start();
+  }
+  if (s.enableMusic && practiceMusic.audioCtx && !practiceMusic.fadingOut) {
+    practiceMusic.applyVolume();
   }
 });
 
@@ -320,6 +452,10 @@ function cleanupCurrentState(): void {
   gameLobbyScreen = null;
   adminScreen?.destroy();
   adminScreen = null;
+  singlePlayerScreen?.destroy();
+  singlePlayerScreen = null;
+  practiceMusic.fadeOut();
+  soundEffects.fadeOutAll();
   cleanupMultiplayerUI();
   cleanupPlaygroundUI();
   toggleGodModeOverlay(false);
@@ -571,34 +707,34 @@ function showLobby(): void {
 
   // Lobby escape menu
   const lobbyMenuButtons: EscapeMenuButton[] = [];
-  if (isAdmin) {
-    lobbyMenuButtons.push({
-      label: 'Playground',
-      onClick: () => lobbyScreen?.onPlayground?.(),
-      color: 'rgba(90, 61, 138, 0.8)',
-      hoverColor: 'rgba(112, 80, 168, 0.9)',
-    });
-  }
-  if (isAdmin) {
-    lobbyMenuButtons.push({
-      label: 'Manage Users',
-      onClick: () => lobbyScreen?.onAdmin?.(),
-      color: 'rgba(138, 90, 32, 0.8)',
-      hoverColor: 'rgba(168, 112, 48, 0.9)',
-    });
-  }
+
+  // Single Player — unique color (gold)
   lobbyMenuButtons.push({
-    label: 'Practice',
+    label: 'Single Player',
+    onClick: () => showSinglePlayerScreen(),
+    color: 'rgba(160, 100, 30, 0.8)',
+    hoverColor: 'rgba(190, 120, 40, 0.9)',
+  });
+
+  // Settings group (default color matches Keybinds/Audio built-ins)
+  lobbyMenuButtons.push({
+    label: 'UI Setup',
     onClick: () => lobbyScreen?.onUISetup?.(),
-    color: 'rgba(74, 58, 106, 0.8)',
-    hoverColor: 'rgba(94, 74, 130, 0.9)',
+  });
+  lobbyMenuButtons.push({
+    label: 'Keybinds',
+    onClick: () => keybindMenu.open(() => lobbyEscapeMenu?.open()),
+  });
+  lobbyMenuButtons.push({
+    label: 'Audio',
+    onClick: () => new AudioSettingsDialog(() => lobbyEscapeMenu?.open()).open(),
   });
   lobbyMenuButtons.push({
     label: 'Change Password',
     onClick: () => lobbyScreen?.showChangePasswordDialog(),
-    color: 'rgba(60, 60, 100, 0.8)',
-    hoverColor: 'rgba(70, 70, 120, 0.9)',
   });
+
+  // Logout — red
   lobbyMenuButtons.push({
     label: 'Logout',
     onClick: () => lobbyScreen?.onLogout?.(),
@@ -606,17 +742,26 @@ function showLobby(): void {
     hoverColor: 'rgba(180, 60, 60, 0.9)',
   });
 
+  // Admin section — spaced, same color
+  if (isAdmin) {
+    lobbyMenuButtons.push({
+      label: 'Playground',
+      onClick: () => lobbyScreen?.onPlayground?.(),
+      color: 'rgba(90, 61, 138, 0.8)',
+      hoverColor: 'rgba(112, 80, 168, 0.9)',
+      spaceBefore: true,
+    });
+    lobbyMenuButtons.push({
+      label: 'Manage Users',
+      onClick: () => lobbyScreen?.onAdmin?.(),
+      color: 'rgba(90, 61, 138, 0.8)',
+      hoverColor: 'rgba(112, 80, 168, 0.9)',
+    });
+  }
+
   lobbyEscapeMenu = new EscapeMenu({
     onReturnToLobby: () => {},  // Not used in lobby mode
     customButtons: lobbyMenuButtons,
-    onKeybinds: () => {
-      lobbyEscapeMenu?.close();
-      keybindMenu.open(() => lobbyEscapeMenu?.open());
-    },
-    onAudio: () => {
-      lobbyEscapeMenu?.close();
-      new AudioSettingsDialog(() => lobbyEscapeMenu?.open()).open();
-    },
   });
   lobbyEscapeMenu.element.style.zIndex = '1050';
   document.body.appendChild(lobbyEscapeMenu.element);
@@ -2254,6 +2399,644 @@ function clearRematchOverlay(): void {
   rematchReadyText = null;
 }
 
+// ── Single Player Mode ─────────────────────────────────────────────────
+
+function showSinglePlayerScreen(): void {
+  cleanupCurrentState();
+  currentState = 'single-player';
+  hideGameUI();
+
+  singlePlayerScreen = new SinglePlayerScreen();
+  singlePlayerScreen.onFight = (config) => startSinglePlayer(config);
+  singlePlayerScreen.onBack = () => {
+    showLobby();
+    network?.send({ type: 'return_to_lobby' });
+  };
+  singlePlayerScreen.onMenu = () => lobbyEscapeMenu?.open();
+  document.body.appendChild(singlePlayerScreen.element);
+
+  // Escape menu for single player screen
+  const spMenuButtons: EscapeMenuButton[] = [
+    {
+      label: 'Back to Lobby',
+      onClick: () => {
+        singlePlayerScreen?.onBack?.();
+      },
+      color: 'rgba(160, 50, 50, 0.8)',
+      hoverColor: 'rgba(180, 60, 60, 0.9)',
+    },
+  ];
+  lobbyEscapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {},
+    customButtons: spMenuButtons,
+    onKeybinds: () => {
+      lobbyEscapeMenu?.close();
+      keybindMenu.open(() => lobbyEscapeMenu?.open());
+    },
+    onAudio: () => {
+      lobbyEscapeMenu?.close();
+      new AudioSettingsDialog(() => lobbyEscapeMenu?.open()).open();
+    },
+  });
+  lobbyEscapeMenu.element.style.zIndex = '1050';
+  document.body.appendChild(lobbyEscapeMenu.element);
+}
+
+async function startSinglePlayer(config: SinglePlayerConfig): Promise<void> {
+  lobbyMusic.fadeOut();
+  cleanupCurrentState();
+  currentState = 'single-player';
+
+  const uiOverlay = document.getElementById('ui-overlay');
+  if (uiOverlay) uiOverlay.style.display = '';
+  canvas.style.display = 'block';
+
+  const { Engine } = await import('./engine/Engine');
+  const { FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff, yardsToUnits } = await import('./engine/combat/Ability');
+
+  const engine = new Engine(canvas);
+  const savedUsername = sessionStorage.getItem('gtr_username');
+  if (savedUsername) engine.playerController.name = savedUsername;
+  pgEngine = engine;
+
+  // Set character and load map
+  engine.setCharacter(config.playerCharId);
+  engine.loadMap(config.mapId);
+
+  // Spawn AI opponent on the opposing spawn point
+  const mapConfig = engine.mapManager.getCurrentConfig();
+  const opponentSpawn = mapConfig?.spawnPoints?.[1] ?? { x: 0, y: 0, z: -10 };
+  const opponentName = CHARACTERS[config.opponentCharId].displayName;
+  const aiNpc = engine.spawnAiNpc(
+    config.opponentCharId,
+    new THREEVector3(opponentSpawn.x, opponentSpawn.y, opponentSpawn.z),
+    1,       // team 1 (opponent)
+    opponentName,
+    config.difficulty
+  );
+  // Face opponent toward player
+  aiNpc.mesh.rotation.y = Math.atan2(-opponentSpawn.x, -opponentSpawn.z);
+
+  // Apply starting buffs to NPC
+  const npcStats = getCharacterStats(config.opponentCharId);
+  if (npcStats.startingBuffs) {
+    for (const buff of npcStats.startingBuffs) {
+      engine.buffSystem.apply(aiNpc, buff);
+    }
+  }
+
+  // ── Game-over detection ──
+  let spGameOver = false;
+  let spGameOverOverlay: HTMLDivElement | null = null;
+
+  function checkGameOver(): void {
+    if (spGameOver) return;
+    const playerDead = engine.playerController.dead;
+    const npcDead = aiNpc.dead;
+    if (!playerDead && !npcDead) return;
+
+    spGameOver = true;
+    const won = npcDead && !playerDead;
+
+    // Show game-over overlay after a brief delay
+    setTimeout(() => {
+      spGameOverOverlay = document.createElement('div');
+      spGameOverOverlay.style.cssText = `
+        position: fixed; inset: 0; z-index: 500;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.6);
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        animation: sp-fade-in 0.5s ease both;
+      `;
+
+      const style = document.createElement('style');
+      style.textContent = '@keyframes sp-fade-in { from { opacity: 0; } to { opacity: 1; } }';
+      spGameOverOverlay.appendChild(style);
+
+      const box = document.createElement('div');
+      box.style.cssText = `
+        background: rgba(10,12,20,0.95); border: 1px solid rgba(100,120,200,0.2);
+        border-radius: 12px; padding: 40px 60px; text-align: center;
+        box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+      `;
+
+      const resultText = document.createElement('div');
+      resultText.textContent = won ? 'VICTORY' : 'DEFEAT';
+      resultText.style.cssText = `
+        font-size: 36px; font-weight: 900; letter-spacing: 6px;
+        color: ${won ? '#44cc66' : '#cc4444'};
+        text-shadow: 0 0 20px ${won ? 'rgba(60,200,100,0.4)' : 'rgba(200,60,60,0.4)'};
+        margin-bottom: 8px;
+      `;
+
+      const subText = document.createElement('div');
+      subText.textContent = won
+        ? `You defeated ${opponentName}!`
+        : `${opponentName} defeated you.`;
+      subText.style.cssText = 'font-size: 14px; color: #aaa; margin-bottom: 28px;';
+
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display: flex; gap: 16px; justify-content: center;';
+
+      const rematchBtn = document.createElement('button');
+      rematchBtn.textContent = 'Rematch';
+      rematchBtn.className = 'sp-btn';
+      rematchBtn.style.cssText = `
+        padding: 12px 32px; font-size: 15px; font-weight: 700;
+        background: linear-gradient(135deg, rgba(200,120,30,0.8), rgba(180,80,20,0.9));
+        color: #fff; border: 1px solid rgba(255,180,60,0.4);
+        border-radius: 6px; cursor: pointer; outline: none;
+      `;
+      rematchBtn.addEventListener('click', () => {
+        spGameOverOverlay?.remove();
+        spGameOverOverlay = null;
+        cleanupPlaygroundUI();
+        startSinglePlayer(config);
+      });
+
+      const exitBtn = document.createElement('button');
+      exitBtn.textContent = 'Exit to Lobby';
+      exitBtn.className = 'sp-btn';
+      exitBtn.style.cssText = `
+        padding: 12px 32px; font-size: 15px; font-weight: 600;
+        background: rgba(60,60,80,0.7); color: #bbb;
+        border: 1px solid rgba(100,100,140,0.3);
+        border-radius: 6px; cursor: pointer; outline: none;
+      `;
+      exitBtn.addEventListener('click', () => {
+        spGameOverOverlay?.remove();
+        spGameOverOverlay = null;
+        showLobby();
+        network?.send({ type: 'return_to_lobby' });
+      });
+
+      btnRow.append(rematchBtn, exitBtn);
+      box.append(resultText, subText, btnRow);
+      spGameOverOverlay.appendChild(box);
+      document.body.appendChild(spGameOverOverlay);
+    }, 1500);
+  }
+
+  // ── Reuse playground UI wiring (combat text, unit frames, action bar, etc.) ──
+
+  const setTarget = (t: Targetable) => { engine.targetingSystem.currentTarget = t; };
+  const playerFrame = new UnitFrame({
+    getPortrait,
+    onClick: setTarget,
+    hideCastBar: true,
+    onBuffRightClick: (buffId) => {
+      engine.buffSystem.remove(engine.playerController, buffId);
+    },
+  });
+  pgPlayerFrame = playerFrame;
+  const targetFrame = new UnitFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
+  pgTargetFrame = targetFrame;
+  const totFrame = new TargetOfTargetFrame({ localPlayer: engine.playerController, getPortrait, onClick: setTarget });
+  pgToTFrame = totFrame;
+
+  pgPositioner = new UnitFramePositioner();
+  document.body.appendChild(pgPositioner.register('player', playerFrame.element, { top: 12, left: 12 }));
+  document.body.appendChild(pgPositioner.register('target', targetFrame.element, { top: 12, left: 280 }));
+  document.body.appendChild(pgPositioner.register('tot', totFrame.element, { top: 51, left: 544 }));
+
+  const errorText = new ErrorText();
+  pgErrorText = errorText;
+  document.body.appendChild(errorText.element);
+  const combatText = new FloatingCombatText(engine.camera);
+  pgCombatText = combatText;
+  document.body.appendChild(combatText.element);
+  const nameplates = new Nameplates(
+    engine.camera, engine.scene,
+    (target) => { engine.targetingSystem.currentTarget = target; },
+    (target) => { engine.targetingSystem.setNameplateHover(target); },
+    (target) => {
+      engine.targetingSystem.currentTarget = target;
+      if (target.isHostileTo(engine.playerController) && !target.dead) {
+        engine.startAutoAttack(target);
+      }
+    },
+  );
+  pgNameplates = nameplates;
+  document.body.appendChild(nameplates.element);
+
+  const unitTooltip = new UnitTooltip(engine.playerController);
+  pgUnitTooltip = unitTooltip;
+  document.body.appendChild(unitTooltip.element);
+
+  engine.combatSystem.onCombatText = (target, amount, type) => {
+    const isIncoming = target === engine.playerController;
+    combatText.spawn(target.mesh, amount, type, isIncoming);
+    if (isIncoming) playerFrame.showCombatText(amount, type);
+    else if (target === engine.targetingSystem.currentTarget) targetFrame.showCombatText(amount, type);
+  };
+
+  engine.combatSystem.onEnterCombat = (entity) => {
+    if (entity === engine.playerController) {
+      combatText.spawnText(entity.mesh, '+Combat', '#cc3333', true);
+    }
+  };
+  engine.combatSystem.onLeaveCombat = (entity) => {
+    if (entity === engine.playerController) {
+      combatText.spawnText(entity.mesh, '-Combat', '#33cc33', true);
+    }
+  };
+
+  engine.buffSystem.onBuffApplied = (target, definition) => {
+    if (target === engine.playerController) {
+      const color = definition.type === 'buff' ? '#3388ff' : '#ff6644';
+      combatText.spawnText(target.mesh, `+${definition.name}`, color, true);
+      if (definition.id === 'dumpster-diving') engine.saveDumpsterDiveAutoTarget();
+    }
+  };
+  engine.buffSystem.onBuffExpired = (target, definition) => {
+    if (target === engine.playerController) {
+      combatText.spawnText(target.mesh, `-${definition.name}`, '#888888', true);
+    }
+    engine.handleBuffExpired(target, definition);
+  };
+  engine.buffSystem.onStacksChanged = (target, buffId, oldStacks, newStacks) => {
+    if (buffId === 'tweaking' && target === engine.playerController) {
+      const delta = newStacks - oldStacks;
+      const text = delta > 0 ? `+${delta} Tweaking` : `${delta} Tweaking`;
+      const color = delta > 0 ? '#3388ff' : '#888888';
+      combatText.spawnText(target.mesh, text, color, true);
+    }
+  };
+
+  // Apply Arena Preparation now that SCT callbacks are wired
+  engine.applyArenaPreparation();
+
+  // Death frame — no respawn button in single player
+  pgDeathFrame = new DeathFrame();
+  document.body.appendChild(pgDeathFrame.element);
+
+  // Cast bar
+  const castBarContainer = document.createElement('div');
+  pgCastBarContainer = castBarContainer;
+  castBarContainer.style.cssText = 'position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%); width: 240px; z-index: 100; display: none;';
+  const castBarHeader = document.createElement('div');
+  castBarHeader.style.cssText = 'display: flex; justify-content: space-between; color: #ddd; font-size: 11px; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; margin-bottom: 2px; text-shadow: 1px 1px 2px rgba(0,0,0,0.9);';
+  const castBarBg = document.createElement('div');
+  castBarBg.style.cssText = 'height: 14px; background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.2); border-radius: 3px; overflow: hidden;';
+  const castBarFill = document.createElement('div');
+  castBarFill.style.cssText = 'height: 100%; background: linear-gradient(to right, #4488ff, #66aaff); width: 0%;';
+  castBarBg.appendChild(castBarFill);
+  castBarContainer.append(castBarHeader, castBarBg);
+  document.body.appendChild(castBarContainer);
+
+  const MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank', 'gank'];
+
+  // Ground targeting state
+  let pendingGroundAbility: Ability | null = null;
+
+  function cancelGroundTargeting(): void {
+    if (!pendingGroundAbility) return;
+    pendingGroundAbility = null;
+    engine.targetingSystem.cancelGroundTarget();
+  }
+
+  engine.targetingSystem.onGroundTargetCancelled = () => {
+    pendingGroundAbility = null;
+  };
+
+  engine.onGroundTargetConfirmed = () => {
+    if (!pendingGroundAbility) return;
+    const ability = pendingGroundAbility;
+    const groundPos = engine.targetingSystem.getGroundTargetPosition();
+    engine.targetingSystem.cancelGroundTarget();
+    pendingGroundAbility = null;
+
+    const result = engine.useGroundTargetAbility(ability, groundPos);
+    if (result.success) {
+      onAbilitySuccess(ability, groundPos);
+    } else if (result.errorMessage) {
+      errorText.show(result.errorMessage);
+    }
+  };
+
+  function onAbilitySuccess(ability: Ability, groundPos?: import('three').Vector3): void {
+    const targetPos = groundPos ?? engine.targetingSystem.currentTarget?.mesh.position.clone();
+    engine.playerController.triggerAbilityAnimation(ability.id, targetPos);
+    if (ability.id === 'crash-out') {
+      const crashSfx = getCharacterSfx(engine.playerController.characterId)?.crashOut;
+      if (crashSfx) soundEffects.play(crashSfx.url, undefined, undefined, crashSfx.volume);
+    }
+    if (ability.id === 'bucket-splash') {
+      const splashSfx = getCharacterSfx(engine.playerController.characterId)?.bucketSplash;
+      if (splashSfx) soundEffects.play(splashSfx.url, undefined, undefined, splashSfx.volume);
+    }
+    if (ability.id === 'fart-bomb') {
+      const fartSfx = getCharacterSfx(engine.playerController.characterId)?.fartBomb;
+      if (fartSfx) soundEffects.play(fartSfx.url, undefined, undefined, fartSfx.volume);
+      engine.spawnGasCloud(engine.playerController.mesh.position.clone(), yardsToUnits(5), 8, FartBombDebuff, 592, 2, engine.playerController);
+    }
+    if (ability.id === 'janitors-helper') {
+      const jhSfx = getCharacterSfx(engine.playerController.characterId)?.janitorsHelper;
+      if (jhSfx) soundEffects.play(jhSfx.url, undefined, undefined, jhSfx.volume);
+    }
+    if (ability.id === 'pocket-sand') {
+      const psSfx = getCharacterSfx(engine.playerController.characterId)?.pocketSand;
+      if (psSfx) soundEffects.play(psSfx.url, undefined, undefined, psSfx.volume);
+    }
+    if (ability.id === 'sweep') {
+      const sweepStartSfx = getCharacterSfx(engine.playerController.characterId)?.sweepStart;
+      if (sweepStartSfx) soundEffects.play(sweepStartSfx.url, undefined, undefined, sweepStartSfx.volume);
+      engine.startSweepCharge();
+    }
+    if (ability.id === 'discombobulate') {
+      const discSfx = getCharacterSfx(engine.playerController.characterId)?.discombobulate;
+      if (discSfx) {
+        const dist = targetPos ? engine.playerController.mesh.position.distanceTo(targetPos) : undefined;
+        const pan = targetPos ? engine.sfxPan(targetPos) : undefined;
+        soundEffects.play(discSfx.url, dist, pan, discSfx.volume);
+      }
+    }
+    if (ability.id === 'kaboom') {
+      const kaboomSfx = getCharacterSfx(engine.playerController.characterId)?.kaboom;
+      if (kaboomSfx) soundEffects.play(kaboomSfx.url, undefined, undefined, kaboomSfx.volume);
+      engine.executeKaboom();
+    }
+    if (ability.id === 'chemical-spill') {
+      const csSfx = getCharacterSfx(engine.playerController.characterId)?.chemicalSpill;
+      if (csSfx) soundEffects.play(csSfx.url, undefined, undefined, csSfx.volume);
+      engine.spawnChemicalPool(engine.playerController.mesh.position.clone(), yardsToUnits(3), 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, engine.playerController, 2);
+    }
+    if (ability.id === 'retard-strength') {
+      const rsSfx = getCharacterSfx(engine.playerController.characterId)?.retardStrength;
+      if (rsSfx) soundEffects.play(rsSfx.url, undefined, undefined, rsSfx.volume);
+    }
+    if (ability.id === 'crotch-rot') {
+      const crSfx = getCharacterSfx(engine.playerController.characterId)?.crotchRot;
+      if (crSfx) soundEffects.play(crSfx.url, undefined, undefined, crSfx.volume);
+      const target = engine.targetingSystem.currentTarget;
+      if (target && !target.dead) {
+        engine.spawnDot(target, CrotchRotDot, 12, 3, 720, engine.playerController);
+      }
+    }
+    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'dumpster-dive' || ability.id === 'tweaker-sprint' || ability.id === 'gank') {
+      engine.buffSystem.addStacks(engine.playerController, 'tweaking', 15);
+      if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
+        engine.buffSystem.apply(engine.playerController, ParanoidDebuff);
+      }
+    }
+    if (ability.id === 'crack-rock') {
+      const crackRockSfx = getCharacterSfx(engine.playerController.characterId)?.crackRock;
+      if (crackRockSfx) soundEffects.play(crackRockSfx.url, undefined, undefined, crackRockSfx.volume);
+      engine.combatSystem.applyHeal(engine.playerController, 400);
+      engine.buffSystem.addStacks(engine.playerController, 'tweaking', 25);
+      if (engine.buffSystem.getStacks(engine.playerController, 'tweaking') >= 100 && !engine.buffSystem.hasDebuff(engine.playerController, 'paranoid')) {
+        engine.buffSystem.apply(engine.playerController, ParanoidDebuff);
+      }
+    }
+    if (ability.id === 'gank') {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && (target.dead || target.hp / target.maxHp < 0.30)) {
+        engine.combatSystem.clearCooldown('gank');
+      }
+    }
+    if (ability.id === 'tweaker-sprint') {
+      const tsSfx = getCharacterSfx(engine.playerController.characterId)?.tweakerSprint;
+      if (tsSfx) soundEffects.play(tsSfx.url, undefined, undefined, tsSfx.volume);
+      const target = engine.targetingSystem.currentTarget;
+      if (target && !target.dead) {
+        engine.startTweakerSprintCharge(target);
+      }
+    }
+    if (ability.id === 'sticky-fingers') {
+      const sfSfx = getCharacterSfx(engine.playerController.characterId)?.stickyFingers;
+      if (sfSfx) soundEffects.play(sfSfx.url, undefined, undefined, sfSfx.volume);
+      const target = engine.targetingSystem.currentTarget;
+      if (target) {
+        const stealable = engine.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
+        if (stealable.length > 0) {
+          const stolen = stealable[Math.floor(Math.random() * stealable.length)];
+          const remainingTime = stolen.remaining;
+          engine.buffSystem.remove(target, stolen.definition.id);
+          engine.buffSystem.apply(engine.playerController, stolen.definition);
+          engine.buffSystem.setRemaining(engine.playerController, stolen.definition.id, remainingTime);
+        } else {
+          const drain = Math.min(150, target.mana);
+          target.mana -= drain;
+          engine.playerController.mana = Math.min(engine.playerController.mana + 150, engine.playerController.maxMana);
+          combatText.spawnText(engine.playerController.mesh, '+150 Mana', '#3388ff', true);
+        }
+      }
+    }
+
+    if (MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {
+      const target = engine.targetingSystem.currentTarget;
+      if (target && target.isHostileTo(engine.playerController) && !target.dead) {
+        engine.startAutoAttack(target);
+      }
+    }
+  }
+
+  engine.onCastComplete = (ability) => onAbilitySuccess(ability);
+  engine.onCastFailed = (message) => errorText.show(message);
+
+  // Action bar
+  const actionBar = new ActionBar({
+    onActivate: (ability) => {
+      if (ability.isAutoAttack) {
+        if (engine.isAutoAttackActive()) {
+          engine.stopAutoAttack();
+        } else {
+          const target = engine.targetingSystem.currentTarget;
+          if (target && target.isHostileTo(engine.playerController) && !target.dead) {
+            if (engine.isResting()) engine.stopResting();
+            engine.startAutoAttack(target);
+          }
+        }
+        return;
+      }
+
+      if (engine.isResting()) engine.stopResting();
+      if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
+      if (!engine.godMode && !ability.usableWhileCCd && engine.combatSystem.getGcdRemaining() > 0) return;
+      if (ability.groundTargeted) {
+        if (pendingGroundAbility?.id === ability.id) {
+          cancelGroundTargeting();
+        } else {
+          if (engine.combatSystem.getCooldownRemaining(ability.id) > 0) {
+            errorText.show('Ability is not ready yet');
+            return;
+          }
+          cancelGroundTargeting();
+          pendingGroundAbility = ability;
+          engine.targetingSystem.startGroundTarget(ability.aoeRadius ?? 1, ability.range ?? 10);
+        }
+        return;
+      }
+      cancelGroundTargeting();
+      let target: Targetable | null = engine.targetingSystem.currentTarget;
+      if (ability.requiresFriendlyTarget && target && target.isHostileTo(engine.playerController)) target = engine.playerController;
+      if (!target && ability.requiresTarget && !ability.requiresHostileTarget) target = engine.playerController;
+      if (ability.castTime) {
+        const result = engine.startCasting(ability, engine.playerController.mesh.rotation.y, target);
+        if (!result.success && result.errorMessage) errorText.show(result.errorMessage);
+      } else {
+        const result = engine.combatSystem.useAbility(ability, engine.playerController, engine.playerController.mesh.rotation.y, target);
+        if (result.success) {
+          onAbilitySuccess(ability);
+          if (!engine.godMode && !ability.usableWhileCCd) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+          if (ability.id === 'pvp-trinket') {
+            engine.buffSystem.removeAllCCEffects(engine.playerController);
+            const trinketSfx = getSharedSfx().pvpTrinket;
+            if (trinketSfx) soundEffects.play(trinketSfx.url, undefined, undefined, trinketSfx.volume);
+          }
+        }
+        else if (result.errorMessage) errorText.show(result.errorMessage);
+      }
+    },
+    getAbilityStatus: (ability) => {
+      const player = engine.playerController;
+      if (ability.id !== 'crack-rock' && engine.buffSystem.hasBuff(player, 'dumpster-diving')) return 'locked';
+      const effectiveManaCost = Math.round(ability.manaCost * engine.buffSystem.getManaCostMultiplier(player));
+      if (player.mana < effectiveManaCost) return 'not-enough-resource';
+      if (ability.requiresHostileTarget) {
+        const target = engine.targetingSystem.currentTarget;
+        if (!target || !target.isHostileTo(player) || target.dead) return 'no-target';
+        const dx = player.mesh.position.x - target.mesh.position.x;
+        const dy = player.mesh.position.y - target.mesh.position.y;
+        const dz = player.mesh.position.z - target.mesh.position.z;
+        const hostileDist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        const effectiveRange = ability.isAutoAttack
+          ? getCharacterStats(player.characterId).autoAttackRange
+          : ability.range!;
+        if (hostileDist > effectiveRange) return 'out-of-range';
+        if (ability.minRange && hostileDist < ability.minRange) return 'out-of-range';
+      }
+      if (ability.requiresTarget && !ability.requiresHostileTarget) {
+        let target: Targetable = engine.targetingSystem.currentTarget ?? player;
+        if (ability.requiresFriendlyTarget && target !== player && target.isHostileTo(player)) target = player;
+        if (target.dead) return 'no-target';
+        if (ability.blockedByTargetDebuff && engine.buffSystem.hasDebuff(target, ability.blockedByTargetDebuff)) return 'no-target';
+        if (ability.range && target !== player) {
+          const dx = player.mesh.position.x - target.mesh.position.x;
+          const dy = player.mesh.position.y - target.mesh.position.y;
+          const dz = player.mesh.position.z - target.mesh.position.z;
+          if (Math.sqrt(dx * dx + dy * dy + dz * dz) > ability.range) return 'out-of-range';
+        }
+      }
+      return 'usable';
+    },
+    getCombatSystem: () => engine.combatSystem,
+    getGcdRemaining: () => engine.combatSystem.getGcdRemaining(),
+    getGcdTotal: () => engine.combatSystem.getGcdTotal(),
+    isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || (engine.isCasting() && !engine.isChanneling()),
+    isAutoAttacking: () => engine.isAutoAttackActive(),
+  });
+  pgActionBar = actionBar;
+  document.body.appendChild(actionBar.element);
+  actionBar.loadAbilities(engine.playerController.characterId, engine.playerController.abilities);
+  engine.onAutoAttackError = (message) => errorText.show(message);
+  engine.onRestError = (message) => errorText.show(message);
+
+  // Escape menu
+  const escapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {
+      spGameOverOverlay?.remove();
+      showLobby();
+      network?.send({ type: 'return_to_lobby' });
+    },
+    onEscapeWhilePlaying: () => {
+      if (pendingGroundAbility) {
+        cancelGroundTargeting();
+        return true;
+      }
+      if (engine.isCasting()) {
+        engine.cancelCasting();
+        return true;
+      }
+      if (engine.targetingSystem.currentTarget) {
+        engine.targetingSystem.currentTarget = null;
+        engine.stopAutoAttack();
+        return true;
+      }
+      return false;
+    },
+    onKeybinds: () => {
+      escapeMenu.close();
+      keybindMenu.open(() => escapeMenu.open());
+    },
+    onAudio: () => {
+      escapeMenu.close();
+      new AudioSettingsDialog(() => escapeMenu.open()).open();
+    },
+  });
+  pgEscapeMenu = escapeMenu;
+  document.body.appendChild(escapeMenu.element);
+
+  const deathFrame = pgDeathFrame!;
+  let lastFrameTime = performance.now();
+  function updateFrames(): void {
+    pgFrameLoopId = requestAnimationFrame(updateFrames);
+    const now = performance.now();
+    const focused = document.hasFocus();
+    if (!focused && now - lastFrameTime < 33) return;
+    const dt = Math.min((now - lastFrameTime) / 1000, focused ? 0.1 : 0.2);
+    lastFrameTime = now;
+
+    const bs = engine.buffSystem;
+    playerFrame.update(engine.playerController, bs.getBuffs(engine.playerController), bs.getDebuffs(engine.playerController));
+    const ct = engine.targetingSystem.currentTarget;
+    targetFrame.update(ct, ct ? bs.getBuffs(ct) : [], ct ? bs.getDebuffs(ct) : []);
+
+    const tot = ct && ct !== engine.playerController && 'autoAttackTarget' in ct
+      ? (ct as any).autoAttackTarget as Targetable | null
+      : null;
+    totFrame.update(tot);
+
+    playerFrame.updateCombatText(dt);
+    targetFrame.updateCombatText(dt);
+    actionBar.update();
+
+    const castState = engine.getCastingState();
+    if (castState) {
+      castBarContainer.style.display = 'block';
+      let progress: number;
+      if (castState.isChannel) {
+        progress = Math.max(0, (castState.totalTime - castState.elapsed) / castState.originalCastTime);
+        castBarFill.style.background = 'linear-gradient(to right, #cc8833, #eebb55)';
+      } else {
+        progress = Math.min(1, castState.elapsed / castState.totalTime);
+        castBarFill.style.background = 'linear-gradient(to right, #4488ff, #66aaff)';
+      }
+      castBarFill.style.width = `${progress * 100}%`;
+      const remaining = Math.max(0, castState.totalTime - castState.elapsed);
+      castBarHeader.innerHTML = `<span>${castState.abilityName}</span><span>${remaining.toFixed(1)}s</span>`;
+    } else {
+      castBarContainer.style.display = 'none';
+    }
+
+    combatText.update(dt);
+    const visibleNpcs = engine.getNpcs().filter(n => !bs.isUntargetable(n));
+    nameplates.update(engine.playerController, visibleNpcs, (target) => {
+      return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
+    }, bs.isBlinded(engine.playerController));
+
+    const hovered = engine.targetingSystem.getHoveredTarget();
+    unitTooltip.update(hovered, (entity) => {
+      if (entity === (engine.playerController as unknown as Targetable)) {
+        return engine.targetingSystem.currentTarget?.name ?? 'None';
+      }
+      const npc = engine.getNpcs().find(n => n === entity);
+      return npc?.autoAttackTarget?.name ?? 'None';
+    }, dt);
+
+    if (engine.playerController.dead && !deathFrame.visible) deathFrame.show();
+    else if (!engine.playerController.dead && deathFrame.visible) deathFrame.hide();
+
+    // Check game-over condition
+    checkGameOver();
+  }
+  updateFrames();
+
+  pgResizeHandler = () => engine.resize(window.innerWidth, window.innerHeight);
+  window.addEventListener('resize', pgResizeHandler);
+  engine.start();
+}
+
 // ── Playground Mode ────────────────────────────────────────────────────
 
 async function startPlayground(): Promise<void> {
@@ -2793,7 +3576,8 @@ async function startPlayground(): Promise<void> {
     }
 
     combatText.update(dt);
-    nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
+    const visibleNpcs = engine.getNpcs().filter(n => !bs.isUntargetable(n));
+    nameplates.update(engine.playerController, visibleNpcs, (target) => {
       return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
     }, bs.isBlinded(engine.playerController));
 
@@ -2830,6 +3614,7 @@ async function startUISetup(): Promise<void> {
   lobbyMusic.fadeOut();
   cleanupCurrentState();
   currentState = 'ui-setup';
+  practiceMusic.start();
 
   const uiOverlay = document.getElementById('ui-overlay');
   if (uiOverlay) uiOverlay.style.display = '';
@@ -3332,7 +4117,8 @@ async function startUISetup(): Promise<void> {
     }
 
     combatText.update(dt);
-    nameplates.update(engine.playerController, engine.getNpcs(), (target) => {
+    const visibleNpcs = engine.getNpcs().filter(n => !bs.isUntargetable(n));
+    nameplates.update(engine.playerController, visibleNpcs, (target) => {
       return bs.getDebuffs(target).map(b => ({ icon: b.definition.icon, remaining: b.remaining, duration: b.definition.duration }));
     }, bs.isBlinded(engine.playerController));
 

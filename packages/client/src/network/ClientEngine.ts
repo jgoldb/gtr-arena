@@ -453,6 +453,8 @@ export class ClientEngine {
         const pool = this.chemPools.get(cpSnap.id);
         if (pool && cpSnap.consumed && !pool.consumed) {
           pool.consumed = true;
+          const triggerSfx = getCharacterSfx('dr-retardo')?.chemicalSpillTrigger;
+          if (triggerSfx) soundEffects.play(triggerSfx.url, this.distToPosition(pool.group.position), this.panToPosition(pool.group.position), triggerSfx.volume);
         }
       }
     }
@@ -535,6 +537,8 @@ export class ClientEngine {
       const pool = this.chemPools.get(cpSnap.id);
       if (pool && cpSnap.consumed && !pool.consumed) {
         pool.consumed = true;
+        const triggerSfx = getCharacterSfx('dr-retardo')?.chemicalSpillTrigger;
+        if (triggerSfx) soundEffects.play(triggerSfx.url, this.distToPosition(pool.group.position), this.panToPosition(pool.group.position), triggerSfx.volume);
       }
     }
 
@@ -1077,6 +1081,20 @@ export class ClientEngine {
     const len = Math.sqrt(dx * dx + dz * dz);
     if (len < 0.001) return 0;
     // Dot product of normalized direction with player's right vector
+    return (Math.cos(rotY) * dx - Math.sin(rotY) * dz) / len;
+  }
+
+  private distToPosition(worldPos: THREE.Vector3): number {
+    return this.playerController.mesh.position.distanceTo(worldPos);
+  }
+
+  private panToPosition(worldPos: THREE.Vector3): number {
+    const pos = this.playerController.mesh.position;
+    const rotY = this.playerController.mesh.rotation.y;
+    const dx = worldPos.x - pos.x;
+    const dz = worldPos.z - pos.z;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 0.001) return 0;
     return (Math.cos(rotY) * dx - Math.sin(rotY) * dz) / len;
   }
 

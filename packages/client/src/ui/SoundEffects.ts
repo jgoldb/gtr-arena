@@ -23,6 +23,8 @@ class SoundEffectsManager {
   private buffers = new Map<string, AudioBuffer>();
   /** Active spatial sounds keyed by source identifier (e.g. entity ID). */
   private activeSpatial = new Map<string, ActiveSpatialSound[]>();
+  /** All active sources — used by fadeOutAll() to fade lingering sounds on scene exit. */
+  private activeSources = new Set<{ source: AudioBufferSourceNode; gain: GainNode }>();
 
   private getContext(): AudioContext {
     if (!this.ctx) this.ctx = new AudioContext();
@@ -93,10 +95,14 @@ class SoundEffectsManager {
       gain.connect(ctx.destination);
     }
     // Track spatial sounds for continuous position updates
+    const record = { source, gain };
+    this.activeSources.add(record);
     if (sourceKey) {
       const entry: ActiveSpatialSound = { gain, panner: pannerNode, volumeMultiplier };
       this.trackSound(sourceKey, entry);
-      source.onended = () => this.untrackSound(sourceKey, entry);
+      source.onended = () => { this.untrackSound(sourceKey, entry); this.activeSources.delete(record); };
+    } else {
+      source.onended = () => this.activeSources.delete(record);
     }
     source.start();
   }
@@ -132,10 +138,17 @@ class SoundEffectsManager {
       entry = { gain, panner: pannerNode, volumeMultiplier };
       this.trackSound(sourceKey, entry);
     }
+    const record = { source, gain };
+    this.activeSources.add(record);
+    source.onended = () => {
+      this.activeSources.delete(record);
+      if (sourceKey && entry) this.untrackSound(sourceKey, entry);
+    };
     source.start();
     return {
       stop: () => {
         try { source.stop(); } catch { /* already stopped */ }
+        this.activeSources.delete(record);
         if (sourceKey && entry) this.untrackSound(sourceKey, entry);
       },
     };
@@ -158,6 +171,20 @@ class SoundEffectsManager {
         }
       }
     }
+  }
+
+  /** Fade out and stop all currently playing sounds. */
+  fadeOutAll(duration = 0.5): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    for (const { source, gain } of this.activeSources) {
+      gain.gain.setValueAtTime(gain.gain.value, now);
+      gain.gain.linearRampToValueAtTime(0, now + duration);
+      try { source.stop(now + duration); } catch { /* already stopped */ }
+    }
+    this.activeSources.clear();
+    this.activeSpatial.clear();
   }
 
   /** Preload all game sound effects. Safe to call multiple times. */

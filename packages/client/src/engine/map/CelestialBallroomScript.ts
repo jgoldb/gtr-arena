@@ -590,7 +590,7 @@ export class CelestialBallroomScript extends ArenaScript {
     // Arch 1: Grand Celestial Sweep — wide, sweeping, western side
     // Curve starts/ends underground so the tube emerges naturally from the ground
     const arch1Curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-34, -2.2, 23),
+      new THREE.Vector3(-34, -3.0, 23),
       new THREE.Vector3(-30, 0, 20),
       new THREE.Vector3(-24, 4, 14),
       new THREE.Vector3(-16, 8, 7),
@@ -600,13 +600,13 @@ export class CelestialBallroomScript extends ArenaScript {
       new THREE.Vector3(-16, 8, -7),
       new THREE.Vector3(-24, 4, -12),
       new THREE.Vector3(-30, 0, -16),
-      new THREE.Vector3(-34, -2.2, -19),
+      new THREE.Vector3(-34, -3.0, -19),
     ]);
-    this.buildArchway(arch1Curve, 2.2, 8, 1.5, diamondMat);
+    this.buildArchway(arch1Curve, 3.0, 8, 1.5, diamondMat);
 
     // Arch 2: Crystal Spire — taller, steeper, asymmetric descent, eastern side
     const arch2Curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(34, -1.8, -22),
+      new THREE.Vector3(34, -2.6, -22),
       new THREE.Vector3(30, 0, -19),
       new THREE.Vector3(24, 4, -15),
       new THREE.Vector3(18, 9, -10),
@@ -616,9 +616,9 @@ export class CelestialBallroomScript extends ArenaScript {
       new THREE.Vector3(18, 8.5, 6),
       new THREE.Vector3(24, 3.5, 11),
       new THREE.Vector3(30, 0, 15),
-      new THREE.Vector3(34, -1.8, 18),
+      new THREE.Vector3(34, -2.6, 18),
     ]);
-    this.buildArchway(arch2Curve, 1.8, 6, 1.2, diamondMat);
+    this.buildArchway(arch2Curve, 2.6, 6, 1.2, diamondMat);
 
     // Floating sparkle particles around both arches
     this.createArchSparkles(arch1Curve, arch2Curve);
@@ -689,6 +689,76 @@ export class CelestialBallroomScript extends ArenaScript {
         cosY: Math.cos(yAngle),
         sinY: Math.sin(yAngle),
         centerY: midSY - halfH * Math.cos(rotZ),
+        halfH,
+        rotZ,
+      });
+    }
+
+    // Flattened mound bases — squished wider so you can walk up from any angle
+    for (const p of points) {
+      if (p.y >= 0) {
+        this.addArchBaseMound(p, radius, material);
+        break;
+      }
+    }
+    for (let i = points.length - 1; i >= 0; i--) {
+      if (points[i].y >= 0) {
+        this.addArchBaseMound(points[i], radius, material);
+        break;
+      }
+    }
+
+    // Register archway base positions as elevation access points for NPC pathfinding
+    const startPt = points[0];
+    const endPt = points[points.length - 1];
+    this.collision.addElevationAccessPoint({ x: startPt.x, z: startPt.z });
+    this.collision.addElevationAccessPoint({ x: endPt.x, z: endPt.z });
+  }
+
+  /** Cone-shaped base at an archway foot — visual + radial ramp colliders */
+  private addArchBaseMound(
+    basePos: THREE.Vector3,
+    tubeRadius: number,
+    material: THREE.ShaderMaterial,
+  ): void {
+    const spread = tubeRadius * 3;           // XZ radius of the mound
+    const moundHeight = tubeRadius;          // peak matches the tube top
+
+    // Visual: faceted cone — linear profile matches the ramp colliders exactly
+    const coneGeo = new THREE.ConeGeometry(spread, moundHeight, 16, 1, true);
+    const coneMesh = new THREE.Mesh(coneGeo, material);
+    coneMesh.position.set(basePos.x, moundHeight / 2, basePos.z);
+    coneMesh.name = 'archBaseMound';
+    this.group.add(coneMesh);
+
+    // Collision: radial ramp colliders (linear slope from ground at edge to peak)
+    // topY = centerY + localX * sin(rotZ) + halfH * cos(rotZ)
+    // localX: -halfW at outer edge (topY=0), +halfW at inner edge (topY=moundHeight)
+    const numRamps = 12;
+    const rampHalfW = spread / 2;
+    const rampHalfD = (Math.PI * spread) / numRamps;
+    const rotZ = Math.asin(moundHeight / (2 * rampHalfW));
+    const sinRot = Math.sin(rotZ);
+    const cosRot = Math.cos(rotZ);
+    const halfH = 1.5;
+    // From: 0 = centerY - rampHalfW * sinRot + halfH * cosRot  (outer edge at ground)
+    const centerY = rampHalfW * sinRot - halfH * cosRot;
+
+    for (let i = 0; i < numRamps; i++) {
+      const theta = (i / numRamps) * Math.PI * 2;
+      const inwardAngle = theta + Math.PI;
+      const cx = basePos.x + Math.cos(theta) * rampHalfW;
+      const cz = basePos.z + Math.sin(theta) * rampHalfW;
+
+      this.collision.addCollider({
+        type: 'box',
+        cx,
+        cz,
+        halfW: rampHalfW,
+        halfD: rampHalfD,
+        cosY: Math.cos(inwardAngle),
+        sinY: Math.sin(inwardAngle),
+        centerY,
         halfH,
         rotZ,
       });
