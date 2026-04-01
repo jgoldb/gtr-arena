@@ -148,6 +148,8 @@ export class MovementController {
             const angle = Math.random() * Math.PI * 2;
             desiredDir = new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle));
           }
+          // Steer away from walls/boundaries to avoid getting cornered
+          desiredDir = this.adjustKiteDirForWalls(pos, desiredDir, this.intent.threat);
         } else if (dist > this.intent.maxRange) {
           // Too far — move closer
           desiredDir = new THREE.Vector3(-dx / dist, 0, -dz / dist);
@@ -517,6 +519,88 @@ export class MovementController {
 
     if (!inDanger) return null;
     return new THREE.Vector3(avoidX, 0, avoidZ);
+  }
+
+  /**
+   * When kiting, adjust the desired direction to avoid running into walls,
+   * boundaries, or corners. If the direct-away path is blocked or leads near
+   * a boundary, sample alternative directions and pick the one with the best
+   * combination of clearance, distance from the threat, and distance from walls.
+   */
+  private adjustKiteDirForWalls(
+    pos: THREE.Vector3,
+    dir: THREE.Vector3,
+    threat: THREE.Vector3
+  ): THREE.Vector3 {
+    const PROBE_DIST = 2.5;
+    const BOUNDARY_MARGIN = 2.0;
+
+    // Quick check: is the current direction clear?
+    const probeX = pos.x + dir.x * PROBE_DIST;
+    const probeZ = pos.z + dir.z * PROBE_DIST;
+
+    const nearBoundary =
+      probeX < this.bounds.minX + BOUNDARY_MARGIN ||
+      probeX > this.bounds.maxX - BOUNDARY_MARGIN ||
+      probeZ < this.bounds.minZ + BOUNDARY_MARGIN ||
+      probeZ > this.bounds.maxZ - BOUNDARY_MARGIN;
+
+    const resolved = this.collision.resolve(probeX, probeZ, pos.y, COLLISION_RADIUS);
+    const clearance = Math.sqrt((resolved.x - pos.x) ** 2 + (resolved.z - pos.z) ** 2);
+    const blocked = clearance < PROBE_DIST * 0.7;
+
+    if (!nearBoundary && !blocked) return dir; // Path is clear, no adjustment needed
+
+    // Path is obstructed — sample alternative directions and pick the best
+    const baseAngle = Math.atan2(dir.x, dir.z);
+    let bestDir = dir.clone();
+    let bestScore = -Infinity;
+
+    // Score the original direction as baseline
+    const origBoundaryDist = Math.min(
+      probeX - this.bounds.minX, this.bounds.maxX - probeX,
+      probeZ - this.bounds.minZ, this.bounds.maxZ - probeZ
+    );
+    const origThreatDist = Math.sqrt(
+      (pos.x + dir.x - threat.x) ** 2 + (pos.z + dir.z - threat.z) ** 2
+    );
+    bestScore = clearance * 2 + origThreatDist + Math.max(0, origBoundaryDist) * 0.5;
+
+    // Sample 10 directions, alternating left/right from the original heading
+    for (let i = 0; i < 10; i++) {
+      const sign = i % 2 === 0 ? 1 : -1;
+      const step = Math.ceil((i + 1) / 2);
+      const angle = baseAngle + sign * step * (Math.PI / 5); // ~36° steps, up to ±180°
+
+      const cx = Math.sin(angle);
+      const cz = Math.cos(angle);
+
+      // Probe clearance
+      const cpx = pos.x + cx * PROBE_DIST;
+      const cpz = pos.z + cz * PROBE_DIST;
+      const cResolved = this.collision.resolve(cpx, cpz, pos.y, COLLISION_RADIUS);
+      const cClearance = Math.sqrt((cResolved.x - pos.x) ** 2 + (cResolved.z - pos.z) ** 2);
+
+      // Boundary distance at probe point
+      const cBoundaryDist = Math.min(
+        cpx - this.bounds.minX, this.bounds.maxX - cpx,
+        cpz - this.bounds.minZ, this.bounds.maxZ - cpz
+      );
+
+      // How much this direction moves us away from the threat
+      const cThreatDist = Math.sqrt(
+        (pos.x + cx - threat.x) ** 2 + (pos.z + cz - threat.z) ** 2
+      );
+
+      const score = cClearance * 2 + cThreatDist + Math.max(0, cBoundaryDist) * 0.5;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestDir = new THREE.Vector3(cx, 0, cz);
+      }
+    }
+
+    return bestDir;
   }
 
   /**
