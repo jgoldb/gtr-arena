@@ -1455,6 +1455,9 @@ export class Engine {
           }
 
           pool.consumed = true;
+          // Play trigger sound at the pool's location
+          const triggerSfx = getCharacterSfx(pool.owner.characterId)?.chemicalSpillTrigger;
+          if (triggerSfx) soundEffects.play(triggerSfx.url, this.playerController.mesh.position.distanceTo(pool.center), this.sfxPan(pool.center), triggerSfx.volume);
           break;
         }
 

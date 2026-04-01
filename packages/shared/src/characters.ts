@@ -50,6 +50,7 @@ export interface CharacterStats {
     sweepSpin?: SfxEntry;
     discombobulate?: SfxEntry;
     chemicalSpill?: SfxEntry;
+    chemicalSpillTrigger?: SfxEntry;
     retardStrength?: SfxEntry;
     fullRetard?: SfxEntry;
     crotchRot?: SfxEntry;
@@ -76,7 +77,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
   'janitor': {
     id: 'janitor',
     displayName: 'The Janitor',
-    baseMaxHp: 300899,
+    baseMaxHp: 3008,
     baseMaxMana: 1042,
     autoAttackDamageMin: 163,
     autoAttackDamageMax: 200,
@@ -126,6 +127,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
       bottleChuck: { file: 'bottle-chuck.ogg', volume: 3 },
       discombobulate: { file: 'discombobulate.ogg', volume: 2 },
       chemicalSpill: { file: 'chemical-spill.ogg', volume: 3 },
+      chemicalSpillTrigger: { file: 'chemical-spill2.ogg', volume: 3 },
       retardStrength: { file: 'retard-strength.ogg', volume: 3 },
       fullRetard: { file: 'full-retard.ogg', volume: 3 },
       crotchRot: { file: 'crotch-rot.ogg', volume: 3 },
