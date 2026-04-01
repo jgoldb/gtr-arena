@@ -276,6 +276,13 @@ export class Engine {
           );
         }
       }
+      // NPC spell pushback
+      for (const npc of this.npcs) {
+        if (npc === target && npc.aiBrain) {
+          npc.aiBrain.applyPushback();
+          break;
+        }
+      }
     };
 
     this.combatSystem.onSleepApplied = (_attacker, target) => {
@@ -364,6 +371,9 @@ export class Engine {
       }
     };
 
+    // Notify map script when an entity dies (cheering, jumbotron, banners)
+    this.combatSystem.onDeath = (victim, killer) => this.handleEntityDeath(victim, killer);
+
     // Preload combat sound effects
     soundEffects.init();
 
@@ -382,9 +392,25 @@ export class Engine {
       this.combatSystem.onCombatText?.(this.playerController, damage, 'damage');
       if (this.playerController.hp <= 0 && !this.playerController.dead) {
         this.playerController.die();
+        this.handleEntityDeath(this.playerController, null);
       }
     };
 
+  }
+
+  /** Notify the map script of a killing blow and check for game-over. */
+  private handleEntityDeath(victim: Targetable, killer: Targetable | null): void {
+    const victimTeam = victim.team;
+    const killerTeam = killer ? killer.team : (victimTeam === 0 ? 1 : 0);
+    this.mapManager.onKillingBlow(killerTeam, victimTeam);
+
+    // Check for game over: if all entities on the victim's team are dead
+    const allEntities: Targetable[] = [this.playerController, ...this.npcs];
+    const teamAlive = allEntities.some(e => e.team === victimTeam && !e.dead);
+    if (!teamAlive) {
+      const winningTeam = killerTeam;
+      this.mapManager.onGameOver(winningTeam);
+    }
   }
 
   start(): void {
@@ -599,6 +625,7 @@ export class Engine {
       this.combatSystem.onCombatText?.(npc, damage, 'damage');
       if (npc.hp <= 0 && !npc.dead) {
         npc.die();
+        this.handleEntityDeath(npc, null);
       }
     };
 
@@ -1455,6 +1482,7 @@ export class Engine {
             this.combatSystem.enterCombat(target);
             if (target.hp <= 0 && !target.dead) {
               target.die();
+              this.handleEntityDeath(target, pool.owner);
             } else {
               this.buffSystem.apply(target, pool.dot);
               this.activeDots.push({
@@ -1506,6 +1534,7 @@ export class Engine {
           this.combatSystem.enterCombat(dot.target);
           if (dot.target.hp <= 0 && !dot.target.dead) {
             dot.target.die();
+            this.handleEntityDeath(dot.target, dot.owner);
           }
         }
         dot.nextTickAt += dot.tickInterval;
@@ -1560,7 +1589,7 @@ export class Engine {
           if (dmg > 0) this.combatSystem.onCombatText?.(npc, dmg, 'damage');
           this.combatSystem.enterCombat(this.playerController);
           this.combatSystem.enterCombat(npc);
-          if (npc.hp <= 0 && !npc.dead) npc.die();
+          if (npc.hp <= 0 && !npc.dead) { npc.die(); this.handleEntityDeath(npc, this.playerController); }
         }
       }
       // Re-engage auto-attack if target is still valid
@@ -1646,6 +1675,7 @@ export class Engine {
           this.combatSystem.enterCombat(target);
           if (target.hp <= 0 && !target.dead) {
             target.die();
+            this.handleEntityDeath(target, cloud.owner);
           }
         }
         cloud.nextTickAt += cloud.tickInterval;
@@ -1758,7 +1788,7 @@ export class Engine {
           if (dmg > 0) this.combatSystem.onCombatText?.(npc, dmg, 'damage');
           this.combatSystem.enterCombat(this.playerController);
           this.combatSystem.enterCombat(npc);
-          if (npc.hp <= 0 && !npc.dead) npc.die();
+          if (npc.hp <= 0 && !npc.dead) { npc.die(); this.handleEntityDeath(npc, this.playerController); }
         }
       }
 

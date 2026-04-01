@@ -13,7 +13,7 @@ interface ConnectedUser {
   userId: string;
   username: string;
   socket: WebSocket;
-  status: 'online' | 'in-game';
+  status: 'online' | 'in-game' | 'in-single-player';
   gameLobbyId: string | null;
   gameSessionId: string | null;
 }
@@ -267,6 +267,11 @@ export class LobbyManager {
         user.status = 'online';
         user.gameSessionId = null;
         this.sendChatHistory(user.socket);
+        this.broadcastLobbyState();
+        break;
+
+      case 'enter_single_player':
+        user.status = 'in-single-player';
         this.broadcastLobbyState();
         break;
 
@@ -1033,7 +1038,7 @@ export class LobbyManager {
       users.push({
         userId: u.userId,
         username: LobbyManager.gmTag(u.username, this.auth.getIsAdmin(u.userId)),
-        status: u.gameSessionId ? 'in-game' : 'online',
+        status: u.gameSessionId ? 'in-game' : u.status,
       });
     }
 
@@ -1061,7 +1066,7 @@ export class LobbyManager {
       users.push({
         userId: u.userId,
         username: LobbyManager.gmTag(u.username, this.auth.getIsAdmin(u.userId)),
-        status: u.gameSessionId ? 'in-game' : 'online',
+        status: u.gameSessionId ? 'in-game' : u.status,
       });
     }
 

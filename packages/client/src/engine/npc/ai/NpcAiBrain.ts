@@ -320,6 +320,23 @@ export class NpcAiBrain {
     return this.casting !== null;
   }
 
+  /** Apply spell pushback when NPC takes direct damage while casting/channeling. */
+  applyPushback(): void {
+    if (!this.casting) return;
+    const cast = this.casting;
+    const originalCastTime = cast.ability.castTime ?? cast.totalTime;
+    if (cast.isChannel) {
+      // Channel pushback: lose 35% of full channel duration per hit (WoW-style)
+      cast.totalTime = Math.max(cast.elapsed, cast.totalTime - originalCastTime * 0.35);
+      this.npc.castingTotalTime = cast.totalTime;
+    } else {
+      // Cast pushback: increase cast time (capped at 2x original)
+      const maxTime = originalCastTime * 2;
+      cast.totalTime = Math.min(cast.totalTime + 0.5, maxTime);
+      this.npc.castingTotalTime = cast.totalTime;
+    }
+  }
+
   private think(): void {
     const world = this.buildWorldState();
 

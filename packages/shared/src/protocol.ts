@@ -131,6 +131,10 @@ export interface C2S_ReturnToLobby {
   type: 'return_to_lobby';
 }
 
+export interface C2S_EnterSinglePlayer {
+  type: 'enter_single_player';
+}
+
 export interface C2S_RequestLobbyState {
   type: 'request_lobby_state';
 }
@@ -762,6 +766,7 @@ export type ClientMessage =
   | C2S_CancelBuff
   | C2S_SetResting
   | C2S_ReturnToLobby
+  | C2S_EnterSinglePlayer
   | C2S_RequestLobbyState
   | C2S_InspectUser
   | C2S_GetLeaderboard

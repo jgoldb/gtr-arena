@@ -2414,6 +2414,7 @@ function showSinglePlayerScreen(): void {
   cleanupCurrentState();
   currentState = 'single-player';
   hideGameUI();
+  network?.send({ type: 'enter_single_player' });
 
   singlePlayerScreen = new SinglePlayerScreen();
   singlePlayerScreen.onFight = (config) => startSinglePlayer(config);
@@ -2464,6 +2465,7 @@ async function startSinglePlayer(config: SinglePlayerConfig): Promise<void> {
   const { FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff, yardsToUnits } = await import('./engine/combat/Ability');
 
   const engine = new Engine(canvas);
+  engine.isAdmin = isAdmin;
   const savedUsername = sessionStorage.getItem('gtr_username');
   if (savedUsername) engine.playerController.name = savedUsername;
   pgEngine = engine;
@@ -2940,6 +2942,7 @@ async function startSinglePlayer(config: SinglePlayerConfig): Promise<void> {
   actionBar.loadAbilities(engine.playerController.characterId, engine.playerController.abilities);
   engine.onAutoAttackError = (message) => errorText.show(message);
   engine.onRestError = (message) => errorText.show(message);
+  engine.onGodModeToggle = (active) => toggleGodModeOverlay(active);
 
   // Escape menu
   const escapeMenu = new EscapeMenu({

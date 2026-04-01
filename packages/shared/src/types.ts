@@ -153,7 +153,7 @@ export interface LobbyGameInfo {
 export interface LobbyUser {
   userId: string;
   username: string;
-  status: 'online' | 'in-game';
+  status: 'online' | 'in-game' | 'in-single-player';
 }
 
 export interface GameLobbyPlayer {

@@ -493,20 +493,26 @@ export class SinglePlayerScreen {
     mapGrid.style.cssText = 'display: flex; flex-direction: column; gap: 6px; margin-bottom: 28px;';
 
     for (const map of MAP_LIST) {
+      const disabled = map.playableInSinglePlayer === false;
       const btn = document.createElement('button');
       btn.className = 'sp-btn';
       btn.dataset.mapId = map.id;
       btn.textContent = map.name;
+      btn.disabled = disabled;
+      if (disabled) btn.title = 'This map is not playable yet';
       btn.style.cssText = `
         padding: 10px 16px; font-size: 13px; font-weight: 600;
-        border-radius: 6px; cursor: pointer; outline: none; text-align: left;
+        border-radius: 6px; cursor: ${disabled ? 'not-allowed' : 'pointer'}; outline: none; text-align: left;
         border: 1px solid rgba(100,120,200,0.1);
-        background: rgba(20,25,40,0.6); color: rgba(150,160,180,0.6);
+        background: rgba(20,25,40,0.6); color: rgba(150,160,180,${disabled ? '0.25' : '0.6'});
+        ${disabled ? 'opacity: 0.5;' : ''}
       `;
-      btn.addEventListener('click', () => {
-        this.mapId = map.id;
-        this.refreshMapButtons();
-      });
+      if (!disabled) {
+        btn.addEventListener('click', () => {
+          this.mapId = map.id;
+          this.refreshMapButtons();
+        });
+      }
       this.mapBtns.push(btn);
       mapGrid.appendChild(btn);
     }
@@ -574,6 +580,7 @@ export class SinglePlayerScreen {
 
   private refreshMapButtons(): void {
     for (const btn of this.mapBtns) {
+      if (btn.disabled) continue;
       const isActive = btn.dataset.mapId === this.mapId;
       if (isActive) {
         btn.style.background = 'rgba(50,70,140,0.6)';

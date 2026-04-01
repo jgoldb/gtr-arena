@@ -38,6 +38,7 @@ export class CombatSystem {
   onLeaveCombat?: (entity: Targetable) => void;
   onAutoAttackDamageDealt?: (attacker: Targetable, isCrit: boolean) => void;
   onAbilityDamageDealt?: (attacker: Targetable, abilityId: string) => void;
+  onDeath?: (victim: Targetable, killer: Targetable | null) => void;
 
   constructor(regenSystem: RegenSystem, buffSystem: BuffSystem, collisionSystem: CollisionSystem) {
     this.regenSystem = regenSystem;
@@ -376,6 +377,7 @@ export class CombatSystem {
         if (target.hp <= 0 && !target.dead) {
           target.die();
           this.combatTimers.delete(target);
+          this.onDeath?.(target, attacker);
         }
       }
 
@@ -442,6 +444,7 @@ export class CombatSystem {
     if (target.hp <= 0 && !target.dead) {
       target.die();
       this.combatTimers.delete(target);
+      this.onDeath?.(target, attacker);
     }
   }
 
@@ -503,6 +506,7 @@ export class CombatSystem {
     if (target.hp <= 0 && !target.dead) {
       target.die();
       this.combatTimers.delete(target);
+      this.onDeath?.(target, attacker);
     }
   }
 
@@ -538,6 +542,7 @@ export class CombatSystem {
     if (target.hp <= 0 && !target.dead) {
       target.die();
       this.combatTimers.delete(target);
+      this.onDeath?.(target, attacker);
     }
 
     this.enterCombat(attacker);
@@ -556,6 +561,7 @@ export class CombatSystem {
       if (attacker.hp <= 0 && !attacker.dead) {
         attacker.die();
         this.combatTimers.delete(attacker);
+        this.onDeath?.(attacker, target);
       }
     }
     return remaining;
@@ -599,6 +605,7 @@ export class CombatSystem {
       if (target.hp <= 0 && !target.dead) {
         target.die();
         this.combatTimers.delete(target);
+        this.onDeath?.(target, attacker);
       }
     }
 

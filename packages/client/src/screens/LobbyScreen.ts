@@ -610,12 +610,16 @@ export class LobbyScreen {
         this.showContextMenu(e.clientX, e.clientY, u.userId, u.username);
       });
 
+      const isOnline = u.status === 'online';
       const dot = document.createElement('span');
       dot.style.cssText = `
         width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-        background: ${u.status === 'online' ? '#44cc44' : '#cc8844'};
-        box-shadow: 0 0 4px ${u.status === 'online' ? 'rgba(68,204,68,0.4)' : 'rgba(204,136,68,0.4)'};
+        background: ${isOnline ? '#44cc44' : '#cc8844'};
+        box-shadow: 0 0 4px ${isOnline ? 'rgba(68,204,68,0.4)' : 'rgba(204,136,68,0.4)'};
       `;
+      if (!isOnline) {
+        dot.title = u.status === 'in-game' ? 'In Multiplayer' : 'In Single Player';
+      }
       const name = document.createElement('span');
       name.textContent = u.username;
       name.style.cssText = `
