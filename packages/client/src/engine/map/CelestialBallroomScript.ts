@@ -588,37 +588,44 @@ export class CelestialBallroomScript extends ArenaScript {
     const diamondMat = this.createDiamondShaderMaterial();
 
     // Arch 1: Grand Celestial Sweep — wide, sweeping, western side
-    // Curve starts/ends underground so the tube emerges naturally from the ground
+    // Curve starts/ends underground so the tube emerges naturally from the ground.
+    // Lower sections are flattened for a gradual ramp-like incline.
+    // Peak is spread out for a flat plateau easy to walk across.
     const arch1Curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-34, -3.0, 23),
-      new THREE.Vector3(-30, 0, 20),
-      new THREE.Vector3(-24, 4, 14),
-      new THREE.Vector3(-16, 8, 7),
-      new THREE.Vector3(-10, 11.5, 2),
-      new THREE.Vector3(-6, 12.5, 0),
-      new THREE.Vector3(-10, 11.5, -2),
-      new THREE.Vector3(-16, 8, -7),
-      new THREE.Vector3(-24, 4, -12),
-      new THREE.Vector3(-30, 0, -16),
-      new THREE.Vector3(-34, -3.0, -19),
+      new THREE.Vector3(-36, -4.5, 26),
+      new THREE.Vector3(-33, -1.5, 22),
+      new THREE.Vector3(-27, 1.5, 16),
+      new THREE.Vector3(-20, 5, 10),
+      new THREE.Vector3(-15, 8, 5),
+      new THREE.Vector3(-10, 10, 2),
+      new THREE.Vector3(-7, 11, 0),
+      new THREE.Vector3(-10, 10, -2),
+      new THREE.Vector3(-15, 8, -5),
+      new THREE.Vector3(-20, 5, -8),
+      new THREE.Vector3(-27, 1.5, -13),
+      new THREE.Vector3(-33, -1.5, -18),
+      new THREE.Vector3(-36, -4.5, -22),
     ]);
-    this.buildArchway(arch1Curve, 3.0, 8, 1.5, diamondMat);
+    this.buildArchway(arch1Curve, 4.5, 10, 1.5, diamondMat);
 
-    // Arch 2: Crystal Spire — taller, steeper, asymmetric descent, eastern side
+    // Arch 2: Crystal Spire — taller, eastern side
+    // Flattened lower sections and spread peak for easy traversal.
     const arch2Curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(34, -2.6, -22),
-      new THREE.Vector3(30, 0, -19),
-      new THREE.Vector3(24, 4, -15),
-      new THREE.Vector3(18, 9, -10),
-      new THREE.Vector3(12, 13.5, -5),
-      new THREE.Vector3(8, 15.5, -2),
-      new THREE.Vector3(12, 13, 1),
-      new THREE.Vector3(18, 8.5, 6),
-      new THREE.Vector3(24, 3.5, 11),
-      new THREE.Vector3(30, 0, 15),
-      new THREE.Vector3(34, -2.6, 18),
+      new THREE.Vector3(36, -4.0, -24),
+      new THREE.Vector3(33, -1.0, -20),
+      new THREE.Vector3(27, 2, -15),
+      new THREE.Vector3(20, 5.5, -9),
+      new THREE.Vector3(14, 9, -5),
+      new THREE.Vector3(10, 11.5, -3),
+      new THREE.Vector3(8, 12.5, -1),
+      new THREE.Vector3(10, 11.5, 1),
+      new THREE.Vector3(14, 8.5, 4),
+      new THREE.Vector3(20, 5, 8),
+      new THREE.Vector3(27, 1.5, 13),
+      new THREE.Vector3(33, -1.0, 17),
+      new THREE.Vector3(36, -4.0, 21),
     ]);
-    this.buildArchway(arch2Curve, 2.6, 6, 1.2, diamondMat);
+    this.buildArchway(arch2Curve, 4.0, 8, 1.2, diamondMat);
 
     // Floating sparkle particles around both arches
     this.createArchSparkles(arch1Curve, arch2Curve);
@@ -658,9 +665,19 @@ export class CelestialBallroomScript extends ArenaScript {
       }
     }
 
-    // Walkable surface colliders along the arch top
-    const segCount = 32;
+    // Walkable surface colliders along the arch top.
+    // Uses 3 parallel strips (center + 2 sides) per segment to approximate
+    // the tube's circular cross-section. Thin halfH keeps them as smooth ramps
+    // instead of thick walls that block from the side.
+    const segCount = 48;
     const points = curve.getPoints(segCount);
+    const WALK_HALF_H = 0.5;
+
+    // Cross-section strip layout
+    const centerHalfD = radius * 0.35;
+    const sideOffset = radius * 0.55;
+    const sideHalfD = radius * 0.3;
+    const sideDrop = radius - Math.sqrt(radius * radius - sideOffset * sideOffset);
 
     for (let i = 0; i < segCount; i++) {
       const p1 = points[i];
@@ -674,24 +691,47 @@ export class CelestialBallroomScript extends ArenaScript {
       const dx = p2.x - p1.x;
       const dz = p2.z - p1.z;
       const dy = sY2 - sY1;
-      const hDist = Math.sqrt(dx * dx + dz * dz);
+      const hDist = Math.sqrt(dx * dx + dz * dz) || 0.001;
       const sDist = Math.sqrt(hDist * hDist + dy * dy);
       const yAngle = Math.atan2(dz, dx);
       const rotZ = Math.atan2(dy, hDist);
-      const halfH = radius;
+      const cosY = Math.cos(yAngle);
+      const sinY = Math.sin(yAngle);
+      const cosRZ = Math.cos(rotZ);
+      const halfW = sDist / 2 + 0.15;
 
+      // Perpendicular direction in XZ plane (across the tube width)
+      const perpX = -dz / hDist;
+      const perpZ = dx / hDist;
+
+      // Center strip — at full tube-top height
       this.collision.addCollider({
         type: 'box',
         cx: midX,
         cz: midZ,
-        halfW: sDist / 2 + 0.15,
-        halfD: radius,
-        cosY: Math.cos(yAngle),
-        sinY: Math.sin(yAngle),
-        centerY: midSY - halfH * Math.cos(rotZ),
-        halfH,
+        halfW,
+        halfD: centerHalfD,
+        cosY, sinY,
+        centerY: midSY - WALK_HALF_H * cosRZ,
+        halfH: WALK_HALF_H,
         rotZ,
       });
+
+      // Side strips — lowered to follow tube curvature
+      const sideMidSY = midSY - sideDrop;
+      for (const sign of [-1, 1]) {
+        this.collision.addCollider({
+          type: 'box',
+          cx: midX + perpX * sideOffset * sign,
+          cz: midZ + perpZ * sideOffset * sign,
+          halfW,
+          halfD: sideHalfD,
+          cosY, sinY,
+          centerY: sideMidSY - WALK_HALF_H * cosRZ,
+          halfH: WALK_HALF_H,
+          rotZ,
+        });
+      }
     }
 
     // Flattened mound bases — squished wider so you can walk up from any angle
@@ -713,9 +753,42 @@ export class CelestialBallroomScript extends ArenaScript {
     const endPt = points[points.length - 1];
     this.collision.addElevationAccessPoint({ x: startPt.x, z: startPt.z });
     this.collision.addElevationAccessPoint({ x: endPt.x, z: endPt.z });
+
+    // Register walkable-surface waypoint chain for NPC path-following navigation.
+    // Includes approach waypoints at each end that sit BEYOND the arch extent so
+    // NPCs approaching from the arena interior are guided around the tube base
+    // (where the low-altitude tube colliders would block them from underneath).
+    const navWaypoints: { x: number; y: number; z: number }[] = points
+      .map(p => ({ x: p.x, y: p.y + radius, z: p.z }))
+      .filter(wp => wp.y >= 0);
+
+    if (navWaypoints.length >= 2) {
+      const first = navWaypoints[0];
+      const last = navWaypoints[navWaypoints.length - 1];
+
+      // Approach direction at each end: away from the other end (extends past
+      // where the tube goes underground, so there is nothing overhead to block)
+      const dxSE = first.x - last.x;
+      const dzSE = first.z - last.z;
+      const lenSE = Math.sqrt(dxSE * dxSE + dzSE * dzSE) || 1;
+      const APPROACH_DIST = 8;
+
+      navWaypoints.unshift({
+        x: first.x + (dxSE / lenSE) * APPROACH_DIST,
+        y: 0,
+        z: first.z + (dzSE / lenSE) * APPROACH_DIST,
+      });
+      navWaypoints.push({
+        x: last.x - (dxSE / lenSE) * APPROACH_DIST,
+        y: 0,
+        z: last.z - (dzSE / lenSE) * APPROACH_DIST,
+      });
+    }
+
+    this.collision.addNavigationPath({ waypoints: navWaypoints });
   }
 
-  /** Cone-shaped base at an archway foot — visual + radial ramp colliders */
+  /** Smooth mound base at an archway foot — visual + radial ramp colliders */
   private addArchBaseMound(
     basePos: THREE.Vector3,
     tubeRadius: number,
@@ -724,23 +797,24 @@ export class CelestialBallroomScript extends ArenaScript {
     const spread = tubeRadius * 3;           // XZ radius of the mound
     const moundHeight = tubeRadius;          // peak matches the tube top
 
-    // Visual: faceted cone — linear profile matches the ramp colliders exactly
-    const coneGeo = new THREE.ConeGeometry(spread, moundHeight, 16, 1, true);
+    // Visual: low, wide cone — a subtle ramp collar around the tube base
+    const visualRadius = tubeRadius * 3;
+    const visualHeight = tubeRadius;
+    const coneGeo = new THREE.ConeGeometry(visualRadius, visualHeight, 24, 1, true);
     const coneMesh = new THREE.Mesh(coneGeo, material);
-    coneMesh.position.set(basePos.x, moundHeight / 2, basePos.z);
+    coneMesh.position.set(basePos.x, visualHeight / 2, basePos.z);
     coneMesh.name = 'archBaseMound';
     this.group.add(coneMesh);
 
-    // Collision: radial ramp colliders (linear slope from ground at edge to peak)
-    // topY = centerY + localX * sin(rotZ) + halfH * cos(rotZ)
-    // localX: -halfW at outer edge (topY=0), +halfW at inner edge (topY=moundHeight)
-    const numRamps = 12;
+    // Collision: radial ramp colliders (linear slope from ground at edge to peak).
+    // 24 segments for full angular coverage, thin halfH for smooth surface.
+    const numRamps = 24;
     const rampHalfW = spread / 2;
     const rampHalfD = (Math.PI * spread) / numRamps;
     const rotZ = Math.asin(moundHeight / (2 * rampHalfW));
     const sinRot = Math.sin(rotZ);
     const cosRot = Math.cos(rotZ);
-    const halfH = 1.5;
+    const halfH = 0.5;
     // From: 0 = centerY - rampHalfW * sinRot + halfH * cosRot  (outer edge at ground)
     const centerY = rampHalfW * sinRot - halfH * cosRot;
 
@@ -819,6 +893,17 @@ export class CelestialBallroomScript extends ArenaScript {
     };
     this.collision.addCollider(collider);
     this.glassPlatformCollider = collider;
+
+    // Register as a moving platform so NPC AI can detect targets on the elevator
+    this.collision.addMovingPlatform({
+      cx: px,
+      cz: pz,
+      halfW: w / 2,
+      halfD: d / 2,
+      getY: () => this.glassPlatformCollider
+        ? this.glassPlatformCollider.centerY + this.glassPlatformCollider.halfH
+        : 0.2,
+    });
   }
 
   /**

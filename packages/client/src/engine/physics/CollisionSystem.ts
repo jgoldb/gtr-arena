@@ -49,15 +49,34 @@ export interface ElevationAccessPoint {
   readonly z: number;
 }
 
+/** Ordered chain of walkable-surface waypoints along an elevated structure (archway). */
+export interface NavigationPath {
+  readonly waypoints: readonly { readonly x: number; readonly y: number; readonly z: number }[];
+}
+
+/** A platform that moves vertically (elevator). AI queries its live Y position. */
+export interface MovingPlatform {
+  readonly cx: number;
+  readonly cz: number;
+  readonly halfW: number;
+  readonly halfD: number;
+  /** Returns the current surface Y of the platform. */
+  getY(): number;
+}
+
 export class CollisionSystem {
   private colliders: Collider[] = [];
   private waterZones: WaterZone[] = [];
   private elevationAccessPoints: ElevationAccessPoint[] = [];
+  private navigationPaths: NavigationPath[] = [];
+  private movingPlatforms: MovingPlatform[] = [];
 
   buildFromObstacles(obstacles: ObstacleConfig[]): void {
     this.colliders = [];
     this.waterZones = [];
     this.elevationAccessPoints = [];
+    this.navigationPaths = [];
+    this.movingPlatforms = [];
 
     for (const obs of obstacles) {
       if (obs.type === 'water') {
@@ -119,7 +138,7 @@ export class CollisionSystem {
     }
   }
 
-  resolve(px: number, pz: number, py: number, radius: number): ResolveResult {
+  resolve(px: number, pz: number, py: number, radius: number, stepHeight = STEP_HEIGHT): ResolveResult {
     // Phase 1: XZ collision push-out (skip obstacles the player is above)
     for (let iter = 0; iter < 4; iter++) {
       let pushed = false;
@@ -129,7 +148,7 @@ export class CollisionSystem {
         const heightDiff = topY - py;
 
         // Player can step onto or is above this surface
-        if (heightDiff <= STEP_HEIGHT) continue;
+        if (heightDiff <= stepHeight) continue;
 
         // Check vertical overlap: player body vs obstacle
         const bottomY = this.getBottomY(col, px, pz);
@@ -167,7 +186,7 @@ export class CollisionSystem {
     // Phase 3: Solid surface ground height (can override water floor)
     for (const col of this.colliders) {
       const topY = this.getTopY(col, px, pz);
-      if (topY - py > STEP_HEIGHT) continue;
+      if (topY - py > stepHeight) continue;
 
       const overlaps = col.type === 'circle'
         ? this.isOverlappingCircle(px, pz, radius, col)
@@ -452,5 +471,21 @@ export class CollisionSystem {
 
   getElevationAccessPoints(): readonly ElevationAccessPoint[] {
     return this.elevationAccessPoints;
+  }
+
+  addNavigationPath(path: NavigationPath): void {
+    this.navigationPaths.push(path);
+  }
+
+  getNavigationPaths(): readonly NavigationPath[] {
+    return this.navigationPaths;
+  }
+
+  addMovingPlatform(platform: MovingPlatform): void {
+    this.movingPlatforms.push(platform);
+  }
+
+  getMovingPlatforms(): readonly MovingPlatform[] {
+    return this.movingPlatforms;
   }
 }

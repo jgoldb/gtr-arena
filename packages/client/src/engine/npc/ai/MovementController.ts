@@ -9,6 +9,9 @@ const ROTATION_SPEED = 12; // radians/sec for smooth rotation
 const ARRIVE_THRESHOLD = 0.15; // close enough to stop
 const GRAVITY = 20; // Same as player
 const GROUND_FOLLOW_THRESHOLD = 1; // Same as player — snap to ground if within this distance
+/** NPCs use a higher step height than the player (0.5) so they can walk from
+ *  mound ramps onto overlapping tube walkable colliders at archway bases. */
+const NPC_STEP_HEIGHT = 1.5;
 
 /** Max vertical distance to consider a hazard threatening */
 const HAZARD_Y_THRESHOLD = 2.0;
@@ -261,7 +264,7 @@ export class MovementController {
       // Attempt direct movement
       const intendedX = pos.x + desiredDir.x * moveDist;
       const intendedZ = pos.z + desiredDir.z * moveDist;
-      const resolved = this.collision.resolve(intendedX, intendedZ, pos.y, COLLISION_RADIUS);
+      const resolved = this.collision.resolve(intendedX, intendedZ, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT);
 
       // Detect wall collision from the push vector
       const pushX = resolved.x - intendedX;
@@ -287,8 +290,8 @@ export class MovementController {
           const p2X = normalZ, p2Z = -normalX;
           const reach = moveDist * 3;
 
-          const t1 = this.collision.resolve(pos.x + p1X * reach, pos.z + p1Z * reach, pos.y, COLLISION_RADIUS);
-          const t2 = this.collision.resolve(pos.x + p2X * reach, pos.z + p2Z * reach, pos.y, COLLISION_RADIUS);
+          const t1 = this.collision.resolve(pos.x + p1X * reach, pos.z + p1Z * reach, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT);
+          const t2 = this.collision.resolve(pos.x + p2X * reach, pos.z + p2Z * reach, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT);
 
           const goalX = pos.x + desiredDir.x * 20;
           const goalZ = pos.z + desiredDir.z * 20;
@@ -304,7 +307,7 @@ export class MovementController {
         const slideResolved = this.collision.resolve(
           pos.x + (slideX / slideLen) * moveDist,
           pos.z + (slideZ / slideLen) * moveDist,
-          pos.y, COLLISION_RADIUS
+          pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT
         );
         pos.x = slideResolved.x;
         pos.z = slideResolved.z;
@@ -324,7 +327,7 @@ export class MovementController {
       this.npc.isMoving = true;
     } else {
       // Idle — still need ground height for gravity
-      groundY = this.collision.resolve(pos.x, pos.z, pos.y, COLLISION_RADIUS).groundY;
+      groundY = this.collision.resolve(pos.x, pos.z, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT).groundY;
     }
 
     // Apply gravity (same physics as PlayerController)
@@ -386,7 +389,7 @@ export class MovementController {
         const dx = Math.sin(angle);
         const dz = Math.cos(angle);
         const resolved = this.collision.resolve(
-          pos.x + dx * sampleDist, pos.z + dz * sampleDist, pos.y, COLLISION_RADIUS
+          pos.x + dx * sampleDist, pos.z + dz * sampleDist, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT
         );
 
         const heightDelta = resolved.groundY - pos.y;
@@ -432,7 +435,7 @@ export class MovementController {
       const dz = Math.cos(angle);
 
       const resolved = this.collision.resolve(
-        pos.x + dx * testDist, pos.z + dz * testDist, pos.y, COLLISION_RADIUS
+        pos.x + dx * testDist, pos.z + dz * testDist, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT
       );
 
       const actualDx = resolved.x - pos.x;
@@ -458,7 +461,7 @@ export class MovementController {
   /** Apply gravity at current XZ (used when dead/stunned to keep falling) */
   private applyGravity(dt: number): void {
     const pos = this.npc.mesh.position;
-    const groundY = this.collision.resolve(pos.x, pos.z, pos.y, COLLISION_RADIUS).groundY;
+    const groundY = this.collision.resolve(pos.x, pos.z, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT).groundY;
     this.velocityY -= GRAVITY * dt;
     pos.y += this.velocityY * dt;
     if (!this.grounded && pos.y > this.fallPeakY) {
@@ -545,7 +548,7 @@ export class MovementController {
       probeZ < this.bounds.minZ + BOUNDARY_MARGIN ||
       probeZ > this.bounds.maxZ - BOUNDARY_MARGIN;
 
-    const resolved = this.collision.resolve(probeX, probeZ, pos.y, COLLISION_RADIUS);
+    const resolved = this.collision.resolve(probeX, probeZ, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT);
     const clearance = Math.sqrt((resolved.x - pos.x) ** 2 + (resolved.z - pos.z) ** 2);
     const blocked = clearance < PROBE_DIST * 0.7;
 
@@ -578,7 +581,7 @@ export class MovementController {
       // Probe clearance
       const cpx = pos.x + cx * PROBE_DIST;
       const cpz = pos.z + cz * PROBE_DIST;
-      const cResolved = this.collision.resolve(cpx, cpz, pos.y, COLLISION_RADIUS);
+      const cResolved = this.collision.resolve(cpx, cpz, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT);
       const cClearance = Math.sqrt((cResolved.x - pos.x) ** 2 + (cResolved.z - pos.z) ** 2);
 
       // Boundary distance at probe point
