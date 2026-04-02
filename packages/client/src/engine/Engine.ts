@@ -527,6 +527,7 @@ export class Engine {
         return this.combatSystem.applyAutoAttackDamage(attacker, target, damage);
       }
     };
+    npc.getAutoAttackSpeedMultiplier = () => this.buffSystem.getAutoAttackSpeedMultiplier(npc);
     npc.checkLineOfSight = (a, b) => this.combatSystem.hasLineOfSight(a, b);
     npc.resolveGround = (x, z, y) => this.mapManager.collision.resolve(x, z, y, 0.5).groundY;
     // Wire up dumpster-dive sfx for NPC crackheads

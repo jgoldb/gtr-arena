@@ -377,8 +377,11 @@ export class MovementController {
    * Searches outward for ground that rises/descends toward the target's Y level.
    */
   private getElevationSearchDir(pos: THREE.Vector3, seekUp: boolean): THREE.Vector3 {
-    const NUM_SAMPLES = 8;
-    const SAMPLE_DISTS = [2, 5];
+    const NUM_SAMPLES = 12;
+    const SAMPLE_DISTS = [2, 4, 8];
+
+    // If we have a move target, bias the search toward it
+    const target = this.intent.type === 'moveToward' ? this.intent.target : null;
 
     let bestDir: THREE.Vector3 | null = null;
     let bestScore = -Infinity;
@@ -394,7 +397,18 @@ export class MovementController {
 
         const heightDelta = resolved.groundY - pos.y;
         const movableDist = Math.sqrt((resolved.x - pos.x) ** 2 + (resolved.z - pos.z) ** 2);
-        const score = seekUp ? heightDelta : -heightDelta;
+        let score = seekUp ? heightDelta : -heightDelta;
+
+        // Mild bias toward directions that also move toward the target's XZ
+        if (target && score > 0) {
+          const toTargetX = target.x - pos.x;
+          const toTargetZ = target.z - pos.z;
+          const toTargetLen = Math.sqrt(toTargetX * toTargetX + toTargetZ * toTargetZ);
+          if (toTargetLen > 0.1) {
+            const dot = (dx * toTargetX + dz * toTargetZ) / toTargetLen;
+            score += dot * 0.5;
+          }
+        }
 
         if (movableDist > sampleDist * 0.3 && score > bestScore) {
           bestScore = score;

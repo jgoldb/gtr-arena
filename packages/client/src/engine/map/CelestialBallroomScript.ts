@@ -772,17 +772,50 @@ export class CelestialBallroomScript extends ArenaScript {
       const dzSE = first.z - last.z;
       const lenSE = Math.sqrt(dxSE * dxSE + dzSE * dzSE) || 1;
       const APPROACH_DIST = 8;
+      const dirX = dxSE / lenSE;
+      const dirZ = dzSE / lenSE;
 
-      navWaypoints.unshift({
-        x: first.x + (dxSE / lenSE) * APPROACH_DIST,
+      // Insert intermediate ramp waypoints between approach (ground) and first
+      // tube surface waypoint. The mound ramp rises from ground to ~tubeRadius
+      // height over a spread of tubeRadius*1.5. Without these, NPCs loop at the
+      // base unable to bridge the Y gap from approach (y=0) to tube surface.
+      const RAMP_STEPS = 3;
+      const moundSpread = radius * 1.5; // half the mound XZ extent
+      const moundPeak = radius;         // mound peak height = tubeRadius
+
+      // Start end: approach → ramp waypoints → first tube waypoint
+      const startApproach = {
+        x: first.x + dirX * APPROACH_DIST,
         y: 0,
-        z: first.z + (dzSE / lenSE) * APPROACH_DIST,
-      });
-      navWaypoints.push({
-        x: last.x - (dxSE / lenSE) * APPROACH_DIST,
+        z: first.z + dirZ * APPROACH_DIST,
+      };
+      navWaypoints.unshift(startApproach);
+      // Insert ramp waypoints between approach and first tube wp (now at index 1)
+      for (let i = RAMP_STEPS; i >= 1; i--) {
+        const t = i / (RAMP_STEPS + 1); // 0.75, 0.5, 0.25 (outer to inner)
+        const frac = 1 - t; // fraction along ramp from approach to first tube wp
+        navWaypoints.splice(1, 0, {
+          x: startApproach.x + (first.x - startApproach.x) * frac,
+          y: moundPeak * frac * frac, // quadratic ease — gentle start, steeper near top
+          z: startApproach.z + (first.z - startApproach.z) * frac,
+        });
+      }
+
+      // End: last tube waypoint → ramp waypoints → approach
+      const endApproach = {
+        x: last.x - dirX * APPROACH_DIST,
         y: 0,
-        z: last.z - (dzSE / lenSE) * APPROACH_DIST,
-      });
+        z: last.z - dirZ * APPROACH_DIST,
+      };
+      for (let i = 1; i <= RAMP_STEPS; i++) {
+        const frac = i / (RAMP_STEPS + 1); // 0.25, 0.5, 0.75 (inner to outer)
+        navWaypoints.push({
+          x: last.x + (endApproach.x - last.x) * frac,
+          y: moundPeak * (1 - frac) * (1 - frac), // quadratic ease down
+          z: last.z + (endApproach.z - last.z) * frac,
+        });
+      }
+      navWaypoints.push(endApproach);
     }
 
     this.collision.addNavigationPath({ waypoints: navWaypoints });

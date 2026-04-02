@@ -47,6 +47,7 @@ export class NpcController implements Targetable {
   // NPC auto-attack
   autoAttackTarget: Targetable | null = null;
   onAutoAttackHit?: (attacker: Targetable, target: Targetable, damage: number) => boolean;
+  getAutoAttackSpeedMultiplier?: () => number;
   checkLineOfSight?: (a: THREE.Vector3, b: THREE.Vector3) => boolean;
   resolveGround?: (x: number, z: number, y: number) => number;
   private autoAttackTimer = 0;
@@ -179,7 +180,8 @@ export class NpcController implements Targetable {
         this.rangedResumeDelay = Math.max(0, this.rangedResumeDelay - dt);
       }
       const rangedBlocked = isRanged && (this.isMoving || this.rangedResumeDelay > 0);
-      if (this.autoAttackTimer >= this.characterModel.autoAttackSpeed && !rangedBlocked) {
+      const atkSpeedMult = this.getAutoAttackSpeedMultiplier?.() ?? 1;
+      if (this.autoAttackTimer >= this.characterModel.autoAttackSpeed / atkSpeedMult && !rangedBlocked) {
         const hasLos = !this.checkLineOfSight || this.checkLineOfSight(this.mesh.position, target.mesh.position);
         if (facing && dist <= this.characterModel.autoAttackRange && hasLos) {
           this.autoAttackTimer = 0;

@@ -1210,6 +1210,19 @@ export class CageArenaScript extends ArenaScript {
       };
       this.collision.addCollider(collider);
       this.pillarColliders.push(collider);
+
+      // Register as moving platform so NPC AI walks onto the pillar with the player
+      this.collision.addMovingPlatform({
+        cx: px,
+        cz: 0,
+        halfW: 1.8,
+        halfD: 1.8,
+        getY: () => collider.centerY + collider.halfH,
+        maxY: this.PILLAR_Y_UP + 3,   // surface Y when fully raised
+        minY: this.PILLAR_Y_DOWN + 3,  // surface Y when fully submerged
+        cyclesAutomatically: true,
+        isCircular: true,
+      });
     }
 
     // North/South pillars — start DOWN (opposite phase)
@@ -1231,6 +1244,18 @@ export class CageArenaScript extends ArenaScript {
       };
       this.collision.addCollider(collider);
       this.nsPillarColliders.push(collider);
+
+      this.collision.addMovingPlatform({
+        cx: 0,
+        cz: pz,
+        halfW: 1.8,
+        halfD: 1.8,
+        getY: () => collider.centerY + collider.halfH,
+        maxY: this.PILLAR_Y_UP + 3,
+        minY: this.PILLAR_Y_DOWN + 3,
+        cyclesAutomatically: true,
+        isCircular: true,
+      });
     }
   }
 

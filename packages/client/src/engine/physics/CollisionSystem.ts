@@ -54,7 +54,7 @@ export interface NavigationPath {
   readonly waypoints: readonly { readonly x: number; readonly y: number; readonly z: number }[];
 }
 
-/** A platform that moves vertically (elevator). AI queries its live Y position. */
+/** A platform that moves vertically (elevator/pillar). AI queries its live Y position. */
 export interface MovingPlatform {
   readonly cx: number;
   readonly cz: number;
@@ -62,6 +62,15 @@ export interface MovingPlatform {
   readonly halfD: number;
   /** Returns the current surface Y of the platform. */
   getY(): number;
+  /** Maximum surface Y this platform can reach (e.g. pillar fully raised). */
+  readonly maxY?: number;
+  /** Minimum surface Y (e.g. pillar fully submerged). */
+  readonly minY?: number;
+  /** True for platforms that cycle automatically (pillars). Tells the AI
+   *  "stand here and wait — the platform will come to you." */
+  readonly cyclesAutomatically?: boolean;
+  /** True for circular platforms (use distance-from-center for XZ checks). */
+  readonly isCircular?: boolean;
 }
 
 export class CollisionSystem {
