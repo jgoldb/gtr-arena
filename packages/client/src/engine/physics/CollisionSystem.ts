@@ -497,4 +497,28 @@ export class CollisionSystem {
   getMovingPlatforms(): readonly MovingPlatform[] {
     return this.movingPlatforms;
   }
+
+  /**
+   * Check whether there is solid ground along a straight-line path.
+   * Samples points from start to end and returns false if any sample's
+   * ground level drops more than `dropThreshold` below the starting elevation.
+   * Used by NPC AI to detect ledges before charging abilities like Sweep.
+   */
+  hasGroundAlongPath(
+    startX: number, startZ: number, startY: number,
+    dirX: number, dirZ: number,
+    distance: number, sampleCount = 8,
+    dropThreshold = 1.0
+  ): boolean {
+    for (let i = 1; i <= sampleCount; i++) {
+      const t = (i / sampleCount) * distance;
+      const px = startX + dirX * t;
+      const pz = startZ + dirZ * t;
+      const result = this.resolve(px, pz, startY, 0.4);
+      if (startY - result.groundY > dropThreshold) {
+        return false;
+      }
+    }
+    return true;
+  }
 }

@@ -748,6 +748,14 @@ export class CelestialBallroomScript extends ArenaScript {
       }
     }
 
+    // Bridge ramp colliders at each archway base.
+    // The mound ramp and tube walkable strips don't always connect smoothly —
+    // the height gap between mound peak and the first tube strip can exceed
+    // step height at certain approach angles. These wide, gently-sloped bridge
+    // colliders span the first few tube segments at each base, creating a
+    // smooth walkable surface from the mound top onto the tube.
+    this.addArchBaseBridge(points, radius, WALK_HALF_H);
+
     // Register archway base positions as elevation access points for NPC pathfinding
     const startPt = points[0];
     const endPt = points[points.length - 1];
@@ -869,6 +877,75 @@ export class CelestialBallroomScript extends ArenaScript {
         halfH,
         rotZ,
       });
+    }
+  }
+
+  /**
+   * Add bridge ramp colliders at each end of an archway where the tube emerges
+   * from the ground. These fill the height gap between the mound peak and the
+   * first tube walkable strips so entities can walk smoothly onto the arch.
+   *
+   * Strategy: for the first/last N segments where the tube is near ground level,
+   * add a wide, gently-sloped ramp collider that sits BELOW the tube strips but
+   * ABOVE the mound surface, bridging the two.
+   */
+  private addArchBaseBridge(
+    points: THREE.Vector3[],
+    radius: number,
+    walkHalfH: number,
+  ): void {
+    const BRIDGE_SEGS = 6; // number of segments from each end to bridge
+
+    for (const fromStart of [true, false]) {
+      for (let s = 0; s < BRIDGE_SEGS; s++) {
+        const i = fromStart ? s : points.length - 1 - s;
+        const j = fromStart ? s + 1 : points.length - 2 - s;
+        if (j < 0 || j >= points.length) continue;
+
+        const p1 = points[i];
+        const p2 = points[j];
+
+        // Tube surface Y at these points
+        const sY1 = p1.y + radius;
+        const sY2 = p2.y + radius;
+
+        // Only add bridges where the tube surface is below ~8 units
+        // (the transition zone near ground level)
+        if (sY1 > 8 && sY2 > 8) continue;
+
+        const midX = (p1.x + p2.x) / 2;
+        const midZ = (p1.z + p2.z) / 2;
+        const midSY = (sY1 + sY2) / 2;
+
+        const dx = p2.x - p1.x;
+        const dz = p2.z - p1.z;
+        const dy = sY2 - sY1;
+        const hDist = Math.sqrt(dx * dx + dz * dz) || 0.001;
+        const sDist = Math.sqrt(hDist * hDist + dy * dy);
+        const yAngle = Math.atan2(dz, dx);
+        const rotZ = Math.atan2(dy, hDist);
+        const cosY = Math.cos(yAngle);
+        const sinY = Math.sin(yAngle);
+        const cosRZ = Math.cos(rotZ);
+        const halfW = sDist / 2 + 0.3; // slightly wider than tube strips
+
+        // The bridge sits at the tube surface level but is much wider than
+        // the tube strips, covering the area where the mound meets the tube.
+        // Use a generous halfD to span the full tube width and mound overlap.
+        const bridgeHalfD = radius * 0.9;
+
+        this.collision.addCollider({
+          type: 'box',
+          cx: midX,
+          cz: midZ,
+          halfW,
+          halfD: bridgeHalfD,
+          cosY, sinY,
+          centerY: midSY - walkHalfH * cosRZ,
+          halfH: walkHalfH,
+          rotZ,
+        });
+      }
     }
   }
 

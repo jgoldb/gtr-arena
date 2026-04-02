@@ -45,6 +45,8 @@ export interface WorldState {
   allies: EntityInfo[];
   hazards: HazardInfo[];
   arenaBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  /** Check if there is solid ground along a charge path from the NPC's current position. */
+  checkChargePath: (dirX: number, dirZ: number, distance: number) => boolean;
 }
 
 export function buildWorldState(
@@ -129,5 +131,12 @@ export function buildWorldState(
   enemies.sort((a, b) => a.distance - b.distance);
   allies.sort((a, b) => a.distance - b.distance);
 
-  return { self, enemies, allies, hazards, arenaBounds };
+  const checkChargePath = (dirX: number, dirZ: number, distance: number): boolean => {
+    return collisionSystem.hasGroundAlongPath(
+      selfPos.x, selfPos.z, selfPos.y,
+      dirX, dirZ, distance
+    );
+  };
+
+  return { self, enemies, allies, hazards, arenaBounds, checkChargePath };
 }

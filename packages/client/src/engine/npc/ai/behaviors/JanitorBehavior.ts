@@ -198,11 +198,29 @@ export class JanitorBehavior implements CharacterBehavior {
         const aimError = (1 - sweepSkill) * 0.5;
         aimRotation += (Math.random() - 0.5) * 2 * aimError;
 
-        actions.push({
-          type: 'ability', score, abilityId: 'sweep', target: currentTarget,
-          aimRotation,
-          execute: () => {},
-        });
+        // Check for ledge along the charge path
+        const chargeDirX = Math.sin(aimRotation);
+        const chargeDirZ = Math.cos(aimRotation);
+        const pathSafe = world.checkChargePath(chargeDirX, chargeDirZ, yardsToUnits(SWEEP_CHARGE_YARDS));
+
+        if (pathSafe) {
+          actions.push({
+            type: 'ability', score, abilityId: 'sweep', target: currentTarget,
+            aimRotation,
+            execute: () => {},
+          });
+        } else {
+          // Unsafe path: higher-difficulty NPCs refuse, lower ones risk it
+          // hazardAvoidance: 1.0 (master, never falls) → 0.2 (easy, usually reckless)
+          if (Math.random() >= difficulty.hazardAvoidance) {
+            score *= 0.3;
+            actions.push({
+              type: 'ability', score, abilityId: 'sweep', target: currentTarget,
+              aimRotation,
+              execute: () => {},
+            });
+          }
+        }
       }
     }
 
