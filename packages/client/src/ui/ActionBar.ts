@@ -227,7 +227,7 @@ export class ActionBar {
         continue;
       }
 
-      if (disabled) {
+      if (disabled && !slot.ability.usableWhileCCd) {
         slotEl.style.opacity = '0.3';
         overlay.style.background = 'transparent';
         statusOv.style.background = 'transparent';
