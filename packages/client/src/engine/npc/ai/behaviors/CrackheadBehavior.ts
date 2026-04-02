@@ -159,7 +159,7 @@ export class CrackheadBehavior implements CharacterBehavior {
     return this.attackRange;
   }
 
-  getMovementIntent(world: WorldState, currentTarget: EntityInfo | null): MovementIntent {
+  getMovementIntent(world: WorldState, currentTarget: EntityInfo | null, _cooldowns: NpcCooldownTracker, _difficulty: DifficultyProfile): MovementIntent {
     if (!currentTarget) return { type: 'idle' };
 
     // If low HP and dumpster diving is on cooldown, try to kite briefly

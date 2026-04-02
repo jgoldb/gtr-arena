@@ -636,7 +636,10 @@ export class AuthScreen {
       "Only one more day til breakfast...",
       "Even Steven!",
       "Gotta get that bitrate goin",
-      "I live on in the machine world"
+      "I live on in the machine world",
+      "I'm over it",
+      "Somebody needs to tuck me in tonight",
+      "I'm Wallace and Gromit'ing right now",
     ];
     let shuffledThoughts: string[] = [];
     let thoughtIndex = 0;

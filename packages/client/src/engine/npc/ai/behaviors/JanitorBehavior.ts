@@ -1,4 +1,4 @@
-import { getCharacterStats, yardsToUnits, JanitorsHelper } from '@gtr/shared';
+import { getCharacterStats, yardsToUnits, JanitorsHelper, Sweep } from '@gtr/shared';
 import type { CharacterBehavior, ScoredAction } from './BaseBehavior';
 import type { WorldState, EntityInfo } from '../WorldState';
 import type { NpcCooldownTracker } from '../NpcCooldownTracker';
@@ -6,10 +6,19 @@ import type { DifficultyProfile } from '../DifficultyProfile';
 import type { MovementIntent } from '../MovementController';
 
 const MELEE_RANGE = yardsToUnits(3);
+const SWEEP_CHARGE_YARDS = 28 * Sweep.chargeDuration!;  // ~20 yards
+const SWEEP_CHARGE_SPEED_YDS = 28;
 
 export class JanitorBehavior implements CharacterBehavior {
   readonly characterId = 'janitor' as const;
   private readonly attackRange: number;
+
+  // Target velocity tracking for sweep aim leading
+  private lastTargetX = 0;
+  private lastTargetZ = 0;
+  private lastTargetTime = 0;
+  private targetVelX = 0;
+  private targetVelZ = 0;
 
   constructor() {
     this.attackRange = getCharacterStats('janitor').autoAttackRange;
@@ -132,19 +141,66 @@ export class JanitorBehavior implements CharacterBehavior {
     }
 
     // ── Sweep (charge gap-closer, max damage at ~20yd) ──
+    // Difficulty-aware: Master aims perfectly and only uses at optimal range;
+    // Easy uses it at bad distances and with poor aim.
     if (cooldowns.isReady('sweep') && selfMana >= 130) {
-      // Sweep damage scales with distance traveled — peak at ~20 yards
+      // Update target velocity tracking for aim prediction
+      const now = performance.now() * 0.001;
+      const tdt = now - this.lastTargetTime;
+      if (this.lastTargetTime > 0 && tdt > 0.01 && tdt < 2) {
+        this.targetVelX = (currentTarget.position.x - this.lastTargetX) / tdt;
+        this.targetVelZ = (currentTarget.position.z - this.lastTargetZ) / tdt;
+      }
+      this.lastTargetX = currentTarget.position.x;
+      this.lastTargetZ = currentTarget.position.z;
+      this.lastTargetTime = now;
+
       const distYards = targetDist / yardsToUnits(1);
-      if (distYards >= 5 && distYards <= 30 && currentTarget.inLineOfSight) {
-        let score = 25;
-        // Score peaks around 15-20 yards (sweet spot for max damage)
-        if (distYards >= 10) score += 30;
-        if (distYards >= 15) score += 25;
-        if (distYards >= 20) score += 10;
-        // Too far means we'll overshoot or miss
-        if (distYards > 25) score -= 20;
+
+      // sweepSkill: 0 (hopeless) → 1 (perfect).  Derived from wastefulness:
+      //   easy 0.3, medium 0.6, hard 0.85, expert 0.98, master 1.0
+      const sweepSkill = 1 - difficulty.wastefulness;
+
+      // Optimal distance: charge ~20 yd, end just before the target center so the
+      // sweep path connects, the AoE burst lands, and the NPC faces the target.
+      const optimalDist = SWEEP_CHARGE_YARDS + 0.25;
+
+      // Distance window is centered on optimalDist.  Master waits until it's
+      // within ~1 yd of optimal before firing; easy fires from any distance.
+      //   master: ±1 yd  →  19.25-21.25 yd
+      //   easy:   ±11 yd →   9.25-31.25 yd
+      const halfWindow = 1 + (1 - sweepSkill) * 14;
+      const minDist = Math.max(2, optimalDist - halfWindow);
+      const maxDist = optimalDist + halfWindow;
+
+      if (distYards >= minDist && distYards <= maxDist && currentTarget.inLineOfSight) {
+        const distFromOptimal = Math.abs(distYards - optimalDist);
+
+        // Score peaks sharply for skilled NPCs, stays flat for unskilled
+        const sharpness = 1 + sweepSkill * 4;
+        let score = Math.max(5, 90 - distFromOptimal * sharpness);
+
+        // ── Aim leading based on difficulty ──
+        const npcPos = world.self.position;
+        const timeToReach = Math.min(distYards / SWEEP_CHARGE_SPEED_YDS, Sweep.chargeDuration!);
+
+        // Predict where the target will be when the sweep arrives
+        const leadFactor = sweepSkill; // 0 = no leading, 1 = perfect leading
+        const predictedX = currentTarget.position.x + this.targetVelX * timeToReach * leadFactor;
+        const predictedZ = currentTarget.position.z + this.targetVelZ * timeToReach * leadFactor;
+
+        // Aim rotation toward the predicted position
+        const dx = predictedX - npcPos.x;
+        const dz = predictedZ - npcPos.z;
+        let aimRotation = Math.atan2(dx, dz);
+
+        // Add random aim error for lower difficulties (up to ~29° for easy)
+        const aimError = (1 - sweepSkill) * 0.5;
+        aimRotation += (Math.random() - 0.5) * 2 * aimError;
+
         actions.push({
           type: 'ability', score, abilityId: 'sweep', target: currentTarget,
+          aimRotation,
           execute: () => {},
         });
       }
@@ -157,12 +213,30 @@ export class JanitorBehavior implements CharacterBehavior {
     return this.attackRange;
   }
 
-  getMovementIntent(_world: WorldState, currentTarget: EntityInfo | null): MovementIntent {
+  getMovementIntent(_world: WorldState, currentTarget: EntityInfo | null, cooldowns: NpcCooldownTracker, difficulty: DifficultyProfile): MovementIntent {
     if (!currentTarget) return { type: 'idle' };
+
+    const meleeStop = this.attackRange * 0.85 - yardsToUnits(1);
+
+    // When Sweep is ready, higher-difficulty NPCs stop at optimal charge distance
+    // instead of rushing to melee range — so the charge lands right before the target.
+    if (cooldowns.isReady('sweep') && currentTarget.inLineOfSight
+        && currentTarget.distance > yardsToUnits(SWEEP_CHARGE_YARDS)) {
+      const sweepSkill = 1 - difficulty.wastefulness; // 0.3 (easy) → 1.0 (master)
+      // Blend between melee range (easy) and optimal sweep range (master)
+      const sweepStop = yardsToUnits(SWEEP_CHARGE_YARDS + 0.25);
+      const stopDistance = meleeStop + (sweepStop - meleeStop) * sweepSkill;
+      return {
+        type: 'moveToward',
+        target: currentTarget.position,
+        stopDistance,
+      };
+    }
+
     return {
       type: 'moveToward',
       target: currentTarget.position,
-      stopDistance: this.attackRange * 0.85 - yardsToUnits(1),
+      stopDistance: meleeStop,
     };
   }
 }

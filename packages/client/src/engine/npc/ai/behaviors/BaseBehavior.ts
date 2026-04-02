@@ -14,6 +14,8 @@ export interface ScoredAction {
   target?: EntityInfo;
   /** If true, this is a cast-time or channel ability — brain will call startCasting() instead of npcUseAbility() */
   isCastTime?: boolean;
+  /** Override NPC facing rotation (radians) before executing — used for skill-shot aiming (e.g. Sweep leading) */
+  aimRotation?: number;
   execute: () => void;
 }
 
@@ -32,7 +34,7 @@ export interface CharacterBehavior {
   getDesiredRange(): number;
 
   /** What movement does this character want given the world state? */
-  getMovementIntent(world: WorldState, currentTarget: EntityInfo | null): MovementIntent;
+  getMovementIntent(world: WorldState, currentTarget: EntityInfo | null, cooldowns: NpcCooldownTracker, difficulty: DifficultyProfile): MovementIntent;
 }
 
 /**
@@ -59,7 +61,7 @@ export class BaseBehavior implements CharacterBehavior {
     return this.attackRange;
   }
 
-  getMovementIntent(_world: WorldState, currentTarget: EntityInfo | null): MovementIntent {
+  getMovementIntent(_world: WorldState, currentTarget: EntityInfo | null, _cooldowns: NpcCooldownTracker, _difficulty: DifficultyProfile): MovementIntent {
     if (!currentTarget) return { type: 'idle' };
     return {
       type: 'moveToward',

@@ -178,7 +178,7 @@ export class DrRetardoBehavior implements CharacterBehavior {
     return DESIRED_RANGE;
   }
 
-  getMovementIntent(world: WorldState, currentTarget: EntityInfo | null): MovementIntent {
+  getMovementIntent(world: WorldState, currentTarget: EntityInfo | null, _cooldowns: NpcCooldownTracker, _difficulty: DifficultyProfile): MovementIntent {
     if (!currentTarget) return { type: 'idle' };
 
     // Caster: kite melee enemies

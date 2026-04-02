@@ -372,7 +372,7 @@ export class NpcAiBrain {
     this.movement.faceTarget = this.currentTarget.position;
 
     // Get movement intent from behavior
-    const movementIntent = this.behavior.getMovementIntent(world, this.currentTarget);
+    const movementIntent = this.behavior.getMovementIntent(world, this.currentTarget, this.cooldowns, this.difficulty);
 
     // Override movement for navigation paths (archways), elevator, or LoS issues
     const navResult = this.getNavigationTarget(this.currentTarget.position);
@@ -420,6 +420,10 @@ export class NpcAiBrain {
           // Self-targeting for self-heal channels (e.g. Bandage)
           if (!target && best.ability?.isChannel && best.ability?.healAmount && !best.ability?.requiresHostileTarget) {
             target = this.npc;
+          }
+          // Apply aim override for skill-shot abilities (e.g. Sweep leading)
+          if (best.aimRotation != null) {
+            this.npc.mesh.rotation.y = best.aimRotation;
           }
           if (best.isCastTime && best.ability) {
             // Cast-time or channel ability — start casting
