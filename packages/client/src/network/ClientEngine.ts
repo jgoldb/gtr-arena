@@ -240,6 +240,7 @@ export class ClientEngine {
     this.playerController = new PlayerController(
       this.scene, this.input, this.mapManager,
       () => this.thirdPersonCamera.getAzimuth(),
+      (a: number) => this.thirdPersonCamera.setAzimuth(a),
       () => this.thirdPersonCamera.getElevation(),
     );
 

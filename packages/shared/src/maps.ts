@@ -54,7 +54,7 @@ export const MAPS: Record<string, MapInfo> = {
     name: 'Celestial Ballroom',
     arenaOpenTime: 30,
     music: 'ballroom.ogg',
-    // playableInSinglePlayer: false,
+    playableInSinglePlayer: false,
     spawnPoints: [
       { x: 0, y: 0, z: 32 },   // Team 0 — south bubble
       { x: 0, y: 0, z: -32 },  // Team 1 — north bubble

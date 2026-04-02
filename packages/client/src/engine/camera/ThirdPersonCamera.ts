@@ -117,6 +117,10 @@ export class ThirdPersonCamera {
     return this.azimuth;
   }
 
+  setAzimuth(azimuth: number): void {
+    this.azimuth = azimuth;
+  }
+
   getElevation(): number {
     return this.elevation;
   }

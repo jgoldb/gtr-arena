@@ -42,6 +42,10 @@ export class DrRetardo extends CharacterModel {
   private declare splashActive: boolean;
   private declare splashTime: number;
   private declare tubeRegenTime: number;
+  private declare trailParticles: THREE.Mesh[];
+  private declare trailMaterial: THREE.MeshStandardMaterial;
+  private declare trailPositions: THREE.Vector3[];
+  private declare trailAges: number[];
   private chudmaxChannelActive = false;
   private retardStrengthActive = false;
   private retardStrengthWeight = 0;
@@ -539,6 +543,28 @@ export class DrRetardo extends CharacterModel {
       this.splashDroplets.push(droplet);
       this.splashVelocities.push(new THREE.Vector3());
     }
+
+    // Trail particles for the streak behind the bottle in flight
+    this.trailParticles = [];
+    this.trailPositions = [];
+    this.trailAges = [];
+    this.trailMaterial = new THREE.MeshStandardMaterial({
+      color: TUBE_LIQUID,
+      emissive: 0x9944dd,
+      emissiveIntensity: 0.8,
+      transparent: true,
+      opacity: 0.7,
+      roughness: 0.3,
+    });
+    const trailGeo = new THREE.SphereGeometry(0.04, 4, 4);
+    for (let i = 0; i < 16; i++) {
+      const p = new THREE.Mesh(trailGeo, this.trailMaterial.clone());
+      p.castShadow = false;
+      p.visible = false;
+      this.trailParticles.push(p);
+      this.trailPositions.push(new THREE.Vector3());
+      this.trailAges.push(0);
+    }
   }
 
   private launchProjectile(): void {
@@ -549,12 +575,13 @@ export class DrRetardo extends CharacterModel {
     // Hide the tube in hand
     this.tubeGroup.visible = false;
 
-    // Lazy-add projectile & splash to the scene so they fly in world space
+    // Lazy-add projectile, splash & trail to the scene so they fly in world space
     // (not affected by player movement). Hierarchy: group → mesh → scene.
     if (!this.projectileTube.parent) {
       const scene = this.group.parent!.parent!;
       scene.add(this.projectileTube);
       for (const d of this.splashDroplets) scene.add(d);
+      for (const t of this.trailParticles) scene.add(t);
     }
 
     // Get tube world position as the launch origin
@@ -565,7 +592,13 @@ export class DrRetardo extends CharacterModel {
     this.projectileTube.position.copy(startPos);
     this.projectileTube.rotation.set(0, 0, 0);
     this.projectileTube.visible = true;
-    this.projectileTube.scale.setScalar(1);
+    this.projectileTube.scale.setScalar(3);
+
+    // Reset trail
+    for (let i = 0; i < this.trailParticles.length; i++) {
+      this.trailParticles[i].visible = false;
+      this.trailAges[i] = 999;
+    }
 
     // Calculate velocity to arc toward the target position (world space)
     const dur = DrRetardo.FLIGHT_DURATION;
@@ -809,9 +842,46 @@ export class DrRetardo extends CharacterModel {
       this.projectileTube.rotation.x += 8 * dt;
       this.projectileTube.rotation.z += 3 * dt;
 
+      // Spawn trail particles behind the bottle
+      let oldest = 0;
+      let oldestAge = -1;
+      for (let i = 0; i < this.trailParticles.length; i++) {
+        this.trailAges[i] += dt;
+        if (this.trailAges[i] > oldestAge) {
+          oldestAge = this.trailAges[i];
+          oldest = i;
+        }
+      }
+      // Recycle the oldest particle at the current bottle position
+      const tp = this.trailParticles[oldest];
+      tp.position.copy(this.projectileTube.position);
+      // Slight random offset for a wispy look
+      tp.position.x += (Math.random() - 0.5) * 0.08;
+      tp.position.y += (Math.random() - 0.5) * 0.08;
+      tp.position.z += (Math.random() - 0.5) * 0.08;
+      tp.visible = true;
+      tp.scale.setScalar(0.8 + Math.random() * 0.6);
+      this.trailAges[oldest] = 0;
+
+      // Fade and shrink trail particles over time
+      const trailLife = 0.3;
+      for (let i = 0; i < this.trailParticles.length; i++) {
+        if (!this.trailParticles[i].visible) continue;
+        const age = this.trailAges[i];
+        if (age > trailLife) {
+          this.trailParticles[i].visible = false;
+        } else {
+          const fade = 1 - age / trailLife;
+          const mat = this.trailParticles[i].material as THREE.MeshStandardMaterial;
+          mat.opacity = 0.7 * fade;
+          this.trailParticles[i].scale.setScalar((0.8 + Math.random() * 0.2) * fade);
+        }
+      }
+
       if (this.projectileTime >= DrRetardo.FLIGHT_DURATION) {
         this.projectileActive = false;
         this.projectileTube.visible = false;
+        for (const t of this.trailParticles) t.visible = false;
         this.triggerSplash();
         this.tubeRegenTime = 0;
       }

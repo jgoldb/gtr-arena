@@ -33,6 +33,7 @@ export class PlayerController implements Targetable {
   private input: InputManager;
   private mapManager: MapManager;
   private cameraAzimuthGetter: () => number;
+  private cameraAzimuthSetter: (azimuth: number) => void;
   private cameraElevationGetter: () => number;
   private targetRotation = 0;
   private movementAzimuth = 0;
@@ -44,16 +45,20 @@ export class PlayerController implements Targetable {
   private airVelocity = new THREE.Vector3();
   private characterModel: CharacterModel;
 
+  private turnRate = 3.5; // radians per second
+
   constructor(
     scene: THREE.Scene,
     input: InputManager,
     mapManager: MapManager,
     getCameraAzimuth: () => number,
+    setCameraAzimuth: (azimuth: number) => void,
     getCameraElevation: () => number = () => 0
   ) {
     this.input = input;
     this.mapManager = mapManager;
     this.cameraAzimuthGetter = getCameraAzimuth;
+    this.cameraAzimuthSetter = setCameraAzimuth;
     this.cameraElevationGetter = getCameraElevation;
 
     this.mesh = new THREE.Group();
@@ -336,6 +341,16 @@ export class PlayerController implements Targetable {
     // Left-click-only camera rotation does not affect movement direction.
     if (rightHeld) {
       this.movementAzimuth = cameraAzimuth;
+    }
+
+    // Keyboard turning (arrow keys by default)
+    const turnLeftDown = this.input.isBindDown(keybindManager.getCode('turn_left'));
+    const turnRightDown = this.input.isBindDown(keybindManager.getCode('turn_right'));
+    if (turnLeftDown || turnRightDown) {
+      const turnAmount = this.turnRate * deltaTime * (turnLeftDown ? 1 : -1);
+      this.movementAzimuth += turnAmount;
+      this.cameraAzimuthSetter(this.cameraAzimuthGetter() + turnAmount);
+      this.targetRotation = Math.atan2(-Math.sin(this.movementAzimuth), -Math.cos(this.movementAzimuth));
     }
 
     const forward = new THREE.Vector3(-Math.sin(this.movementAzimuth), 0, -Math.cos(this.movementAzimuth));

@@ -25,6 +25,8 @@ const DEFAULT_BINDS: { id: string; label: string; category: string; code: string
   { id: 'move_left', label: 'Strafe Left', category: 'Movement', code: 'KeyA' },
   { id: 'move_backward', label: 'Backpedal', category: 'Movement', code: 'KeyS' },
   { id: 'move_right', label: 'Strafe Right', category: 'Movement', code: 'KeyD' },
+  { id: 'turn_left', label: 'Turn Left', category: 'Movement', code: 'ArrowLeft' },
+  { id: 'turn_right', label: 'Turn Right', category: 'Movement', code: 'ArrowRight' },
   { id: 'jump', label: 'Jump', category: 'Movement', code: 'Space' },
   { id: 'rest', label: 'Rest', category: 'Movement', code: 'KeyR' },
   // Action bar slots

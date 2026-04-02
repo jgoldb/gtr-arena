@@ -242,6 +242,7 @@ export class Engine {
       this.input,
       this.mapManager,
       () => this.thirdPersonCamera.getAzimuth(),
+      (a: number) => this.thirdPersonCamera.setAzimuth(a),
       () => this.thirdPersonCamera.getElevation()
     );
 
