@@ -1,5 +1,13 @@
 import * as THREE from 'three';
-import type { CharacterId } from '@gtr/shared';
+import type { CharacterId, Ability } from '@gtr/shared';
+
+export interface PendingAoeImpact {
+  ability: Ability;
+  groundPos: THREE.Vector3;
+  delay: number;
+  elapsed: number;
+  owner: Targetable;
+}
 
 export interface GameContext {
   scene: THREE.Scene;
@@ -28,6 +36,7 @@ export interface Targetable {
   dead: boolean;
   readonly critChance: number;
   readonly dodgeChance: number;
+  readonly autoAttackRange: number;
   readonly mesh: THREE.Group;
   die(): void;
   // Casting state (for nameplate cast bars)

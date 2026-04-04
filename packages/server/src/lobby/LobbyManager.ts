@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { DataChannel } from 'node-datachannel';
-import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameLobbyState, S2C_GameCancelled, S2C_AdminUsersList, S2C_AdminResult, S2C_UserProfile, S2C_Leaderboard, S2C_ChangePasswordResult, UserProfileData } from '@gtr/shared';
+import type { ClientMessage, S2C_LobbyState, S2C_LobbyChat, ServerMessage, S2C_GameCancelled, S2C_UserProfile, S2C_Leaderboard, S2C_ChangePasswordResult, UserProfileData } from '@gtr/shared';
 import type { LobbyUser, LobbyGameInfo } from '@gtr/shared';
 import { encodeMessage } from '@gtr/shared';
 import { GameLobby } from './GameLobby.js';
@@ -8,6 +8,7 @@ import { GameSession } from '../game/GameSession.js';
 import type { RematchInfo } from '../game/GameSession.js';
 import type { AuthManager } from '../auth/AuthManager.js';
 import type { GtrDatabase } from '../db/Database.js';
+import { AdminHandler } from './AdminHandler.js';
 
 interface ConnectedUser {
   userId: string;
@@ -31,10 +32,17 @@ export class LobbyManager {
   /** In-memory ring buffer of recent lobby chat messages (session-level, clears on restart). */
   private static readonly CHAT_HISTORY_SIZE = 100;
   private chatHistory: S2C_LobbyChat[] = [];
+  private adminHandler: AdminHandler;
 
   constructor(auth: AuthManager, db: GtrDatabase) {
     this.auth = auth;
     this.db = db;
+    this.adminHandler = new AdminHandler(auth, db, {
+      getUser: (userId) => this.users.get(userId),
+      allUsers: () => this.users.values(),
+      send: (socket, msg) => this.send(socket, msg),
+      gmTag: (username, isAdmin) => LobbyManager.gmTag(username, isAdmin),
+    });
     this.restoreActiveSessions();
   }
 
@@ -159,7 +167,7 @@ export class LobbyManager {
   private notifyAdminsUserListChanged(): void {
     for (const u of this.users.values()) {
       if (this.auth.getIsAdmin(u.userId) && !u.gameSessionId) {
-        this.handleAdminGetUsers(u.userId);
+        this.adminHandler.handleAdminGetUsers(u.userId);
       }
     }
   }
@@ -285,28 +293,28 @@ export class LobbyManager {
 
       // Admin messages
       case 'admin_get_users':
-        this.handleAdminGetUsers(userId);
+        this.adminHandler.handleAdminGetUsers(userId);
         break;
       case 'admin_delete_user':
-        this.handleAdminDeleteUser(userId, msg.targetUserId);
+        this.adminHandler.handleAdminDeleteUser(userId, msg.targetUserId);
         break;
       case 'admin_ban_user':
-        this.handleAdminBanUser(userId, msg.targetUserId, msg.duration, msg.reason);
+        this.adminHandler.handleAdminBanUser(userId, msg.targetUserId, msg.duration, msg.reason);
         break;
       case 'admin_unban_user':
-        this.handleAdminUnbanUser(userId, msg.targetUserId);
+        this.adminHandler.handleAdminUnbanUser(userId, msg.targetUserId);
         break;
       case 'admin_reset_password':
-        this.handleAdminResetPassword(userId, msg.targetUserId);
+        this.adminHandler.handleAdminResetPassword(userId, msg.targetUserId);
         break;
       case 'admin_reset_stats':
-        this.handleAdminResetStats(userId, msg.targetUserId);
+        this.adminHandler.handleAdminResetStats(userId, msg.targetUserId);
         break;
       case 'admin_nuke_stats':
-        this.handleAdminNukeStats(userId);
+        this.adminHandler.handleAdminNukeStats(userId);
         break;
       case 'admin_set_xp':
-        this.handleAdminSetXp(userId, msg.targetUserId, msg.xp);
+        this.adminHandler.handleAdminSetXp(userId, msg.targetUserId, msg.xp);
         break;
       case 'change_password':
         this.handleChangePassword(userId, msg.currentPassword, msg.newPassword);
@@ -688,319 +696,6 @@ export class LobbyManager {
     this.gameSessions.set(newGameId, newSession);
     newSession.start();
     this.broadcastLobbyState();
-  }
-
-  // ── Admin ────────────────────────────────────────────────────────────
-
-  private handleAdminGetUsers(userId: string): void {
-    const user = this.users.get(userId);
-    if (!user || !this.auth.getIsAdmin(userId)) {
-      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
-      return;
-    }
-
-    const rows = this.db.getAllUsersWithStats();
-    const msg: S2C_AdminUsersList = {
-      type: 'admin_users_list',
-      users: rows.map(r => ({
-        id: r.id,
-        username: LobbyManager.gmTag(r.username, r.is_admin === 1),
-        xp: r.xp,
-        createdAt: r.created_at,
-        gamesPlayed: r.games_played,
-        wins: r.wins,
-        losses: r.losses,
-        bannedUntil: r.banned_until,
-        banReason: r.ban_reason,
-        lastPlayed: r.last_played,
-      })),
-    };
-    this.send(user.socket, msg);
-  }
-
-  private handleAdminDeleteUser(userId: string, targetUserId: number): void {
-    const user = this.users.get(userId);
-    if (!user || !this.auth.getIsAdmin(userId)) {
-      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
-      return;
-    }
-
-    const success = this.db.deleteUser(targetUserId);
-    const result: S2C_AdminResult = {
-      type: 'admin_result',
-      action: 'delete_user',
-      success,
-      error: success ? undefined : 'Cannot delete user (not found or is admin)',
-    };
-    this.send(user.socket, result);
-
-    // If successful, kick the deleted user if they're online and refresh the list
-    if (success) {
-      const deletedUserId = `user_${targetUserId}`;
-      const deletedUser = this.users.get(deletedUserId);
-      if (deletedUser) {
-        this.send(deletedUser.socket, { type: 'kicked', reason: 'Your account has been deleted by an admin' });
-      }
-      // Send updated user list to admin
-      this.handleAdminGetUsers(userId);
-    }
-  }
-
-  private static BAN_DURATIONS: Record<string, { ms: number; label: string } | 'permanent'> = {
-    '1h':   { ms: 60 * 60 * 1000, label: '1 hour' },
-    '2h':   { ms: 2 * 60 * 60 * 1000, label: '2 hours' },
-    '1d':   { ms: 24 * 60 * 60 * 1000, label: '1 day' },
-    '3d':   { ms: 3 * 24 * 60 * 60 * 1000, label: '3 days' },
-    '1w':   { ms: 7 * 24 * 60 * 60 * 1000, label: '1 week' },
-    '1mo':  { ms: 30 * 24 * 60 * 60 * 1000, label: '1 month' },
-    '1y':   { ms: 365 * 24 * 60 * 60 * 1000, label: '1 year' },
-    'permanent': 'permanent',
-  };
-
-  private handleAdminBanUser(userId: string, targetUserId: number, duration: string, reason?: string): void {
-    const user = this.users.get(userId);
-    if (!user || !this.auth.getIsAdmin(userId)) {
-      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
-      return;
-    }
-
-    const dur = LobbyManager.BAN_DURATIONS[duration];
-    if (!dur) {
-      this.send(user.socket, { type: 'admin_result', action: 'ban_user', success: false, error: 'Invalid ban duration' });
-      return;
-    }
-
-    const trimmedReason = reason?.trim() || undefined;
-
-    let bannedUntil: string;
-    let kickReason: string;
-
-    if (dur === 'permanent') {
-      bannedUntil = 'permanent';
-      kickReason = 'Your account has been permanently closed';
-    } else {
-      const banEnd = new Date(Date.now() + dur.ms);
-      bannedUntil = banEnd.toISOString().replace('T', ' ').replace('Z', '');
-      kickReason = `You have been banned for ${dur.label}`;
-    }
-
-    if (trimmedReason) {
-      kickReason += `\nReason: ${trimmedReason}`;
-    }
-
-    const success = this.db.banUser(targetUserId, bannedUntil, trimmedReason);
-    const result: S2C_AdminResult = {
-      type: 'admin_result',
-      action: 'ban_user',
-      success,
-      error: success ? undefined : 'Cannot ban user (not found or is admin)',
-    };
-    this.send(user.socket, result);
-
-    if (success) {
-      const bannedUserId = `user_${targetUserId}`;
-      const bannedUser = this.users.get(bannedUserId);
-      if (bannedUser) {
-        this.send(bannedUser.socket, { type: 'kicked', reason: kickReason });
-      }
-      this.handleAdminGetUsers(userId);
-    }
-  }
-
-  private handleAdminUnbanUser(userId: string, targetUserId: number): void {
-    const user = this.users.get(userId);
-    if (!user || !this.auth.getIsAdmin(userId)) {
-      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
-      return;
-    }
-
-    const success = this.db.unbanUser(targetUserId);
-    const result: S2C_AdminResult = {
-      type: 'admin_result',
-      action: 'unban_user',
-      success,
-      error: success ? undefined : 'User not found',
-    };
-    this.send(user.socket, result);
-
-    if (success) {
-      this.handleAdminGetUsers(userId);
-    }
-  }
-
-  private handleAdminResetPassword(userId: string, targetUserId: number): void {
-    const user = this.users.get(userId);
-    if (!user || !this.auth.getIsAdmin(userId)) {
-      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
-      return;
-    }
-
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%';
-    let newPassword = '';
-    for (let i = 0; i < 12; i++) {
-      newPassword += chars[Math.floor(Math.random() * chars.length)];
-    }
-
-    const success = this.db.resetPassword(targetUserId, newPassword);
-    const result: S2C_AdminResult = {
-      type: 'admin_result',
-      action: 'reset_password',
-      success,
-      error: success ? undefined : 'Cannot reset password (not found or is admin)',
-      generatedPassword: success ? newPassword : undefined,
-    };
-    this.send(user.socket, result);
-  }
-
-  private handleAdminResetStats(userId: string, targetUserId: number): void {
-    const user = this.users.get(userId);
-    if (!user || !this.auth.getIsAdmin(userId)) {
-      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
-      return;
-    }
-
-    const success = this.db.resetStats(targetUserId);
-    const result: S2C_AdminResult = {
-      type: 'admin_result',
-      action: 'reset_stats',
-      success,
-      error: success ? undefined : 'User not found',
-    };
-    this.send(user.socket, result);
-
-    if (success) {
-      // Notify the target user if they're online so their lobby XP/level updates in real time
-      const targetSocketId = this.auth.getUserIdByDbId(targetUserId);
-      if (targetSocketId) {
-        const targetUser = this.users.get(targetSocketId);
-        if (targetUser) {
-          this.send(targetUser.socket, { type: 'xp_update', xp: 0, adminSet: true });
-        }
-      }
-
-      // Broadcast updated profile to all lobby users so open inspect dialogs refresh
-      const rows = this.db.getAllUsersWithStats();
-      const row = rows.find(r => r.id === targetUserId);
-      if (row) {
-        const broadcastCharStats = this.db.getUserCharacterStats(targetUserId);
-        const profileMsg: S2C_UserProfile = {
-          type: 'user_profile',
-          broadcast: true,
-          profile: {
-            username: LobbyManager.gmTag(row.username, row.is_admin === 1),
-            xp: row.xp,
-            gamesPlayed: row.games_played,
-            wins: row.wins,
-            losses: row.losses,
-            createdAt: row.created_at,
-            lastPlayed: row.last_played,
-            characterStats: broadcastCharStats.map(c => ({
-              characterId: c.character_id,
-              gamesPlayed: c.games_played,
-              wins: c.wins,
-              losses: c.losses,
-            })),
-          },
-        };
-        for (const u of this.users.values()) {
-          if (!u.gameSessionId) {
-            this.send(u.socket, profileMsg);
-          }
-        }
-      }
-
-      this.handleAdminGetUsers(userId);
-    }
-  }
-
-  private handleAdminNukeStats(userId: string): void {
-    const user = this.users.get(userId);
-    if (!user || !this.auth.getIsAdmin(userId)) {
-      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
-      return;
-    }
-
-    this.db.resetAllStats();
-
-    const result: S2C_AdminResult = {
-      type: 'admin_result',
-      action: 'nuke_stats',
-      success: true,
-    };
-    this.send(user.socket, result);
-
-    // Notify all online users that their XP was reset
-    for (const u of this.users.values()) {
-      this.send(u.socket, { type: 'xp_update', xp: 0, adminSet: true });
-    }
-
-    this.handleAdminGetUsers(userId);
-  }
-
-  private handleAdminSetXp(userId: string, targetUserId: number, xp: number): void {
-    const user = this.users.get(userId);
-    if (!user || !this.auth.getIsAdmin(userId)) {
-      if (user) this.send(user.socket, { type: 'error', message: 'Not authorized' });
-      return;
-    }
-
-    if (!Number.isFinite(xp) || xp < 0) {
-      this.send(user.socket, { type: 'admin_result', action: 'set_xp', success: false, error: 'Invalid XP value' });
-      return;
-    }
-
-    const success = this.db.setXp(targetUserId, xp);
-    const result: S2C_AdminResult = {
-      type: 'admin_result',
-      action: 'set_xp',
-      success,
-      error: success ? undefined : 'User not found',
-    };
-    this.send(user.socket, result);
-
-    if (success) {
-      // Notify the target user if they're online so their lobby XP/level updates in real time
-      const targetSocketId = this.auth.getUserIdByDbId(targetUserId);
-      if (targetSocketId) {
-        const targetUser = this.users.get(targetSocketId);
-        if (targetUser) {
-          this.send(targetUser.socket, { type: 'xp_update', xp, adminSet: true });
-        }
-      }
-
-      // Broadcast updated profile to all lobby users so open inspect dialogs refresh
-      const rows = this.db.getAllUsersWithStats();
-      const row = rows.find(r => r.id === targetUserId);
-      if (row) {
-        const broadcastCharStats = this.db.getUserCharacterStats(targetUserId);
-        const profileMsg: S2C_UserProfile = {
-          type: 'user_profile',
-          broadcast: true,
-          profile: {
-            username: LobbyManager.gmTag(row.username, row.is_admin === 1),
-            xp: row.xp,
-            gamesPlayed: row.games_played,
-            wins: row.wins,
-            losses: row.losses,
-            createdAt: row.created_at,
-            lastPlayed: row.last_played,
-            characterStats: broadcastCharStats.map(c => ({
-              characterId: c.character_id,
-              gamesPlayed: c.games_played,
-              wins: c.wins,
-              losses: c.losses,
-            })),
-          },
-        };
-        for (const u of this.users.values()) {
-          if (!u.gameSessionId) {
-            this.send(u.socket, profileMsg);
-          }
-        }
-      }
-
-      this.handleAdminGetUsers(userId);
-    }
   }
 
   private handleChangePassword(userId: string, currentPassword: string, newPassword: string): void {

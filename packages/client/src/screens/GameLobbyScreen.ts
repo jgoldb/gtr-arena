@@ -1,9 +1,7 @@
-import * as THREE from 'three';
 import type { NetworkManager } from '../network/NetworkManager';
 import type { GameLobbyPlayer, GameFormat, CharacterId } from '@gtr/shared';
 import { CHARACTER_LIST, CHARACTERS, MAP_LIST, getMaxPlayers } from '@gtr/shared';
-import { createCharacter } from '../engine/player/characters';
-import type { CharacterModel, AnimationInput } from '../engine/player/characters';
+import { CharacterPreview } from './CharacterPreview';
 
 /** Map character IDs to a short role tag for the card subtitle. */
 function getCharacterRole(id: string): string {
@@ -60,17 +58,7 @@ export class GameLobbyScreen {
   private mapBtns: HTMLButtonElement[] = [];
 
   // 3D character preview
-  private previewCanvas: HTMLCanvasElement;
-  private previewRenderer: THREE.WebGLRenderer;
-  private previewScene: THREE.Scene;
-  private previewCamera: THREE.PerspectiveCamera;
-  private previewModel: CharacterModel | null = null;
-  private previewCharId: CharacterId | null = null;
-  private previewAnimId = 0;
-  private lastPreviewTime = 0;
-  private previewRotY = 0;
-  private dragging = false;
-  private dragLastX = 0;
+  private preview!: CharacterPreview;
 
   constructor(network: NetworkManager, localUserId: string, getPortrait: (modelName: string) => string | undefined) {
     this.network = network;
@@ -357,34 +345,8 @@ export class GameLobbyScreen {
     `;
     previewWrapper.appendChild(platform);
 
-    this.previewCanvas = document.createElement('canvas');
-    this.previewCanvas.width = 400;
-    this.previewCanvas.height = 440;
-    this.previewCanvas.style.cssText = 'border-radius: 8px; max-width: 100%; max-height: 100%; object-fit: contain; cursor: default;';
-    previewWrapper.appendChild(this.previewCanvas);
-
-    // Drag-to-rotate on preview canvas (Y-axis only)
-    const dragCursorStyle = document.createElement('style');
-    dragCursorStyle.textContent = 'body.glby-dragging, body.glby-dragging * { cursor: grabbing !important; }';
-    this.element.appendChild(dragCursorStyle);
-
-    this.previewCanvas.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || !this.previewModel) return;
-      this.dragging = true;
-      this.dragLastX = e.clientX;
-      document.body.classList.add('glby-dragging');
-    });
-    window.addEventListener('mousemove', (e) => {
-      if (!this.dragging) return;
-      const dx = e.clientX - this.dragLastX;
-      this.dragLastX = e.clientX;
-      this.previewRotY += dx * 0.01;
-    });
-    window.addEventListener('mouseup', () => {
-      if (!this.dragging) return;
-      this.dragging = false;
-      document.body.classList.remove('glby-dragging');
-    });
+    this.preview = new CharacterPreview(this.element);
+    previewWrapper.appendChild(this.preview.canvas);
 
     // Character name + role under preview
     const charInfoBox = document.createElement('div');
@@ -417,34 +379,7 @@ export class GameLobbyScreen {
     centerPanel.appendChild(previewWrapper);
     centerPanel.appendChild(charInfoBox);
 
-    // Set up Three.js preview renderer
-    this.previewRenderer = new THREE.WebGLRenderer({
-      canvas: this.previewCanvas,
-      alpha: true,
-      antialias: true,
-    });
-    this.previewRenderer.setSize(400, 440);
-    this.previewRenderer.setClearColor(0x000000, 0);
-    this.previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-
-    this.previewScene = new THREE.Scene();
-    this.previewScene.add(new THREE.AmbientLight(0xffffff, 0.7));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    dirLight.position.set(1, 2, 2);
-    this.previewScene.add(dirLight);
-    // Subtle rim light from behind
-    const rimLight = new THREE.DirectionalLight(0x4466aa, 0.4);
-    rimLight.position.set(-1, 1, -2);
-    this.previewScene.add(rimLight);
-
-    this.previewCamera = new THREE.PerspectiveCamera(30, 400 / 440, 0.1, 20);
-    this.previewCamera.position.set(0, 1.0, 4.6);
-    this.previewCamera.lookAt(0, 0.9, 0);
-
-    this.lastPreviewTime = performance.now();
-    this.startPreviewLoop();
-
-    // ═══════════ RIGHT PANEL: Teams + Actions ═══════════
+    // ═════════���═ RIGHT PANEL: Teams + Actions ═══════════
     const rightPanel = document.createElement('div');
     rightPanel.style.cssText = `
       width: 320px; display: flex; flex-direction: column; padding: 24px;
@@ -632,7 +567,7 @@ export class GameLobbyScreen {
     const localPlayer = this.players.find(p => p.userId === this.localUserId);
     const serverCharId = (localPlayer?.characterId as CharacterId) ?? null;
     const displayCharId = this.previewOnlyCharId ?? serverCharId;
-    this.setPreviewCharacter(displayCharId);
+    this.preview.setCharacter(displayCharId);
     this.updateCharInfo(displayCharId);
 
     // Highlight the displayed character card
@@ -896,7 +831,7 @@ export class GameLobbyScreen {
     const serverCharId = (localPlayer?.characterId as CharacterId) ?? null;
     const displayCharId = this.previewOnlyCharId ?? serverCharId;
 
-    this.setPreviewCharacter(displayCharId);
+    this.preview.setCharacter(displayCharId);
     this.updateCharInfo(displayCharId);
 
     // Re-highlight cards
@@ -926,70 +861,9 @@ export class GameLobbyScreen {
     this.lockInBtn.style.animation = canLockIn ? 'glby-glow-pulse 2s ease-in-out infinite' : 'none';
   }
 
-  // ── 3D Character preview ──────────────────────────────────────────
-
-  private setPreviewCharacter(charId: CharacterId | null): void {
-    if (charId === this.previewCharId) return;
-    this.previewCharId = charId;
-    this.previewRotY = 0;
-
-    // Remove old model
-    if (this.previewModel) {
-      this.previewScene.remove(this.previewModel.group);
-      this.previewModel.dispose();
-      this.previewModel = null;
-    }
-
-    if (!charId) {
-      // Render one clear frame so the canvas goes transparent
-      this.previewRenderer.render(this.previewScene, this.previewCamera);
-      this.previewCanvas.style.cursor = 'default';
-      return;
-    }
-
-    const model = createCharacter(charId);
-    if (charId === 'rabbi-zehnwirth') model.group.position.y = -0.25;
-    this.previewScene.add(model.group);
-    this.previewModel = model;
-    this.previewCanvas.style.cursor = 'grab';
-  }
-
-  private startPreviewLoop(): void {
-    const idleInput: AnimationInput = {
-      isMoving: false,
-      isGrounded: true,
-      velocityY: 0,
-      turnSpeed: 0,
-      speedMultiplier: 1,
-      strafeDirection: 0,
-    };
-
-    const loop = (now: number) => {
-      this.previewAnimId = requestAnimationFrame(loop);
-      if (document.hidden) return;
-
-      const dt = Math.min((now - this.lastPreviewTime) / 1000, 0.1);
-      this.lastPreviewTime = now;
-
-      if (this.previewModel) {
-        this.previewModel.group.rotation.y = Math.PI + this.previewRotY;
-        this.previewModel.update(dt, idleInput);
-        this.previewRenderer.render(this.previewScene, this.previewCamera);
-      }
-    };
-
-    this.previewAnimId = requestAnimationFrame(loop);
-  }
-
   destroy(): void {
     cancelAnimationFrame(this.animFrameId);
-    cancelAnimationFrame(this.previewAnimId);
-    if (this.previewModel) {
-      this.previewScene.remove(this.previewModel.group);
-      this.previewModel.dispose();
-      this.previewModel = null;
-    }
-    this.previewRenderer.dispose();
+    this.preview.destroy();
     this.element.remove();
   }
 }

@@ -68,6 +68,7 @@ export function calculateXpGain(playerLevel: number, opponentLevel: number, won:
 // ── Shared entity interface (no Three.js dependency) ──────────────────────
 
 export interface Positionable {
+  readonly characterId: CharacterId;
   readonly team: number;
   readonly name: string;
   hp: number;
@@ -78,6 +79,7 @@ export interface Positionable {
   dead: boolean;
   readonly critChance: number;
   readonly dodgeChance: number;
+  readonly autoAttackRange: number;
   isHostileTo(other: Positionable): boolean;
   die(): void;
 }

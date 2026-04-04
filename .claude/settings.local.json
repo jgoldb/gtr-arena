@@ -46,7 +46,19 @@
       "Bash(find /c/Users/Joey/Repos/gtr -name mop.ogg -o -name mop.*)",
       "Bash(find /c/Users/Joey/Repos/gtr -type f -name *.mp3 -o -name *.wav -o -name *.ogg)",
       "Bash(find /c/Users/Joey/Repos/gtr/packages/client/public/audio/sfx/abilities -type f -name *retardo*)",
-      "Bash(git grep:*)"
+      "Bash(git grep:*)",
+      "Bash(sed -n '855p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(sed -n '1097p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(sed -n '1098p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(sed -n '280p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(sed -n '571p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(sed -n '572p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(sed -n '474p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(sed -n '788p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(sed -n '789p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
+      "Bash(find /c/Users/Joey/Repos/gtr/packages -name \"*.ts\" -exec wc -l {} +)",
+      "Read(//tmp/**)",
+      "Bash(git log:*)"
     ]
   }
 }

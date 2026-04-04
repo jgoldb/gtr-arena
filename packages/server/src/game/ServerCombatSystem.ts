@@ -1,26 +1,15 @@
 import type { Ability } from '@gtr/shared';
-import { yardsToUnits, JimmyLegdDebuff } from '@gtr/shared';
+import { yardsToUnits, JimmyLegdDebuff, type CombatError, type CombatResult, type CombatTextType, COMBAT_DURATION, MISS_CHANCE, GOD_MODE_DAMAGE_MULT, rollAbilityBaseDamage, applyBonusDamage, isFacingCheck } from '@gtr/shared';
 import type { ServerEntity } from './ServerEntity.js';
 import type { ServerBuffSystem } from './ServerBuffSystem.js';
 import type { ServerRegenSystem } from './ServerRegenSystem.js';
 import type { CollisionSystem } from './ServerMapManager.js';
 
-export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned' | 'casting' | 'locked';
-
-export interface CombatResult {
-  success: boolean;
-  error?: CombatError;
-  errorMessage?: string;
-}
-
-export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune';
+export type { CombatError, CombatResult, CombatTextType };
 
 export class ServerCombatSystem {
   private cooldowns = new Map<string, Map<string, { remaining: number; total: number }>>(); // entityId -> (abilityId -> cooldown)
   private gcds = new Map<string, { remaining: number; total: number }>(); // entityId -> GCD state
-  private static readonly COMBAT_DURATION = 5;
-  private static readonly MISS_CHANCE = 0.03;
-  private static readonly GOD_MODE_DAMAGE_MULT = 11; // +1000% damage
   // Range tolerance for residual latency (sub-tick timing, interpolation granularity).
   // Reduced from 2 yards now that server-side position rewind handles the bulk of lag compensation.
   private static readonly RANGE_TOLERANCE = yardsToUnits(1);
@@ -45,26 +34,20 @@ export class ServerCombatSystem {
   enterCombat(entity: ServerEntity): void {
     if (entity.dead) return;
     entity.inCombat = true;
-    this.combatTimers.set(entity, ServerCombatSystem.COMBAT_DURATION);
+    this.combatTimers.set(entity, COMBAT_DURATION);
   }
 
   private isFacing(ax: number, az: number, aRotY: number, tx: number, tz: number): boolean {
-    const dx = tx - ax;
-    const dz = tz - az;
-    const len = Math.sqrt(dx * dx + dz * dz);
-    if (len < 0.001) return true;
-    const forward = { x: Math.sin(aRotY), z: Math.cos(aRotY) };
-    const dot = forward.x * (dx / len) + forward.z * (dz / len);
-    return dot > 0.5; // 120 degree cone
+    return isFacingCheck(Math.sin(aRotY), Math.cos(aRotY), tx - ax, tz - az);
   }
 
   private rollOutcome(attacker: ServerEntity, target: ServerEntity, canDodge = true): 'miss' | 'dodge' | 'crit' | 'normal' {
     const roll = Math.random();
-    if (roll < ServerCombatSystem.MISS_CHANCE) return 'miss';
+    if (roll < MISS_CHANCE) return 'miss';
     if (canDodge) {
       const targetFacing = this.isFacing(target.x, target.z, target.rotationY, attacker.x, attacker.z);
       const targetStunned = this.buffSystem.isStunned(target);
-      if (targetFacing && !targetStunned && roll < ServerCombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
+      if (targetFacing && !targetStunned && roll < MISS_CHANCE + target.dodgeChance) return 'dodge';
     }
     // Resting targets are always crit
     if (this.buffSystem.hasBuff(target, 'resting')) return 'crit';
@@ -73,7 +56,7 @@ export class ServerCombatSystem {
   }
 
   rollMiss(): boolean {
-    return Math.random() < ServerCombatSystem.MISS_CHANCE;
+    return Math.random() < MISS_CHANCE;
   }
 
   private getDistance(ax: number, az: number, bx: number, bz: number, ay = 0, by = 0): number {
@@ -282,23 +265,12 @@ export class ServerCombatSystem {
       if (outcome === 'miss' || outcome === 'dodge') {
         this.onCombatText?.(attacker, target, 0, outcome, ability);
       } else {
-        let baseDamage: number;
-        if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
-          baseDamage = ability.damageMin + Math.floor(
-            Math.random() * (ability.damageMax - ability.damageMin + 1)
-          );
-        } else {
-          baseDamage = ability.damage;
-        }
-
-        if (ability.bonusDamagePercent && ability.bonusDamageRequiresDebuff) {
-          if (this.buffSystem.hasDebuff(target, ability.bonusDamageRequiresDebuff)) {
-            baseDamage = Math.round(baseDamage * (1 + ability.bonusDamagePercent / 100));
-          }
-        }
+        let baseDamage = rollAbilityBaseDamage(ability);
+        baseDamage = applyBonusDamage(baseDamage, ability,
+          !!ability.bonusDamageRequiresDebuff && this.buffSystem.hasDebuff(target, ability.bonusDamageRequiresDebuff));
 
         let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
-        if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
+        if (attacker.godMode) damageMult *= GOD_MODE_DAMAGE_MULT;
         baseDamage = Math.round(baseDamage * damageMult);
 
         const multiplier = outcome === 'crit' ? 2 : 1;
@@ -373,7 +345,7 @@ export class ServerCombatSystem {
     }
 
     let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
-    if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
+    if (attacker.godMode) damageMult *= GOD_MODE_DAMAGE_MULT;
     const adjustedBase = Math.round(baseDamage * damageMult);
     const multiplier = outcome === 'crit' ? 2 : 1;
     const damage = Math.round(adjustedBase * multiplier);
@@ -409,15 +381,10 @@ export class ServerCombatSystem {
       return;
     }
 
-    let baseDamage: number;
-    if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
-      baseDamage = ability.damageMin + Math.floor(Math.random() * (ability.damageMax - ability.damageMin + 1));
-    } else {
-      baseDamage = ability.damage;
-    }
+    let baseDamage = rollAbilityBaseDamage(ability);
 
     let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
-    if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
+    if (attacker.godMode) damageMult *= GOD_MODE_DAMAGE_MULT;
     baseDamage = Math.round(baseDamage * damageMult);
 
     const isCrit = outcome === 'crit';
@@ -459,7 +426,7 @@ export class ServerCombatSystem {
   applyChannelTickDamage(attacker: ServerEntity, target: ServerEntity, tickDamage: number, damageMultiplier = 1): void {
     if (attacker.dead || target.dead) return;
 
-    const godMult = attacker.godMode ? ServerCombatSystem.GOD_MODE_DAMAGE_MULT : 1;
+    const godMult = attacker.godMode ? GOD_MODE_DAMAGE_MULT : 1;
     const adjustedTick = Math.round(tickDamage * damageMultiplier * godMult);
     const isCrit = Math.random() < attacker.critChance;
     const mult = isCrit ? 2 : 1;
@@ -518,7 +485,7 @@ export class ServerCombatSystem {
       const critMult = outcome === 'crit' ? 2 : 1;
       const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
       let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
-      if (attacker.godMode) damageMult *= ServerCombatSystem.GOD_MODE_DAMAGE_MULT;
+      if (attacker.godMode) damageMult *= GOD_MODE_DAMAGE_MULT;
       const damage = Math.round(baseDamage * buffMult * damageMult * critMult);
       const actualDamage = target.godMode ? 0 : this.processDamageAbsorb(target, damage, attacker);
       target.hp = Math.max(0, target.hp - actualDamage);
