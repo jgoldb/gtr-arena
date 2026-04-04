@@ -1,14 +1,11 @@
 import type { Ability, BuffDefinition } from '@gtr/shared';
 import type { EntitySnapshot, EntityBuffSnapshot, GasCloudSnapshot, ChemicalPoolSnapshot, CooldownSnapshot } from '@gtr/shared';
 import type {
-  S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
-  S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_Knockback, S2C_EntityDied,
-  S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
-  S2C_PositionUpdate,
-  EntityPositionData, EntityStateDelta,
+  S2C_CombatEvent, S2C_Flinch, S2C_CooldownUpdate,
+  S2C_Knockback,
   ServerMessage,
 } from '@gtr/shared';
-import { GLOBAL_COOLDOWN, yardsToUnits, isRangedAutoAttack, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, Sweep, TweakerSprint, TweakerSprintSlow, getBuffDescription, getCharacterStats, GasCloudSystem, DotSystem, ChemicalPoolSystem, FullRetardAuraSystem, ChargeSystem } from '@gtr/shared';
+import { yardsToUnits, isRangedAutoAttack, RottenCrotchStun, KaboomStun, ArenaPreparationBuff, RestingBuff, ParanoidDebuff, ODStunDebuff, TweakerSprintSlow, getCharacterStats, GasCloudSystem, DotSystem, ChemicalPoolSystem, FullRetardAuraSystem, ChargeSystem } from '@gtr/shared';
 import { ServerEntity } from './ServerEntity.js';
 import { ServerCombatSystem } from './ServerCombatSystem.js';
 import { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -17,16 +14,9 @@ import { ServerCastingSystem } from './ServerCastingSystem.js';
 import { ServerAutoAttackSystem } from './ServerAutoAttackSystem.js';
 import { CollisionSystem } from './ServerMapManager.js';
 import { ServerElevator } from './ServerElevator.js';
-
-interface PendingAoeImpact {
-  ability: Ability;
-  groundX: number;
-  groundY: number;
-  groundZ: number;
-  delay: number;
-  elapsed: number;
-  owner: ServerEntity;
-}
+import { ServerBroadcast } from './ServerBroadcast.js';
+import { ServerLagCompensation } from './ServerLagCompensation.js';
+import { ServerAbilityHandler } from './ServerAbilityHandler.js';
 
 export class ServerEngine {
   private entities: ServerEntity[] = [];
@@ -47,51 +37,16 @@ export class ServerEngine {
   private gasCloudSystem!: GasCloudSystem<ServerEntity>;
   private dotSystem!: DotSystem<ServerEntity>;
   private chemPoolSystem!: ChemicalPoolSystem<ServerEntity>;
-  private pendingAoeImpacts: PendingAoeImpact[] = [];
-  private dumpsterDiveAutoTargets = new Map<string, string>(); // entityId -> saved auto-attack target id
-  private nextEffectId = 1;
 
-  // Tick
-  private tick = 0;
-  private tickTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private midTickTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private nextTickTarget = 0;
-  private lastTickTime = 0;
-  private static readonly TICK_RATE = 30;
-  private static readonly TICK_MS = 1000 / ServerEngine.TICK_RATE;
-  // Mid-tick position broadcasts at 60Hz — halves dead reckoning distance
-  // by sending position-only updates between full 30Hz ticks.
-  private static readonly MID_TICK_MS = ServerEngine.TICK_MS / 2;
-  private midTickCounter = 0; // separate counter for mid-tick broadcasts
-  private static readonly KEYFRAME_INTERVAL = 150; // full snapshot every 5 seconds
-  private static readonly BOTTLE_CHUCK_IMPACT_DELAY = 0.825; // animation wind-up + flight time
-  // Range tolerance for residual latency (sub-tick timing, interpolation granularity).
-  // Reduced from 2 yards now that server-side position rewind handles the bulk of lag compensation.
-  private static readonly RANGE_TOLERANCE = yardsToUnits(1);
-
-  // ── Lag compensation: position history for server-side rewind ──
-  private positionHistory: Array<{
-    serverTimestamp: number;
-    positions: Map<string, { x: number; z: number; rotationY: number }>;
-  }> = [];
-  private static readonly MAX_REWIND_MS = 400;
-  // ~14 ticks at 30Hz (400ms / 33ms = 12, +2 margin)
-  private static readonly MAX_HISTORY_TICKS = Math.ceil(400 / ServerEngine.TICK_MS) + 2;
-
-  // Ability queue — holds one pending ability per entity when request arrives slightly
-  // before GCD/cast expires. Processed on the tick where GCD/cast clears.
-  private static readonly ABILITY_QUEUE_TOLERANCE = 0.1; // 100ms — accept abilities arriving up to 3 ticks before GCD expires
-  private static readonly ABILITY_QUEUE_MAX_AGE = 0.5;   // expire stale queued abilities after 500ms
-  private abilityQueue = new Map<string, {
-    abilityId: string; targetEntityId: string | null;
-    groundTarget?: { x: number; y: number; z: number }; clientServerTimestamp?: number;
-    age: number;
-  }>();
+  // Extracted subsystems
+  private broadcast = new ServerBroadcast();
+  private lagCompensation: ServerLagCompensation;
+  private abilityHandler: ServerAbilityHandler;
 
   // Event queue (flushed each tick in the delta update for clients without immediate delivery)
   private pendingEvents: ServerMessage[] = [];
 
-  // ── Immediate event types ────────────────────────────────────────────
+  // ── Immediate event types ─────��──────────────────────────────────────
   // Combat events that are time-sensitive get broadcast immediately when they
   // happen, rather than waiting up to 33ms for the next tick bundle. This
   // removes a full half-tick of average latency from combat feedback.
@@ -106,28 +61,21 @@ export class ServerEngine {
     'flinch',
   ]);
 
-  // Position tracking — only send when entity actually moved
-  private lastBroadcastPosition = new Map<string, {
-    x: number; y: number; z: number; rotationY: number; isMoving: boolean;
-    vx: number; vz: number;
-  }>();
-  private static readonly POSITION_EPSILON = 0.001;
-  private static readonly ROTATION_EPSILON = 0.001;
-
-  // Delta tracking — previous broadcast state per entity
-  private lastBroadcastState = new Map<string, {
-    hp: number; maxHp: number; mana: number; maxMana: number;
-    dead: boolean; inCombat: boolean; stunned: boolean; charging: boolean;
-    isAutoAttacking: boolean;
-    castingAbilityId: string | null; castingElapsed: number;
-    castingTotalTime: number; castingIsChannel: boolean;
-    targetEntityId: string | null;
-    disconnected: boolean;
-  }>();
-  private lastBroadcastBuffs = new Map<string, string>(); // entityId -> buff signature
-  // Track world effect IDs + consumed state to only send when actually changed
-  private lastBroadcastGasCloudIds = '';
-  private lastBroadcastChemPoolSig = '';
+  // Tick
+  private tick = 0;
+  private tickTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private midTickTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private nextTickTarget = 0;
+  private lastTickTime = 0;
+  private static readonly TICK_RATE = 30;
+  private static readonly TICK_MS = 1000 / ServerEngine.TICK_RATE;
+  // Mid-tick position broadcasts at 60Hz — halves dead reckoning distance
+  // by sending position-only updates between full 30Hz ticks.
+  private static readonly MID_TICK_MS = ServerEngine.TICK_MS / 2;
+  private static readonly KEYFRAME_INTERVAL = 150; // full snapshot every 5 seconds
+  // Range tolerance for residual latency (sub-tick timing, interpolation granularity).
+  // Reduced from 2 yards now that server-side position rewind handles the bulk of lag compensation.
+  private static readonly RANGE_TOLERANCE = yardsToUnits(1);
 
   onBroadcast?: (msg: ServerMessage) => void;
   /** Broadcast via unreliable DataChannel (positions). Falls back to reliable if not wired. */
@@ -163,6 +111,9 @@ export class ServerEngine {
       this.elevator = new ServerElevator(this.collision);
     }
 
+    this.lagCompensation = new ServerLagCompensation(ServerEngine.TICK_MS);
+    this.abilityHandler = new ServerAbilityHandler(ServerEngine.RANGE_TOLERANCE);
+
     this.buffSystem = new ServerBuffSystem();
     this.regenSystem = new ServerRegenSystem(() => this.entities);
     this.regenSystem.setBuffSystem(this.buffSystem);
@@ -179,7 +130,7 @@ export class ServerEngine {
       setBuffRemaining: (target, id, remaining) => this.buffSystem.setRemaining(target, id, remaining),
       consumeMana: (entity, amount) => { entity.mana -= amount; },
       notifyManaUsed: (entity) => this.regenSystem.notifyManaUsed(entity),
-      triggerGcd: (entity) => this.triggerEntityGcd(entity),
+      triggerGcd: (entity) => this.abilityHandler.triggerEntityGcd(entity),
       setCooldown: (entity, abilityId, duration) => {
         if (!entity.godMode) {
           this.combatSystem.setCooldown(entity.id, abilityId, duration);
@@ -199,7 +150,7 @@ export class ServerEngine {
       useAbility: (entity, ability, target) => {
         const result = this.combatSystem.useAbility(ability, entity, target);
         if (result.success) {
-          this.onAbilitySuccess(entity, ability, target);
+          this.abilityHandler.onAbilitySuccessFromCasting(entity, ability, target);
         } else if (result.errorMessage) {
           this.onSendToPlayer?.(entity.id, { type: 'error', message: result.errorMessage });
         }
@@ -334,7 +285,7 @@ export class ServerEngine {
           type: 'ability_effect',
           entityId: entity.id,
           abilityId: 'sweep-finish',
-        } as S2C_AbilityEffect);
+        });
         if (savedTarget && !savedTarget.dead && savedTarget.isHostileTo(entity)) {
           this.requestAutoAttack(entity.id, savedTarget.id);
         }
@@ -441,9 +392,9 @@ export class ServerEngine {
           }
         }
         // Re-engage auto-attack if the player was auto-attacking before diving
-        const savedTargetId = this.dumpsterDiveAutoTargets.get(target.id);
+        const savedTargetId = this.abilityHandler.getDumpsterDiveAutoTarget(target.id);
         if (savedTargetId) {
-          this.dumpsterDiveAutoTargets.delete(target.id);
+          this.abilityHandler.deleteDumpsterDiveAutoTarget(target.id);
           const currentTargetId = this.targets.get(target.id);
           if (currentTargetId === savedTargetId) {
             this.requestAutoAttack(target.id, savedTargetId);
@@ -475,6 +426,30 @@ export class ServerEngine {
       this.targets.set(target.id, null);
       this.stopAutoAttack(target.id);
     };
+
+    // Wire ability handler dependencies
+    this.abilityHandler.wire({
+      getEntity: (id) => this.getEntity(id),
+      getEntities: () => this.entities,
+      getTarget: (entityId) => this.getTarget(entityId),
+      isFrozen: (entityId) => this.frozenEntities.has(entityId),
+      targets: this.targets,
+      combatSystem: this.combatSystem,
+      buffSystem: this.buffSystem,
+      regenSystem: this.regenSystem,
+      castingSystem: this.castingSystem,
+      autoAttackSystem: this.autoAttackSystem,
+      chargeSystem: this.chargeSystem,
+      lagCompensation: this.lagCompensation,
+      gasCloudSystem: this.gasCloudSystem,
+      dotSystem: this.dotSystem,
+      chemPoolSystem: this.chemPoolSystem,
+      emitEvent: (event) => this.emitEvent(event),
+      onSendToPlayer: undefined, // will be set via property forwarding
+      onBroadcast: undefined,
+      requestAutoAttack: (entityId, targetEntityId) => this.requestAutoAttack(entityId, targetEntityId),
+      stopAutoAttack: (entityId) => this.stopAutoAttack(entityId),
+    });
   }
 
   toggleGodMode(entityId: string): boolean {
@@ -632,11 +607,9 @@ export class ServerEngine {
     this.castingSystem.cancel(entity);
     this.autoAttackSystem.removeEntity(entity);
     this.chargeSystem.removeEntity(entity);
-    this.dumpsterDiveAutoTargets.delete(entityId);
+    this.abilityHandler.removeEntity(entityId);
+    this.broadcast.removeEntity(entityId);
     this.targets.delete(entityId);
-    this.lastBroadcastPosition.delete(entityId);
-    this.lastBroadcastState.delete(entityId);
-    this.lastBroadcastBuffs.delete(entityId);
 
     // Clear other entities' targets pointing at this entity
     for (const [eid, targetId] of this.targets) {
@@ -702,7 +675,7 @@ export class ServerEngine {
     }
   }
 
-  // ── Movement validation constants ───────────────────────────────────
+  // ── Movement validation constants ─────��─────────────────────────────
   // Speed tolerance: allow up to 50% over computed max speed to account for
   // network jitter, tick misalignment, and rapid acceleration/deceleration.
   private static readonly SPEED_TOLERANCE = 1.5;
@@ -843,153 +816,14 @@ export class ServerEngine {
 
   requestAbility(entityId: string, abilityId: string, targetEntityId: string | null,
                  groundTarget?: { x: number; y: number; z: number }, clientServerTimestamp?: number): void {
-    const entity = this.getEntity(entityId);
-    if (!entity || this.frozenEntities.has(entityId)) return;
-
-    const ability = entity.abilities.find(a => a !== null && a.id === abilityId);
-    if (!ability) return;
-
-    // Block during GCD (CC-immune abilities bypass GCD)
-    if (!entity.godMode && !ability.usableWhileCCd && this.combatSystem.getGcdRemaining(entityId) > 0) {
-      // Queue the ability if GCD is about to expire (within tolerance) — fires on next tick
-      if (this.combatSystem.getGcdRemaining(entityId) <= ServerEngine.ABILITY_QUEUE_TOLERANCE) {
-        this.abilityQueue.set(entityId, { abilityId, targetEntityId, groundTarget, clientServerTimestamp, age: 0 });
-      }
-      return;
-    }
-
-    // Cancel channel if starting new ability
-    if (this.castingSystem.isCasting(entity) && this.combatSystem.getCooldownRemaining(entityId, abilityId) <= 0) {
-      this.castingSystem.cancel(entity);
-    }
-
-    // Ground-targeted AoE abilities — no rewind (by design: lead your targets)
-    if (ability.groundTargeted && groundTarget) {
-      const result = this.useGroundTargetAbility(entity, ability, groundTarget.x, groundTarget.z);
-      if (result.success) {
-        this.onAbilitySuccess(entity, ability, undefined, groundTarget);
-        this.triggerEntityGcd(entity);
-      } else if (result.errorMessage) {
-        this.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
-      }
-      return;
-    }
-
-    // Auto self-cast for friendly abilities
-    let target: ServerEntity | null = null;
-    if (targetEntityId) {
-      target = this.getEntity(targetEntityId) ?? null;
-    }
-    if (ability.requiresFriendlyTarget && target && target.isHostileTo(entity)) {
-      target = entity;
-    }
-    if (!target && ability.requiresTarget && !ability.requiresHostileTarget) {
-      target = entity;
-    }
-
-    // Lag compensation: rewind target to where the client saw them
-    let targetPosOverride: { x: number; z: number; rotationY: number } | undefined;
-    if (target && clientServerTimestamp !== undefined) {
-      targetPosOverride = this.getRewindPosition(target.id, clientServerTimestamp) ?? undefined;
-    }
-
-    if (ability.castTime) {
-      this.serverStartCasting(entity, ability, target, targetPosOverride);
-    } else {
-      const result = this.combatSystem.useAbility(ability, entity, target, targetPosOverride);
-      if (result.success) {
-        this.onAbilitySuccess(entity, ability, target);
-        if (!ability.usableWhileCCd) this.triggerEntityGcd(entity);
-      } else if (result.errorMessage) {
-        this.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
-      }
-    }
+    // Forward onSendToPlayer/onBroadcast to ability handler (they may be set after construction)
+    this.abilityHandler['deps'].onSendToPlayer = this.onSendToPlayer;
+    this.abilityHandler['deps'].onBroadcast = this.onBroadcast;
+    this.abilityHandler.requestAbility(entityId, abilityId, targetEntityId, groundTarget, clientServerTimestamp);
   }
 
   cancelCastRequest(entityId: string): void {
-    if (this.frozenEntities.has(entityId)) return;
-    const entity = this.getEntity(entityId);
-    if (entity) this.castingSystem.cancel(entity);
-  }
-
-  /** Process queued abilities — called each tick after GCD/cast updates. */
-  private processAbilityQueue(dt: number): void {
-    for (const [entityId, queued] of this.abilityQueue) {
-      queued.age += dt;
-
-      // Expire stale entries or clear if entity can no longer act
-      const entity = this.getEntity(entityId);
-      if (queued.age > ServerEngine.ABILITY_QUEUE_MAX_AGE || !entity || entity.dead || entity.stunned) {
-        this.abilityQueue.delete(entityId);
-        continue;
-      }
-
-      // Re-attempt — requestAbility will succeed now if GCD/cast cleared this tick
-      if (this.combatSystem.getGcdRemaining(entityId) <= 0 && !this.castingSystem.isCasting(entity)) {
-        this.abilityQueue.delete(entityId);
-        this.requestAbility(entityId, queued.abilityId, queued.targetEntityId, queued.groundTarget, queued.clientServerTimestamp);
-      }
-    }
-  }
-
-  /** Execute a ground-targeted AoE ability at a world position. Consumes resources immediately, delays damage until impact. */
-  private useGroundTargetAbility(entity: ServerEntity, ability: Ability, groundX: number, groundZ: number): { success: boolean; errorMessage?: string } {
-    if (entity.dead) return { success: false, errorMessage: 'You are dead' };
-    if (this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity)) return { success: false, errorMessage: 'You are stunned' };
-    if (!entity.godMode && this.combatSystem.getCooldownRemaining(entity.id, ability.id) > 0) {
-      return { success: false, errorMessage: 'Ability is not ready yet' };
-    }
-
-    // Validate range to ground target
-    const dist = Math.sqrt((entity.x - groundX) ** 2 + (entity.z - groundZ) ** 2);
-    if (ability.range && dist > ability.range + yardsToUnits(2)) {
-      return { success: false, errorMessage: 'Out of range' };
-    }
-
-    if (!entity.godMode) {
-      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
-      if (entity.mana < effectiveCost) return { success: false, errorMessage: 'Not enough mana' };
-      entity.mana -= effectiveCost;
-      if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
-    }
-
-    if (!entity.godMode) {
-      this.combatSystem.setCooldown(entity.id, ability.id, ability.cooldown);
-    }
-
-    // Schedule damage for when the projectile lands
-    this.pendingAoeImpacts.push({
-      ability,
-      groundX,
-      groundY: entity.y,
-      groundZ,
-      delay: ServerEngine.BOTTLE_CHUCK_IMPACT_DELAY,
-      elapsed: 0,
-      owner: entity,
-    });
-
-    return { success: true };
-  }
-
-  private updatePendingAoeImpacts(dt: number): void {
-    for (let i = this.pendingAoeImpacts.length - 1; i >= 0; i--) {
-      const impact = this.pendingAoeImpacts[i];
-      impact.elapsed += dt;
-      if (impact.elapsed < impact.delay) continue;
-
-      // Impact! Damage all hostiles in radius
-      const radius = impact.ability.aoeRadius ?? 0;
-      for (const target of this.entities) {
-        if (target === impact.owner || target.dead || !target.isHostileTo(impact.owner) || this.buffSystem.isUntargetable(target)) continue;
-        const dx = target.x - impact.groundX;
-        const dy = target.y - impact.groundY;
-        const dz = target.z - impact.groundZ;
-        if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
-        this.combatSystem.applyAoeDamage(impact.owner, target, impact.ability);
-      }
-
-      this.pendingAoeImpacts.splice(i, 1);
-    }
+    this.abilityHandler.cancelCastRequest(entityId, this.frozenEntities);
   }
 
   setResting(entityId: string, resting: boolean): void {
@@ -1041,7 +875,7 @@ export class ServerEngine {
       clearTimeout(this.midTickTimeoutId);
       this.midTickTimeoutId = null;
     }
-    this.positionHistory.length = 0;
+    this.lagCompensation.clear();
   }
 
   /** Self-correcting tick scheduler — compensates for drift each iteration instead of accumulating it. */
@@ -1072,95 +906,9 @@ export class ServerEngine {
   private scheduleMidTick(): void {
     this.midTickTimeoutId = setTimeout(() => {
       this.midTickTimeoutId = null;
-      this.broadcastMidTickPositions();
+      this.broadcast.onBroadcastUnreliable = this.onBroadcastUnreliable;
+      this.broadcast.broadcastMidTickPositions(this.tick, this.entities);
     }, ServerEngine.MID_TICK_MS);
-  }
-
-  private broadcastMidTickPositions(): void {
-    if (!this.onBroadcastUnreliable) return;
-
-    this.midTickCounter++;
-    const positions: EntityPositionData[] = [];
-    for (const e of this.entities) {
-      if (!e.isMoving && e.turnSpeed === 0) continue; // skip stationary entities
-      positions.push({
-        id: e.id, x: e.x, y: e.y, z: e.z,
-        rotationY: e.rotationY, isMoving: e.isMoving,
-        vx: e.vx, vz: e.vz,
-        moveFlags: e.moveFlags, moveSpeed: e.moveSpeed, vy: e.vy, turnSpeed: e.turnSpeed,
-      });
-    }
-
-    if (positions.length === 0) return;
-
-    const posMsg: S2C_PositionUpdate = {
-      type: 'position_update',
-      tick: this.tick, // same tick number — client uses receiveTime for interpolation
-      timestamp: Date.now(),
-      positions,
-    };
-    this.onBroadcastUnreliable(posMsg);
-  }
-
-  // ── Lag compensation: position history ────────────────────────────────
-
-  /** Record all entity positions for this tick (called once per broadcast). */
-  private recordPositionHistory(serverTimestamp: number): void {
-    const positions = new Map<string, { x: number; z: number; rotationY: number }>();
-    for (const e of this.entities) {
-      positions.set(e.id, { x: e.x, z: e.z, rotationY: e.rotationY });
-    }
-    this.positionHistory.push({ serverTimestamp, positions });
-    while (this.positionHistory.length > ServerEngine.MAX_HISTORY_TICKS) {
-      this.positionHistory.shift();
-    }
-  }
-
-  /**
-   * Get the rewound position for an entity at a past server timestamp.
-   * Returns null if the timestamp is too old, in the future, or the entity
-   * has no history — caller should fall back to current positions.
-   */
-  private getRewindPosition(entityId: string, clientServerTimestamp: number): { x: number; z: number; rotationY: number } | null {
-    if (this.positionHistory.length === 0) return null;
-
-    const now = Date.now();
-    const rewindAmount = now - clientServerTimestamp;
-
-    // Reject timestamps in the future or too far in the past
-    if (rewindAmount < 0 || rewindAmount > ServerEngine.MAX_REWIND_MS) return null;
-
-    // Find the two history entries bracketing the requested timestamp
-    for (let i = 0; i < this.positionHistory.length - 1; i++) {
-      const before = this.positionHistory[i];
-      const after = this.positionHistory[i + 1];
-      if (before.serverTimestamp <= clientServerTimestamp && after.serverTimestamp > clientServerTimestamp) {
-        const beforePos = before.positions.get(entityId);
-        const afterPos = after.positions.get(entityId);
-        if (!beforePos && !afterPos) return null;
-        if (!beforePos) return afterPos ? { ...afterPos } : null;
-        if (!afterPos) return { ...beforePos };
-
-        const totalTime = after.serverTimestamp - before.serverTimestamp;
-        const elapsed = clientServerTimestamp - before.serverTimestamp;
-        const t = totalTime > 0 ? Math.max(0, Math.min(1, elapsed / totalTime)) : 1;
-        return {
-          x: beforePos.x + (afterPos.x - beforePos.x) * t,
-          z: beforePos.z + (afterPos.z - beforePos.z) * t,
-          rotationY: beforePos.rotationY + (afterPos.rotationY - beforePos.rotationY) * t,
-        };
-      }
-    }
-
-    // Timestamp is at or after our latest entry — use latest
-    const last = this.positionHistory[this.positionHistory.length - 1];
-    if (last.serverTimestamp <= clientServerTimestamp) {
-      const pos = last.positions.get(entityId);
-      return pos ? { ...pos } : null;
-    }
-
-    // Timestamp is before all history entries — too old
-    return null;
   }
 
   // ── Main tick ───────────────────────────────────────────────────────────
@@ -1217,7 +965,7 @@ export class ServerEngine {
     this.gasCloudSystem.update(dt);
     this.chemPoolSystem.update(dt);
     this.dotSystem.update(dt);
-    this.updatePendingAoeImpacts(dt);
+    this.abilityHandler.updatePendingAoeImpacts(dt);
     this.fullRetardAuraSystem.update(dt);
 
     // Update systems
@@ -1226,7 +974,9 @@ export class ServerEngine {
     this.regenSystem.update(dt);
 
     // Process queued abilities — fire any that are no longer blocked after GCD/cast updates
-    this.processAbilityQueue(dt);
+    this.abilityHandler['deps'].onSendToPlayer = this.onSendToPlayer;
+    this.abilityHandler['deps'].onBroadcast = this.onBroadcast;
+    this.abilityHandler.processAbilityQueue(dt);
 
     // Build and broadcast state (events are bundled into delta updates)
     this.broadcastGameState();
@@ -1240,232 +990,6 @@ export class ServerEngine {
 
     // Check win condition
     this.checkWinCondition();
-  }
-
-  // ── Casting ──────────────────────────────────────────────────────────
-
-  /** Validate and start a cast/channel — server-side entry point with lag compensation. */
-  private serverStartCasting(entity: ServerEntity, ability: Ability, target: ServerEntity | null,
-                       targetPosOverride?: { x: number; z: number; rotationY: number }): void {
-    if (this.castingSystem.isCasting(entity)) {
-      this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Already casting' });
-      return;
-    }
-    if (entity.isMoving || !entity.grounded) {
-      this.onSendToPlayer?.(entity.id, { type: 'error', message: 'Cannot cast while moving' });
-      return;
-    }
-
-    // Use rewound position for initial cast validation only — mid-cast checks use current positions
-    const validation = this.combatSystem.validateAbility(ability, entity, target, targetPosOverride);
-    if (!validation.success) {
-      if (validation.errorMessage) {
-        this.onSendToPlayer?.(entity.id, { type: 'error', message: validation.errorMessage });
-      }
-      return;
-    }
-
-    const result = this.castingSystem.start(entity, ability, target);
-    if (!result.started && result.errorMessage) {
-      this.onSendToPlayer?.(entity.id, { type: 'error', message: result.errorMessage });
-    }
-  }
-
-
-  // ── Ability success effects ─────────────────────────────────────────
-
-  private static readonly MELEE_AUTO_ATTACK_ABILITIES = ['mop', 'big-boot', 'jimmy-legs', 'shank', 'gank'];
-
-  private onAbilitySuccess(entity: ServerEntity, ability: Ability, target?: ServerEntity | null, groundTarget?: { x: number; y: number; z: number }): void {
-    const abilityEvent: S2C_AbilityEffect = {
-      type: 'ability_effect',
-      entityId: entity.id,
-      abilityId: ability.id,
-      ...(target ? { targetId: target.id } : {}),
-      ...(groundTarget ? { groundTargetX: groundTarget.x, groundTargetY: groundTarget.y, groundTargetZ: groundTarget.z } : {}),
-    };
-    this.emitEvent(abilityEvent);
-
-    // Send cooldown update to the entity's player (skip in god mode)
-    if (ability.cooldown > 0 && !entity.godMode) {
-      this.onSendToPlayer?.(entity.id, {
-        type: 'cooldown_update',
-        abilityId: ability.id,
-        remaining: ability.cooldown,
-        total: ability.cooldown,
-      } as S2C_CooldownUpdate);
-    }
-
-    if (ability.id === 'fart-bomb') {
-      const gcRadius = yardsToUnits(5);
-      const gcId = `gc_${this.nextEffectId++}`;
-      this.gasCloudSystem.spawn(entity, entity.x, entity.y, entity.z, gcRadius, 8, FartBombDebuff, 592, 2, gcId);
-      this.onBroadcast?.({
-        type: 'gas_cloud_spawn',
-        id: gcId, x: entity.x, y: entity.y, z: entity.z, radius: gcRadius, duration: 8,
-      } as S2C_GasCloudSpawn);
-    }
-    if (ability.id === 'sweep') {
-      this.startSweepCharge(entity);
-    }
-    if (ability.id === 'chemical-spill') {
-      const cpRadius = yardsToUnits(3);
-      const cpId = `cp_${this.nextEffectId++}`;
-      this.chemPoolSystem.spawn(entity, entity.x, entity.y, entity.z, cpRadius, 30, ChemicalSpillSpeedBuff, ChemicalSpillDot, 297, 349, 600, 2, 6, 2, cpId);
-      this.onBroadcast?.({
-        type: 'chem_pool_spawn',
-        id: cpId, x: entity.x, y: entity.y, z: entity.z, radius: cpRadius, duration: 30, activationDelay: 2,
-      } as S2C_ChemPoolSpawn);
-    }
-    if (ability.id === 'kaboom') {
-      this.executeKaboom(entity);
-    }
-    if (ability.id === 'tweaker-sprint') {
-      this.startTweakerSprintCharge(entity);
-    }
-    if (ability.id === 'shank' || ability.id === 'pocket-sand' || ability.id === 'sticky-fingers' || ability.id === 'tweaker-sprint' || ability.id === 'gank') {
-      this.buffSystem.addStacks(entity, 'tweaking', 15);
-      if (this.buffSystem.getStacks(entity, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(entity, 'paranoid')) {
-        this.buffSystem.apply(entity, ParanoidDebuff);
-      }
-    }
-    if (ability.id === 'gank') {
-      const target = this.getTarget(entity.id);
-      if (target && (target.dead || target.hp / target.maxHp < 0.30)) {
-        this.combatSystem.clearCooldown(entity.id, 'gank');
-        this.onSendToPlayer?.(entity.id, {
-          type: 'cooldown_update',
-          abilityId: 'gank',
-          remaining: 0,
-          total: 0,
-        } as S2C_CooldownUpdate);
-      }
-    }
-    if (ability.id === 'crack-rock') {
-      this.combatSystem.applyHeal(entity, entity, 400);
-      this.buffSystem.addStacks(entity, 'tweaking', 25);
-      if (this.buffSystem.getStacks(entity, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(entity, 'paranoid')) {
-        this.buffSystem.apply(entity, ParanoidDebuff);
-      }
-    }
-    if (ability.id === 'sticky-fingers') {
-      const target = this.getTarget(entity.id);
-      if (target) {
-        const stealable = this.buffSystem.getBuffs(target).filter(b => !b.definition.unremovable);
-        if (stealable.length > 0) {
-          const stolen = stealable[Math.floor(Math.random() * stealable.length)];
-          const remainingTime = stolen.remaining;
-          this.buffSystem.remove(target, stolen.definition.id, true);
-          this.buffSystem.apply(entity, stolen.definition);
-          this.buffSystem.setRemaining(entity, stolen.definition.id, remainingTime);
-        } else {
-          const drain = Math.min(150, target.mana);
-          target.mana -= drain;
-          entity.mana = Math.min(entity.mana + 150, entity.maxMana);
-          abilityEvent.manaStolen = 150;
-        }
-      }
-    }
-    if (ability.id === 'dumpster-dive') {
-      this.buffSystem.addStacks(entity, 'tweaking', 15);
-      if (this.buffSystem.getStacks(entity, 'tweaking') >= 100 && !this.buffSystem.hasDebuff(entity, 'paranoid')) {
-        this.buffSystem.apply(entity, ParanoidDebuff);
-      }
-      // Save auto-attack target for re-engage on emerge
-      const aaTarget = this.autoAttackSystem.getTarget(entity);
-      if (aaTarget) this.dumpsterDiveAutoTargets.set(entity.id, aaTarget.id);
-      // Stop auto-attack while in the dumpster
-      this.stopAutoAttack(entity.id);
-      // Force all enemies targeting this entity to lose their target
-      for (const [eid, targetId] of this.targets) {
-        if (targetId === entity.id) {
-          const other = this.getEntity(eid);
-          if (other && other.isHostileTo(entity)) {
-            this.targets.set(eid, null);
-            this.stopAutoAttack(eid);
-            this.onSendToPlayer?.(eid, { type: 'force_clear_target' });
-          }
-        }
-      }
-    }
-    if (ability.id === 'pvp-trinket') {
-      this.buffSystem.removeAllCCEffects(entity, true);
-    }
-    if (ability.id === 'crotch-rot') {
-      const target = this.getTarget(entity.id);
-      if (target && !target.dead) {
-        this.dotSystem.add({
-          target, debuff: CrotchRotDot,
-          totalDuration: 12, elapsed: 0,
-          tickInterval: 3, nextTickAt: 3,
-          damagePerTick: 180, owner: entity,
-        });
-      }
-    }
-
-    // Melee abilities automatically engage auto-attack on the target
-    if (ServerEngine.MELEE_AUTO_ATTACK_ABILITIES.includes(ability.id)) {
-      const target = this.getTarget(entity.id);
-      if (target && target.isHostileTo(entity) && !target.dead) {
-        this.requestAutoAttack(entity.id, target.id);
-      }
-    }
-  }
-
-  private triggerEntityGcd(entity: ServerEntity): void {
-    if (entity.godMode) return;
-    this.combatSystem.triggerGcd(entity.id, GLOBAL_COOLDOWN);
-    this.onSendToPlayer?.(entity.id, {
-      type: 'cooldown_update',
-      abilityId: '__gcd__',
-      remaining: GLOBAL_COOLDOWN,
-      total: GLOBAL_COOLDOWN,
-    } as S2C_CooldownUpdate);
-  }
-
-  private startSweepCharge(entity: ServerEntity): void {
-    const savedAutoAttackTarget = this.autoAttackSystem.getTarget(entity);
-    this.stopAutoAttack(entity.id);
-    entity.charging = true;
-    this.chargeSystem.startSweepCharge(
-      entity,
-      Math.sin(entity.rotationY),
-      Math.cos(entity.rotationY),
-      Sweep.chargeSpeed!,
-      Sweep.chargeDuration!,
-      Sweep.chargeMaxDamage!,
-      savedAutoAttackTarget,
-    );
-  }
-
-  private startTweakerSprintCharge(entity: ServerEntity): void {
-    const target = this.getTarget(entity.id);
-    if (!target) return;
-
-    const dx = target.x - entity.x;
-    const dz = target.z - entity.z;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-    if (dist < 0.01) return;
-
-    const dirX = dx / dist;
-    const dirZ = dz / dist;
-    entity.rotationY = Math.atan2(dirX, dirZ);
-
-    const speed = TweakerSprint.chargeSpeed!;
-    const chargeDist = Math.max(0, dist - yardsToUnits(1));
-    const duration = chargeDist / speed;
-
-    const savedAutoAttackTarget = this.autoAttackSystem.getTarget(entity);
-    this.stopAutoAttack(entity.id);
-    entity.charging = true;
-    this.chargeSystem.startTweakerSprintCharge(
-      entity, dirX, dirZ, speed, duration,
-      TweakerSprint.chargeMaxDamage!, savedAutoAttackTarget,
-    );
-  }
-
-  private executeKaboom(entity: ServerEntity): void {
-    this.chargeSystem.executeKaboom(entity, entity.rotationY);
   }
 
   // ── Immediate event emission ──────────────────────────────────────────
@@ -1488,299 +1012,48 @@ export class ServerEngine {
     this.pendingEvents[this.pendingEvents.length] = event;
   }
 
-  // ── State broadcast ─────────────────────────────────────────────────
+  // ── State broadcast ──────���──────────────────────────────────────────
 
   private broadcastGameState(): void {
     // Capture timestamp once — used for both broadcast and position history
     // so the client's serverTimestamp matches our rewind buffer exactly.
     const serverTimestamp = Date.now();
-    this.recordPositionHistory(serverTimestamp);
+    this.lagCompensation.recordPositionHistory(serverTimestamp, this.entities);
 
-    const isKeyframe = this.tick % ServerEngine.KEYFRAME_INTERVAL === 0;
+    // Sync callbacks to broadcast subsystem
+    this.broadcast.onBroadcast = this.onBroadcast;
+    this.broadcast.onBroadcastUnreliable = this.onBroadcastUnreliable;
 
-    if (isKeyframe) {
-      this.broadcastKeyframe(serverTimestamp);
-      // On keyframe ticks, flush events separately (keyframe msg type has no events field)
-      for (const event of this.pendingEvents) {
-        this.onBroadcast?.(event);
-      }
-    } else {
-      // On delta ticks, bundle events into the update message to reduce WebSocket frames
-      this.broadcastDelta(serverTimestamp);
-    }
+    this.broadcast.broadcastGameState(
+      this.tick,
+      ServerEngine.KEYFRAME_INTERVAL,
+      serverTimestamp,
+      this.entities,
+      this.pendingEvents,
+      this.castingSystem,
+      this.buffSystem,
+      this.combatSystem,
+      this.gasCloudSystem,
+      this.chemPoolSystem,
+      this.targets,
+    );
+
     this.pendingEvents = [];
-  }
-
-  /** Full keyframe — sent periodically and used by clients to reset state. */
-  private broadcastKeyframe(serverTimestamp: number): void {
-    const entities: EntitySnapshot[] = this.entities.map(e => {
-      const snapshot = e.toSnapshot();
-      const casting = this.castingSystem.getState(e);
-      if (casting) {
-        snapshot.castingAbilityId = casting.ability.id;
-        snapshot.castingElapsed = casting.elapsed;
-        snapshot.castingTotalTime = casting.totalTime;
-        snapshot.castingIsChannel = casting.isChannel;
-      }
-      // While channeling, lock targetEntityId to the channel target so the
-      // beam doesn't follow UI re-targets.
-      snapshot.targetEntityId = (casting?.isChannel && casting.target)
-        ? casting.target.id
-        : (this.targets.get(e.id) ?? null);
-      return snapshot;
-    });
-
-    const buffs = this.buildBuffSnapshots();
-    const gasClouds = this.buildGasCloudSnapshots();
-    const chemicalPools = this.buildChemPoolSnapshots();
-
-    const msg: S2C_GameStateSnapshot = {
-      type: 'game_state_snapshot',
-      tick: this.tick,
-      timestamp: serverTimestamp,
-      entities,
-      buffs,
-      gasClouds,
-      chemicalPools,
-    };
-
-    this.onBroadcast?.(msg);
-
-    // Update last-broadcast tracking to match keyframe
-    for (const e of entities) {
-      this.lastBroadcastState.set(e.id, {
-        hp: e.hp, maxHp: e.maxHp, mana: e.mana, maxMana: e.maxMana,
-        dead: e.dead, inCombat: e.inCombat, stunned: e.stunned, charging: e.charging,
-        isAutoAttacking: e.isAutoAttacking,
-        castingAbilityId: e.castingAbilityId, castingElapsed: e.castingElapsed,
-        castingTotalTime: e.castingTotalTime, castingIsChannel: e.castingIsChannel,
-        targetEntityId: e.targetEntityId,
-        disconnected: e.disconnected ?? false,
-      });
-    }
-    for (const b of buffs) {
-      this.lastBroadcastBuffs.set(b.entityId, b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}`).join(','));
-    }
-    this.lastBroadcastGasCloudIds = gasClouds.map(gc => gc.id).join(',');
-    this.lastBroadcastChemPoolSig = chemicalPools.map(cp => `${cp.id}:${cp.consumed}`).join(',');
-  }
-
-  /** Delta update — positions always, state/buffs only when changed. */
-  private broadcastDelta(serverTimestamp: number): void {
-    // Positions: only include entities whose position/rotation actually changed
-    const positions: EntityPositionData[] = [];
-    for (const e of this.entities) {
-      const prev = this.lastBroadcastPosition.get(e.id);
-      if (!prev
-        || Math.abs(prev.x - e.x) > ServerEngine.POSITION_EPSILON
-        || Math.abs(prev.y - e.y) > ServerEngine.POSITION_EPSILON
-        || Math.abs(prev.z - e.z) > ServerEngine.POSITION_EPSILON
-        || Math.abs(prev.rotationY - e.rotationY) > ServerEngine.ROTATION_EPSILON
-        || prev.isMoving !== e.isMoving
-      ) {
-        positions.push({
-          id: e.id, x: e.x, y: e.y, z: e.z,
-          rotationY: e.rotationY, isMoving: e.isMoving,
-          vx: e.vx, vz: e.vz,
-          moveFlags: e.moveFlags, moveSpeed: e.moveSpeed, vy: e.vy, turnSpeed: e.turnSpeed,
-        });
-        this.lastBroadcastPosition.set(e.id, {
-          x: e.x, y: e.y, z: e.z,
-          rotationY: e.rotationY, isMoving: e.isMoving,
-          vx: e.vx, vz: e.vz,
-        });
-      }
-    }
-
-    // State deltas: only entities whose combat/status state changed
-    const states: EntityStateDelta[] = [];
-    for (const e of this.entities) {
-      const casting = this.castingSystem.getState(e);
-      const castingAbilityId = casting?.ability.id ?? null;
-      const castingElapsed = casting?.elapsed ?? 0;
-      const castingTotalTime = casting?.totalTime ?? 0;
-      const castingIsChannel = casting?.isChannel ?? false;
-      // Lock to channel target while channeling (same as keyframe)
-      const targetEntityId = (casting?.isChannel && casting?.target)
-        ? casting.target.id
-        : (this.targets.get(e.id) ?? null);
-
-      const prev = this.lastBroadcastState.get(e.id);
-      if (!prev) {
-        // First time seeing this entity — send full state
-        const delta: EntityStateDelta = {
-          id: e.id,
-          hp: e.hp, maxHp: e.maxHp, mana: e.mana, maxMana: e.maxMana,
-          dead: e.dead, inCombat: e.inCombat, stunned: e.stunned, charging: e.charging,
-          isAutoAttacking: e.isAutoAttacking,
-          castingAbilityId, castingElapsed, castingTotalTime, castingIsChannel,
-          targetEntityId,
-          disconnected: e.disconnected,
-        };
-        states.push(delta);
-        this.lastBroadcastState.set(e.id, {
-          hp: e.hp, maxHp: e.maxHp, mana: e.mana, maxMana: e.maxMana,
-          dead: e.dead, inCombat: e.inCombat, stunned: e.stunned, charging: e.charging,
-          isAutoAttacking: e.isAutoAttacking,
-          castingAbilityId, castingElapsed, castingTotalTime, castingIsChannel,
-          targetEntityId,
-          disconnected: e.disconnected,
-        });
-        continue;
-      }
-
-      // Build delta of only changed fields
-      const delta: EntityStateDelta = { id: e.id };
-      let hasChanges = false;
-
-      if (prev.hp !== e.hp) { delta.hp = e.hp; prev.hp = e.hp; hasChanges = true; }
-      if (prev.maxHp !== e.maxHp) { delta.maxHp = e.maxHp; prev.maxHp = e.maxHp; hasChanges = true; }
-      if (prev.mana !== e.mana) { delta.mana = e.mana; prev.mana = e.mana; hasChanges = true; }
-      if (prev.maxMana !== e.maxMana) { delta.maxMana = e.maxMana; prev.maxMana = e.maxMana; hasChanges = true; }
-      if (prev.dead !== e.dead) { delta.dead = e.dead; prev.dead = e.dead; hasChanges = true; }
-      if (prev.inCombat !== e.inCombat) { delta.inCombat = e.inCombat; prev.inCombat = e.inCombat; hasChanges = true; }
-      if (prev.stunned !== e.stunned) { delta.stunned = e.stunned; prev.stunned = e.stunned; hasChanges = true; }
-      if (prev.charging !== e.charging) { delta.charging = e.charging; prev.charging = e.charging; hasChanges = true; }
-      if (prev.isAutoAttacking !== e.isAutoAttacking) { delta.isAutoAttacking = e.isAutoAttacking; prev.isAutoAttacking = e.isAutoAttacking; hasChanges = true; }
-      if (prev.castingAbilityId !== castingAbilityId) { delta.castingAbilityId = castingAbilityId; prev.castingAbilityId = castingAbilityId; hasChanges = true; }
-      // Only send castingElapsed on significant events (cast start, pushback, interrupt),
-      // not every tick. Clients advance it locally at 60fps for smooth animation.
-      // Detect significant change: abilityId changed OR totalTime changed (pushback) OR elapsed reset
-      const castingEvent = prev.castingAbilityId !== castingAbilityId
-        || prev.castingTotalTime !== castingTotalTime
-        || (castingElapsed < prev.castingElapsed && castingAbilityId !== null);
-      if (castingEvent && prev.castingElapsed !== castingElapsed) { delta.castingElapsed = castingElapsed; hasChanges = true; }
-      prev.castingElapsed = castingElapsed;
-      if (prev.castingTotalTime !== castingTotalTime) { delta.castingTotalTime = castingTotalTime; prev.castingTotalTime = castingTotalTime; hasChanges = true; }
-      if (prev.castingIsChannel !== castingIsChannel) { delta.castingIsChannel = castingIsChannel; prev.castingIsChannel = castingIsChannel; hasChanges = true; }
-      if (prev.targetEntityId !== targetEntityId) { delta.targetEntityId = targetEntityId; prev.targetEntityId = targetEntityId; hasChanges = true; }
-      if (prev.disconnected !== e.disconnected) { delta.disconnected = e.disconnected; prev.disconnected = e.disconnected; hasChanges = true; }
-
-      if (hasChanges) states.push(delta);
-    }
-
-    // Buffs: only include entities whose buff list changed in a meaningful way.
-    // Use a lightweight signature (buff ids + shield values + remaining rounded up)
-    // instead of JSON.stringify. Remaining is rounded to avoid sending every tick,
-    // but still detects duration refreshes (e.g. 0.3s → 8s).
-    const allBuffs = this.buildBuffSnapshots();
-    const changedBuffs: EntityBuffSnapshot[] = [];
-    for (const b of allBuffs) {
-      const drSig = b.drTimers ? b.drTimers.map(dr => `dr:${dr.category}:${dr.count}:${Math.ceil(dr.remaining)}`).join(',') : '';
-      const sig = b.buffs.map(buf => `${buf.id}:${buf.shieldRemaining ?? ''}:${Math.ceil(buf.remaining)}`).join(',') + '|' + drSig;
-      const prevSig = this.lastBroadcastBuffs.get(b.entityId);
-      if (sig !== prevSig) {
-        changedBuffs.push(b);
-        this.lastBroadcastBuffs.set(b.entityId, sig);
-      }
-    }
-
-    // World effects: only include when the set of active effects actually changed
-    // (spawn/despawn/consumed state change), not every tick while they exist
-    const gasClouds = this.buildGasCloudSnapshots();
-    const chemPools = this.buildChemPoolSnapshots();
-    const gasIdSig = gasClouds.map(gc => gc.id).join(',');
-    const chemSig = chemPools.map(cp => `${cp.id}:${cp.consumed}`).join(',');
-    const gasChanged = gasIdSig !== this.lastBroadcastGasCloudIds;
-    const chemChanged = chemSig !== this.lastBroadcastChemPoolSig;
-    if (gasChanged) this.lastBroadcastGasCloudIds = gasIdSig;
-    if (chemChanged) this.lastBroadcastChemPoolSig = chemSig;
-
-    // Always send at least a heartbeat so clients keep their interpolation
-    // buffer calibrated — skipping ticks causes jitter spikes in the adaptive delay.
-    const hasPositions = positions.length > 0;
-    const hasStates = states.length > 0;
-    const hasBuffs = changedBuffs.length > 0;
-    const hasEvents = this.pendingEvents.length > 0;
-
-    // ── Unreliable channel: positions only ──
-    // Sent via WebRTC DataChannel to bypass TCP head-of-line blocking.
-    // If unreliable callback isn't wired, positions are included in the reliable msg below.
-    const hasUnreliable = !!this.onBroadcastUnreliable;
-    if (hasUnreliable) {
-      const posMsg: S2C_PositionUpdate = {
-        type: 'position_update',
-        tick: this.tick,
-        timestamp: serverTimestamp,
-        positions,
-      };
-      this.onBroadcastUnreliable!(posMsg);
-    }
-
-    // ── Reliable channel: state deltas, buffs, events ──
-    // Positions are always included for clients without a DataChannel (fallback)
-    // and for the snapshot buffer's tick/timestamp calibration. Clients with a DC
-    // get positions twice — unreliable arrives first, reliable is a harmless no-op.
-    const msg: S2C_GameStateUpdate = {
-      type: 'game_state_update',
-      tick: this.tick,
-      timestamp: serverTimestamp,
-      positions,
-    };
-
-    if (hasStates) msg.states = states;
-    if (hasBuffs) msg.buffs = changedBuffs;
-    if (gasChanged) msg.gasClouds = gasClouds;
-    if (chemChanged) msg.chemicalPools = chemPools;
-    if (hasEvents) msg.events = this.pendingEvents as S2C_GameStateUpdate['events'];
-
-    this.onBroadcast?.(msg);
-  }
-
-  private buildBuffSnapshots(): EntityBuffSnapshot[] {
-    return this.entities.map(e => {
-      const drTimers = this.buffSystem.getDRTimers(e);
-      return {
-        entityId: e.id,
-        buffs: this.buffSystem.getAllBuffs(e).map(b => ({
-          id: b.definition.id,
-          name: b.definition.name,
-          icon: b.definition.icon,
-          type: b.definition.type,
-          remaining: b.remaining,
-          duration: b.definition.duration,
-          description: getBuffDescription(b.definition, b.stacks),
-          shieldRemaining: b.shieldRemaining,
-          effects: b.definition.effects.length > 0 ? b.definition.effects : undefined,
-          unremovable: b.definition.unremovable || undefined,
-          stacks: b.stacks,
-          maxStacks: b.definition.maxStacks,
-        })),
-        drTimers: drTimers.length > 0 ? drTimers : undefined,
-      };
-    });
-  }
-
-  private buildGasCloudSnapshots(): GasCloudSnapshot[] {
-    return this.gasCloudSystem.clouds.map(gc => ({
-      id: gc.id,
-      x: gc.centerX, y: gc.centerY, z: gc.centerZ,
-      radius: gc.radius, elapsed: gc.elapsed, duration: gc.duration,
-    }));
-  }
-
-  private buildChemPoolSnapshots(): ChemicalPoolSnapshot[] {
-    return this.chemPoolSystem.pools.map(cp => ({
-      id: cp.id,
-      x: cp.centerX, y: cp.centerY, z: cp.centerZ,
-      radius: cp.radius, elapsed: cp.elapsed, duration: cp.duration,
-      activationDelay: cp.activationDelay, consumed: cp.consumed,
-    }));
   }
 
   /** Returns full current state for a rejoining player. */
   getFullState(): { buffs: EntityBuffSnapshot[]; gasClouds: GasCloudSnapshot[]; chemicalPools: ChemicalPoolSnapshot[]; cooldowns: CooldownSnapshot[] } {
-    return {
-      buffs: this.buildBuffSnapshots(),
-      gasClouds: this.buildGasCloudSnapshots(),
-      chemicalPools: this.buildChemPoolSnapshots(),
-      cooldowns: this.combatSystem.getAllCooldowns(),
-    };
+    return this.broadcast.getFullState(
+      this.entities,
+      this.buffSystem,
+      this.combatSystem,
+      this.gasCloudSystem,
+      this.chemPoolSystem,
+    );
   }
 
-  // ── Elevator (Celestial Ballroom) ───────────────────────────────────
+  // ── Elevator (Celestial Ballroom) ───��───────────────────────────────
 
-  /** Compute the current elevator Y position from game elapsed time. */
   /** Seconds since the game engine started (matches client ArenaScript.elapsed). */
   getGameElapsed(): number {
     if (this.startTime === 0) return 0;
