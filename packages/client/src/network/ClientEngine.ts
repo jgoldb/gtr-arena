@@ -7,7 +7,7 @@ import type {
   S2C_EntityDied, S2C_PositionRelay, S2C_PositionUpdate,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits, getCharacterStats, GLOBAL_COOLDOWN } from '@gtr/shared';
+import { getCharacterStats } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -26,7 +26,9 @@ import { ClientSoundManager } from './ClientSoundManager';
 import { PositionSync } from './PositionSync';
 import { RemoteEntityRenderer } from './RemoteEntityRenderer';
 import { DeadReckoning } from './DeadReckoning';
-import { keybindManager } from '../ui/KeybindManager';
+import { ClientInputHandler } from './ClientInputHandler';
+import { ClientStateSync } from './ClientStateSync';
+import { ClientAbilitySystem } from './ClientAbilitySystem';
 
 interface RemoteEntity {
   id: string;
@@ -85,24 +87,8 @@ export class ClientEngine {
   private readonly positionSync: PositionSync;
   private readonly remoteRenderer: RemoteEntityRenderer;
 
-  // Cooldowns (local tracking from server updates)
-  private cooldowns = new Map<string, { remaining: number; total: number }>();
-  private gcd: { remaining: number; total: number } | null = null;
-
-  // Ability queue — fires the queued ability the instant GCD/cast ends (like WoW's SpellQueueWindow)
-  private static readonly QUEUE_WINDOW = 0.4; // 400ms — ability can be queued during the last 400ms of GCD/cast
-  private queuedAbility: { abilityId: string; targetEntityId: string | null; groundTarget?: { x: number; z: number } } | null = null;
-  /** Callback invoked when a queued ability is ready to fire. Set by main.ts to handle targeting/validation. */
-  onQueuedAbilityReady: ((abilityId: string) => void) | null = null;
-
-  // Client-side ability prediction — apply GCD/cooldown/animation immediately, reconcile on server response
-  private static readonly PREDICTION_TIMEOUT = 0.5; // revert prediction if no server response within 500ms
-  private pendingPrediction: {
-    abilityId: string;
-    predictedAt: number; // performance.now()
-    cooldownPredicted: boolean;
-    castPredicted: boolean;
-  } | null = null;
+  // Extracted subsystem: ability prediction, cooldowns, queue
+  readonly abilitySystem: ClientAbilitySystem;
 
   // Local entity casting state (from server snapshots, or predicted locally)
   private localCastingAbilityId: string | null = null;
@@ -131,11 +117,11 @@ export class ClientEngine {
 
   // Resting state
   private resting = false;
-  private rKeyWasDown = false;
-  private tabKeyWasDown = false;
-  private fKeyWasDown = false;
-  private gKeyWasDown = false;
   private restingSentAt = 0; // timestamp when resting was requested, to ignore stale server updates
+
+  // Extracted subsystems
+  private readonly inputHandler: ClientInputHandler;
+  private readonly stateSync: ClientStateSync;
 
   // God mode (admin only)
   isAdmin = false;
@@ -155,6 +141,8 @@ export class ClientEngine {
   onAbilitySuccess?: (abilityId: string) => void;
   onManaDrained?: (amount: number) => void;
   onAbilityEffect?: (entityId: string, abilityId: string) => void;
+  /** Callback invoked when a queued ability is ready to fire. Set by MultiplayerUI. */
+  onQueuedAbilityReady: ((abilityId: string) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement, network: NetworkManager, mapId: string, localEntityId: string, initialEntities: EntitySnapshot[]) {
     this.network = network;
@@ -264,6 +252,103 @@ export class ClientEngine {
 
     this.positionSync = new PositionSync(network, () => this.playerController);
     this.remoteRenderer = new RemoteEntityRenderer(this.deadReckoning, () => this.mapManager.collision);
+
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const engine = this;
+    this.inputHandler = new ClientInputHandler({
+      input: this.input,
+      targetingSystem: this.targetingSystem,
+      isPlayerDead: () => this.playerController.dead,
+      isPlayerStunned: () => this.playerController.stunned,
+      isPlayerInCombat: () => this.playerController.inCombat,
+      isPlayerGrounded: () => this.playerController.grounded,
+      getSelectedTargetId: () => this.selectedTargetId,
+      getLocalEntityId: () => this.localEntityId,
+      isResting: () => this.resting,
+      isAdmin: () => this.isAdmin,
+      isCasting: () => !!this.localCastingAbilityId,
+      isBlinded: () => this.blindEffect.isActive(),
+      startResting: () => this.startResting(),
+      stopResting: () => this.stopResting(),
+      selectTarget: (t) => this.selectTarget(t),
+      sendCancelCast: () => this.sendCancelCast(),
+      sendGodModeToggle: () => this.network.send({ type: 'toggle_god_mode' }),
+      rightClickAttack: (id) => { if (this.resting) this.stopResting(); this.sendAutoAttack(id); },
+      getVisibleHostileTargetables: () =>
+        this.getAllRemoteEntities().filter(e => !this.isEntityInvisibleToLocal(e.id)).map(e => e.targetable),
+      findEntityIdByTargetable: (t) => this.findEntityIdByTargetable(t),
+      isEntityInvisibleToLocal: (id) => this.isEntityInvisibleToLocal(id),
+      isHostileToLocal: (t) => t.isHostileTo(this.playerController),
+      getRemoteEntityTargetId: (id) => this.remoteEntities.get(id)?.targetEntityId ?? null,
+      getTargetableById: (id) => id === this.localEntityId
+        ? (this.playerController as unknown as import('../engine/types').Targetable)
+        : this.remoteEntities.get(id)?.targetable ?? null,
+      get onGroundTargetConfirmed() { return engine.onGroundTargetConfirmed; },
+    });
+
+    this.stateSync = new ClientStateSync({
+      localEntityId: this.localEntityId,
+      playerController: this.playerController,
+      sound: this.sound,
+      getRemoteEntity: (id) => this.remoteEntities.get(id),
+      get localCastingAbilityId() { return engine.localCastingAbilityId; },
+      set localCastingAbilityId(v) { engine.localCastingAbilityId = v; },
+      get localCastingElapsed() { return engine.localCastingElapsed; },
+      set localCastingElapsed(v) { engine.localCastingElapsed = v; },
+      get localCastingTotalTime() { return engine.localCastingTotalTime; },
+      set localCastingTotalTime(v) { engine.localCastingTotalTime = v; },
+      get localCastingIsChannel() { return engine.localCastingIsChannel; },
+      set localCastingIsChannel(v) { engine.localCastingIsChannel = v; },
+      get localTargetEntityId() { return engine.localTargetEntityId; },
+      set localTargetEntityId(v) { engine.localTargetEntityId = v; },
+      get localBuffs() { return engine.localBuffs; },
+      set localBuffs(v) { engine.localBuffs = v; },
+      get localDRTimers() { return engine.localDRTimers; },
+      set localDRTimers(v) { engine.localDRTimers = v; },
+      get resting() { return engine.resting; },
+      set resting(v) { engine.resting = v; },
+      get restingSentAt() { return engine.restingSentAt; },
+      get selectedTargetId() { return engine.selectedTargetId; },
+      isPredictingCast: (abilityId) => engine.abilitySystem.isPredictingCast(abilityId),
+      clearPendingPrediction: () => engine.abilitySystem.clearPendingPrediction(),
+      clearQueuedAbility: () => engine.abilitySystem.clearAbilityQueue(),
+      selectTarget: (t) => engine.selectTarget(t),
+      activateBlind: (canvas) => engine.blindEffect.activate(canvas),
+      deactivateBlind: () => engine.blindEffect.deactivate(),
+      isBlinded: () => engine.blindEffect.isActive(),
+      getRendererCanvas: () => engine.renderer.getCanvas(),
+      getLocalTeam: () => (engine.playerController as any).team,
+      get onEnterCombat() { return engine.onEnterCombat; },
+      get onLeaveCombat() { return engine.onLeaveCombat; },
+      get onBuffApplied() { return engine.onBuffApplied; },
+      get onBuffExpired() { return engine.onBuffExpired; },
+    });
+
+    this.abilitySystem = new ClientAbilitySystem({
+      localEntityId: this.localEntityId,
+      sound: this.sound,
+      getPlayerCharacterId: () => this.playerController.characterId as CharacterId,
+      getPlayerMana: () => this.playerController.mana,
+      setPlayerMana: (v) => { (this.playerController as any).mana = v; },
+      isPlayerMoving: () => this.playerController.isMoving,
+      isPlayerGrounded: () => this.playerController.grounded,
+      isPlayerDead: () => this.playerController.dead,
+      isPlayerStunned: () => this.playerController.stunned,
+      isPlayerCharging: () => this.playerController.charging,
+      triggerAbilityAnimation: (id, pos) => this.playerController.triggerAbilityAnimation(id, pos),
+      getEntityMeshPosition: (id) => this.getEntityMesh(id)?.position.clone(),
+      get localCastingAbilityId() { return engine.localCastingAbilityId; },
+      set localCastingAbilityId(v) { engine.localCastingAbilityId = v; },
+      get localCastingElapsed() { return engine.localCastingElapsed; },
+      set localCastingElapsed(v) { engine.localCastingElapsed = v; },
+      get localCastingTotalTime() { return engine.localCastingTotalTime; },
+      set localCastingTotalTime(v) { engine.localCastingTotalTime = v; },
+      get localCastingIsChannel() { return engine.localCastingIsChannel; },
+      set localCastingIsChannel(v) { engine.localCastingIsChannel = v; },
+      getLocalBuffEffects: () => engine.localBuffs,
+      get onCooldownUpdate() { return engine.onCooldownUpdate; },
+      get onQueuedAbilityReady() { return engine.onQueuedAbilityReady; },
+    });
 
     // Dumpster Dive emerge SFX (local Crackhead player)
     if ('onDumpsterEmerge' in this.playerController.model) {
@@ -409,13 +494,13 @@ export class ClientEngine {
     // Apply state deltas (only present for entities whose state changed)
     if (msg.states) {
       this.snapshotBuffer.applyStateDeltas(msg.states);
-      this.applyEntityStateDeltas(msg.states);
+      this.stateSync.applyEntityStateDeltas(msg.states);
     }
 
     // Apply buff updates (only present for entities whose buffs changed)
     if (msg.buffs) {
       this.snapshotBuffer.applyBuffUpdates(msg.buffs);
-      this.applyBuffUpdates(msg.buffs);
+      this.stateSync.applyBuffUpdates(msg.buffs);
     }
 
     // Update world effects
@@ -486,18 +571,18 @@ export class ClientEngine {
     // Apply full entity state
     for (const snap of msg.entities) {
       if (snap.id === this.localEntityId) {
-        this.applyLocalEntityState(snap);
+        this.stateSync.applyLocalEntityState(snap);
         continue;
       }
       let entity = this.remoteEntities.get(snap.id);
       if (!entity) {
         entity = this.createRemoteEntity(snap);
       }
-      this.applyRemoteEntityState(entity, snap);
+      this.stateSync.applyRemoteEntityState(entity, snap);
     }
 
     // Apply all buffs
-    this.applyBuffUpdates(msg.buffs);
+    this.stateSync.applyBuffUpdates(msg.buffs);
 
     // Update chemical pool consumed state
     this.effects.syncChemPoolState(msg.chemicalPools);
@@ -577,193 +662,6 @@ export class ClientEngine {
     this.deadReckoning.removeEntity(entityId);
   }
 
-  /** Apply state deltas to local player and remote entities. */
-  private applyEntityStateDeltas(deltas: import('@gtr/shared').EntityStateDelta[]): void {
-    for (const delta of deltas) {
-      if (delta.id === this.localEntityId) {
-        const pc = this.playerController;
-        if (delta.hp !== undefined) pc.hp = delta.hp;
-        if (delta.maxHp !== undefined) pc.maxHp = delta.maxHp;
-        if (delta.mana !== undefined) pc.mana = delta.mana;
-        if (delta.maxMana !== undefined) pc.maxMana = delta.maxMana;
-        if (delta.dead !== undefined) {
-          if (delta.dead && !pc.dead) { pc.die(); this.queuedAbility = null; }
-          else if (!delta.dead && pc.dead) pc.respawn();
-          pc.dead = delta.dead;
-        }
-        if (delta.inCombat !== undefined) {
-          if (delta.inCombat && !pc.inCombat) this.onEnterCombat?.(delta.id);
-          else if (!delta.inCombat && pc.inCombat) this.onLeaveCombat?.(delta.id);
-          pc.inCombat = delta.inCombat;
-        }
-        if (delta.stunned !== undefined) { pc.stunned = delta.stunned; pc.setStunned(delta.stunned); if (delta.stunned) this.queuedAbility = null; }
-        if (delta.charging !== undefined) pc.charging = delta.charging;
-        if (delta.isAutoAttacking !== undefined) pc.setAutoAttacking(delta.isAutoAttacking);
-        if ('castingAbilityId' in delta) {
-          // Server confirmed the cast we predicted — clear prediction so it won't timeout/revert
-          if (this.pendingPrediction?.castPredicted && delta.castingAbilityId === this.pendingPrediction.abilityId) {
-            this.pendingPrediction = null;
-          }
-          this.sound.updateBandageLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
-          this.sound.updateCastSpellLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
-          this.localCastingAbilityId = delta.castingAbilityId!;
-        }
-        if (delta.castingElapsed !== undefined) this.localCastingElapsed = delta.castingElapsed;
-        if (delta.castingTotalTime !== undefined) this.localCastingTotalTime = delta.castingTotalTime;
-        if (delta.castingIsChannel !== undefined) this.localCastingIsChannel = delta.castingIsChannel;
-        if ('targetEntityId' in delta) this.localTargetEntityId = delta.targetEntityId!;
-        continue;
-      }
-
-      const entity = this.remoteEntities.get(delta.id);
-      if (!entity) continue;
-
-      // Detect cast start for auto-targeting
-      const wasCasting = entity.castingAbilityId;
-
-      if (delta.hp !== undefined) entity.hp = delta.hp;
-      if (delta.maxHp !== undefined) entity.maxHp = delta.maxHp;
-      if (delta.mana !== undefined) entity.mana = delta.mana;
-      if (delta.maxMana !== undefined) entity.maxMana = delta.maxMana;
-      if (delta.dead !== undefined) entity.dead = delta.dead;
-      if (delta.inCombat !== undefined) entity.inCombat = delta.inCombat;
-      if (delta.stunned !== undefined) entity.stunned = delta.stunned;
-      if (delta.charging !== undefined) entity.charging = delta.charging;
-      if (delta.isAutoAttacking !== undefined) entity.isAutoAttacking = delta.isAutoAttacking;
-      if ('castingAbilityId' in delta) {
-        this.sound.updateBandageLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
-        this.sound.updateCastSpellLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
-        entity.castingAbilityId = delta.castingAbilityId!;
-      }
-      if (delta.castingElapsed !== undefined) entity.castingElapsed = delta.castingElapsed;
-      if (delta.castingTotalTime !== undefined) entity.castingTotalTime = delta.castingTotalTime;
-      if (delta.castingIsChannel !== undefined) entity.castingIsChannel = delta.castingIsChannel;
-      if ('targetEntityId' in delta) entity.targetEntityId = delta.targetEntityId!;
-      if (delta.disconnected !== undefined) entity.disconnected = delta.disconnected;
-
-      // Auto-target hostile entity that begins casting on us (not while blinded)
-      if (!wasCasting && entity.castingAbilityId && entity.targetEntityId === this.localEntityId
-          && !this.selectedTargetId && entity.team !== this.playerController.team && !this.blindEffect.isActive()) {
-        this.selectTarget(entity.targetable);
-      }
-    }
-  }
-
-  /** Apply full state from a keyframe snapshot to the local player. */
-  private applyLocalEntityState(snap: EntitySnapshot): void {
-    const pc = this.playerController;
-    pc.hp = snap.hp;
-    pc.maxHp = snap.maxHp;
-    pc.mana = snap.mana;
-    pc.maxMana = snap.maxMana;
-    if (snap.dead && !pc.dead) pc.die();
-    else if (!snap.dead && pc.dead) pc.respawn();
-    pc.dead = snap.dead;
-    pc.inCombat = snap.inCombat;
-    pc.stunned = snap.stunned;
-    pc.charging = snap.charging;
-    pc.setAutoAttacking(snap.isAutoAttacking);
-    pc.setStunned(snap.stunned);
-    this.sound.updateBandageLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
-    this.sound.updateCastSpellLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
-    this.localCastingAbilityId = snap.castingAbilityId;
-    this.localCastingElapsed = snap.castingElapsed;
-    this.localCastingTotalTime = snap.castingTotalTime;
-    this.localCastingIsChannel = snap.castingIsChannel;
-    this.localTargetEntityId = snap.targetEntityId;
-  }
-
-  /** Apply full state from a keyframe snapshot to a remote entity. */
-  private applyRemoteEntityState(entity: RemoteEntity, snap: EntitySnapshot): void {
-    entity.hp = snap.hp;
-    entity.maxHp = snap.maxHp;
-    entity.mana = snap.mana;
-    entity.maxMana = snap.maxMana;
-    entity.dead = snap.dead;
-    entity.inCombat = snap.inCombat;
-    entity.stunned = snap.stunned;
-    entity.charging = snap.charging;
-    entity.isMoving = snap.isMoving;
-    entity.isAutoAttacking = snap.isAutoAttacking;
-    this.sound.updateBandageLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
-    this.sound.updateCastSpellLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
-    entity.castingAbilityId = snap.castingAbilityId;
-    entity.castingElapsed = snap.castingElapsed;
-    entity.castingTotalTime = snap.castingTotalTime;
-    entity.castingIsChannel = snap.castingIsChannel;
-    entity.targetEntityId = snap.targetEntityId;
-    entity.disconnected = snap.disconnected ?? false;
-  }
-
-  /** Apply buff updates to local player and remote entity visuals. */
-  private applyBuffUpdates(buffSnapshots: EntityBuffSnapshot[]): void {
-    for (const buffSnap of buffSnapshots) {
-      if (buffSnap.entityId === this.localEntityId) {
-        // Detect buff transitions for combat text
-        const oldIds = new Set(this.localBuffs.map(b => b.id));
-        const newIds = new Set(buffSnap.buffs.map(b => b.id));
-        for (const b of buffSnap.buffs) {
-          if (!oldIds.has(b.id)) {
-            this.onBuffApplied?.(buffSnap.entityId, b);
-            this.sound.playBuffAppliedSfx(buffSnap.entityId, b.id);
-          }
-        }
-        for (const b of this.localBuffs) {
-          if (!newIds.has(b.id)) this.onBuffExpired?.(buffSnap.entityId, b);
-        }
-
-        this.localBuffs = buffSnap.buffs;
-        this.localDRTimers = buffSnap.drTimers;
-        // Sync resting state from server — but ignore stale updates that arrive
-        // before the server has processed our resting request (grace period 500ms)
-        const restingGraceExpired = performance.now() - this.restingSentAt > 500;
-        if (this.resting && restingGraceExpired && !this.localBuffs.some(b => b.id === 'resting')) {
-          this.resting = false;
-          this.playerController.setResting(false);
-        }
-        const hasBuff = (id: string) => this.localBuffs.some(b => b.id === id);
-        this.playerController.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
-        this.playerController.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
-        this.playerController.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
-        this.playerController.setAbilityBuffActive('dumpster-diving', hasBuff('dumpster-diving'));
-        this.playerController.setAbilityBuffActive('overdosing', hasBuff('overdosing'));
-        this.playerController.setDiscombobulated(this.localBuffs.some(b => b.id === 'discombobulate'));
-
-        // Blind: activate/deactivate effect, clear target on first application
-        const isNowBlinded = this.localBuffs.some(b => b.id === 'blinded');
-        if (isNowBlinded && !this.blindEffect.isActive()) {
-          this.blindEffect.activate(this.renderer.getCanvas());
-          this.selectTarget(null);
-        } else if (!isNowBlinded && this.blindEffect.isActive()) {
-          this.blindEffect.deactivate();
-        }
-        continue;
-      }
-      const entity = this.remoteEntities.get(buffSnap.entityId);
-      if (entity) {
-        // Detect rotten-crotch / od-stun application for struck SFX
-        if (
-          (buffSnap.buffs.some(b => b.id === 'rotten-crotch') && !entity.buffs.some(b => b.id === 'rotten-crotch')) ||
-          (buffSnap.buffs.some(b => b.id === 'od-stun') && !entity.buffs.some(b => b.id === 'od-stun'))
-        ) {
-          this.sound.playBuffAppliedSfx(entity.id, 'rotten-crotch');
-        }
-        entity.buffs = buffSnap.buffs;
-        entity.drTimers = buffSnap.drTimers;
-        const hasBuff = (id: string) => buffSnap.buffs.some(b => b.id === id);
-        entity.model.setAbilityBuffActive('crash-out', hasBuff('crash-out'));
-        entity.model.setAbilityBuffActive('retard-strength', hasBuff('retard-strength'));
-        entity.model.setAbilityBuffActive('full-retard', hasBuff('full-retard'));
-        const dumpsterDiving = hasBuff('dumpster-diving');
-        if ('dumpsterDiveHostile' in entity.model) {
-          (entity.model as any).dumpsterDiveHostile = dumpsterDiving && entity.team !== (this.playerController as any).team;
-        }
-        entity.model.setAbilityBuffActive('dumpster-diving', dumpsterDiving);
-        entity.model.setAbilityBuffActive('overdosing', hasBuff('overdosing'));
-        entity.model.setResting(hasBuff('resting'));
-      }
-    }
-  }
 
   handleCombatEvent(msg: S2C_CombatEvent): void {
     this.onCombatText?.(msg.sourceEntityId, msg.targetEntityId, msg.amount, msg.combatType);
@@ -802,9 +700,9 @@ export class ClientEngine {
 
     if (msg.entityId === this.localEntityId) {
       // If we predicted this ability, clear prediction state
-      const predicted = this.pendingPrediction?.abilityId === msg.abilityId;
+      const predicted = this.abilitySystem.getPendingPredictionAbilityId() === msg.abilityId;
       if (predicted) {
-        this.pendingPrediction = null;
+        this.abilitySystem.clearPendingPrediction();
       }
       // Play animation if not predicted, OR if it was a ground-targeted prediction
       // (ground predictions skip animation during prediction, deferring to server confirmation)
@@ -930,12 +828,7 @@ export class ClientEngine {
   }
 
   handleCooldownUpdate(msg: S2C_CooldownUpdate): void {
-    if (msg.abilityId === '__gcd__') {
-      this.gcd = { remaining: msg.remaining, total: msg.total };
-      return;
-    }
-    this.cooldowns.set(msg.abilityId, { remaining: msg.remaining, total: msg.total });
-    this.onCooldownUpdate?.(msg.abilityId, msg.remaining, msg.total);
+    this.abilitySystem.handleCooldownUpdate(msg);
   }
 
 
@@ -994,19 +887,19 @@ export class ClientEngine {
   }
 
   getCooldownRemaining(abilityId: string): number {
-    return this.cooldowns.get(abilityId)?.remaining ?? 0;
+    return this.abilitySystem.getCooldownRemaining(abilityId);
   }
 
   getCooldownTotal(abilityId: string): number {
-    return this.cooldowns.get(abilityId)?.total ?? 0;
+    return this.abilitySystem.getCooldownTotal(abilityId);
   }
 
   getGcdRemaining(): number {
-    return this.gcd?.remaining ?? 0;
+    return this.abilitySystem.getGcdRemaining();
   }
 
   getGcdTotal(): number {
-    return this.gcd?.total ?? 0;
+    return this.abilitySystem.getGcdTotal();
   }
 
   getLocalCastingState(): { abilityId: string; elapsed: number; totalTime: number; isChannel: boolean } | null {
@@ -1019,150 +912,23 @@ export class ClientEngine {
     };
   }
 
-  // ── Ability queue ────────────────────────────────────────────────────
+  // ── Ability queue / prediction (delegated to abilitySystem) ──────
 
-  /** Queue an ability to fire the instant GCD/cast ends. Replaces any existing queue. */
   queueAbility(abilityId: string, targetEntityId: string | null, groundTarget?: { x: number; z: number }): void {
-    this.queuedAbility = { abilityId, targetEntityId, groundTarget };
+    this.abilitySystem.queueAbility(abilityId, targetEntityId, groundTarget);
   }
 
-  clearAbilityQueue(): void {
-    this.queuedAbility = null;
-  }
+  clearAbilityQueue(): void { this.abilitySystem.clearAbilityQueue(); }
+  getQueuedAbilityId(): string | null { return this.abilitySystem.getQueuedAbilityId(); }
+  isWithinQueueWindow(remaining: number): boolean { return this.abilitySystem.isWithinQueueWindow(remaining); }
 
-  getQueuedAbilityId(): string | null {
-    return this.queuedAbility?.abilityId ?? null;
-  }
-
-  /** Returns true if the remaining time is within the queue window. */
-  isWithinQueueWindow(remaining: number): boolean {
-    return remaining > 0 && remaining <= ClientEngine.QUEUE_WINDOW;
-  }
-
-  // ── Client-side ability prediction ──────────────────────────────────
-
-  /**
-   * Optimistically predict ability effects locally before server confirms.
-   * Call immediately before sendAbility(). Applies GCD, cooldown, mana, animation/cast bar.
-   * Server response reconciles via handleCooldownUpdate/handleAbilityEffect/state deltas.
-   */
   predictAbility(abilityId: string, targetEntityId: string | null): void {
-    const stats = getCharacterStats(this.playerController.characterId as CharacterId);
-    const ability = stats.abilities.find(a => a !== null && a.id === abilityId);
-    if (!ability) return;
-
-    const pc = this.playerController as any;
-
-    // Predict GCD (CC-immune abilities bypass GCD)
-    if (!ability.usableWhileCCd) {
-      this.gcd = { remaining: GLOBAL_COOLDOWN, total: GLOBAL_COOLDOWN };
-    }
-
-    // Predict ability cooldown
-    let cooldownPredicted = false;
-    if (ability.cooldown > 0) {
-      this.cooldowns.set(abilityId, { remaining: ability.cooldown, total: ability.cooldown });
-      this.onCooldownUpdate?.(abilityId, ability.cooldown, ability.cooldown);
-      cooldownPredicted = true;
-    }
-
-    // Predict mana deduction
-    const effectiveCost = Math.round(ability.manaCost * this.getManaCostMultiplier());
-    if (effectiveCost > 0) {
-      pc.mana = Math.max(0, pc.mana - effectiveCost);
-    }
-
-    // Predict cast bar for cast-time abilities (only if not moving/falling — server rejects casts while moving)
-    let castPredicted = false;
-    if (ability.castTime && !pc.isMoving && pc.grounded) {
-      this.sound.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
-      this.sound.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
-      this.localCastingAbilityId = abilityId;
-      this.localCastingElapsed = 0;
-      this.localCastingTotalTime = ability.castTime;
-      this.localCastingIsChannel = !!ability.isChannel;
-      castPredicted = true;
-    }
-
-    // Predict animation for instant-cast abilities (cast animations are driven by casting state)
-    if (!ability.castTime) {
-      const targetPos = targetEntityId ? this.getEntityMesh(targetEntityId)?.position.clone() : undefined;
-      this.playerController.triggerAbilityAnimation(abilityId, targetPos);
-    }
-
-    this.pendingPrediction = {
-      abilityId,
-      predictedAt: performance.now(),
-      cooldownPredicted,
-      castPredicted,
-    };
+    this.abilitySystem.predictAbility(abilityId, targetEntityId);
   }
 
-  /**
-   * Predict GCD/cooldown/mana for a ground-targeted ability (skip animation — projectile
-   * animations are complex and rely on server-provided ground position).
-   */
-  predictGroundAbility(abilityId: string): void {
-    const stats = getCharacterStats(this.playerController.characterId as CharacterId);
-    const ability = stats.abilities.find(a => a !== null && a.id === abilityId);
-    if (!ability) return;
-
-    const pc = this.playerController as any;
-
-    if (!ability.usableWhileCCd) {
-      this.gcd = { remaining: GLOBAL_COOLDOWN, total: GLOBAL_COOLDOWN };
-    }
-
-    let cooldownPredicted = false;
-    if (ability.cooldown > 0) {
-      this.cooldowns.set(abilityId, { remaining: ability.cooldown, total: ability.cooldown });
-      this.onCooldownUpdate?.(abilityId, ability.cooldown, ability.cooldown);
-      cooldownPredicted = true;
-    }
-
-    const effectiveCost = Math.round(ability.manaCost * this.getManaCostMultiplier());
-    if (effectiveCost > 0) {
-      pc.mana = Math.max(0, pc.mana - effectiveCost);
-    }
-
-    this.pendingPrediction = {
-      abilityId,
-      predictedAt: performance.now(),
-      cooldownPredicted,
-      castPredicted: false,
-    };
-  }
-
-  /**
-   * Revert a pending prediction (called when server sends an error or prediction times out).
-   * Mana and cooldowns are corrected naturally by server deltas within 1-2 ticks.
-   * GCD and casting state need explicit revert since no server update will clear them.
-   */
-  revertPrediction(): void {
-    if (!this.pendingPrediction) return;
-    const pred = this.pendingPrediction;
-    this.pendingPrediction = null;
-
-    // Revert predicted GCD — server didn't trigger one
-    this.gcd = null;
-
-    // Revert predicted cooldown — server didn't set one
-    if (pred.cooldownPredicted) {
-      this.cooldowns.delete(pred.abilityId);
-    }
-
-    // Revert predicted cast bar
-    if (pred.castPredicted && this.localCastingAbilityId === pred.abilityId) {
-      this.sound.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, null);
-      this.sound.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, null);
-      this.localCastingAbilityId = null;
-      this.localCastingElapsed = 0;
-      this.localCastingTotalTime = 0;
-      this.localCastingIsChannel = false;
-    }
-
-    // Mana: let server's next state delta correct it (within 50-100ms)
-  }
+  predictGroundAbility(abilityId: string): void { this.abilitySystem.predictGroundAbility(abilityId); }
+  revertPrediction(): void { this.abilitySystem.revertPrediction(); }
+  getManaCostMultiplier(): number { return this.abilitySystem.getManaCostMultiplier(); }
 
   getLocalBuffs(): EntityBuffSnapshot['buffs'] {
     return this.localBuffs;
@@ -1170,18 +936,6 @@ export class ClientEngine {
 
   getLocalDRTimers(): EntityBuffSnapshot['drTimers'] {
     return this.localDRTimers;
-  }
-
-  getManaCostMultiplier(): number {
-    let mult = 1;
-    for (const buff of this.localBuffs) {
-      if (buff.effects) {
-        for (const effect of buff.effects) {
-          if (effect.type === 'manaCostPercent') mult += effect.value / 100;
-        }
-      }
-    }
-    return Math.max(0, mult);
   }
 
   /** Get the Three.js group for an entity (for raycasting/combat text positioning) */
@@ -1231,30 +985,6 @@ export class ClientEngine {
 
   sendSetTarget(targetEntityId: string | null): void {
     this.network.send({ type: 'set_target', targetEntityId });
-  }
-
-  /** Check if the queued ability can fire (GCD done, not casting, not incapacitated). */
-  private processAbilityQueue(): void {
-    if (!this.queuedAbility) return;
-
-    const pc = this.playerController as any;
-
-    // Clear queue if player can't act
-    if (pc.dead || pc.stunned || pc.charging) {
-      this.queuedAbility = null;
-      return;
-    }
-
-    // Still on GCD
-    if (this.gcd && this.gcd.remaining > 0) return;
-
-    // Still casting (non-channel blocks queue; channel doesn't block action bar)
-    if (this.localCastingAbilityId && !this.localCastingIsChannel) return;
-
-    // Ready to fire — use callback so main.ts handles target resolution & validation
-    const { abilityId } = this.queuedAbility;
-    this.queuedAbility = null;
-    this.onQueuedAbilityReady?.(abilityId);
   }
 
   /** Returns true if the entity is hostile and currently untargetable (e.g. dumpster-diving). */
@@ -1371,15 +1101,8 @@ export class ClientEngine {
    * remaining timers, gas cloud / chem pool visuals, and sweep charge.
    */
   private fastForwardTimers(gap: number): void {
-    // Cooldowns
-    for (const [id, cd] of this.cooldowns) {
-      cd.remaining = Math.max(0, cd.remaining - gap);
-      if (cd.remaining <= 0) this.cooldowns.delete(id);
-    }
-    if (this.gcd) {
-      this.gcd.remaining -= gap;
-      if (this.gcd.remaining <= 0) this.gcd = null;
-    }
+    // Cooldowns and GCD
+    this.abilitySystem.fastForward(gap);
 
     // Buff remaining timers (local + remote)
     for (const b of this.localBuffs) {
@@ -1473,51 +1196,8 @@ export class ClientEngine {
       this.playerController.setChannelAnimation(null, 0);
     }
 
-    // Resting toggle
-    const rKeyDown = this.input.isBindDown(keybindManager.getCode('rest'));
-    if (rKeyDown && !this.rKeyWasDown) {
-      if (this.resting) {
-        this.stopResting();
-      } else {
-        this.startResting();
-      }
-    }
-    this.rKeyWasDown = rKeyDown;
-
-    // God mode toggle — "G" key (admin only, sends to server)
-    const gKeyDown = this.input.isKeyDown('KeyG');
-    if (gKeyDown && !this.gKeyWasDown && this.isAdmin) {
-      this.network.send({ type: 'toggle_god_mode' });
-    }
-    this.gKeyWasDown = gKeyDown;
-
-    // Cancel casting on jump or falling
-    if (this.localCastingAbilityId && (this.input.isBindDown(keybindManager.getCode('jump')) || !this.playerController.grounded)) {
-      this.sendCancelCast();
-    }
-
-    // Cancel resting on movement or jump
-    if (this.resting) {
-      const wDown = this.input.isBindDown(keybindManager.getCode('move_forward'));
-      const sDown = this.input.isBindDown(keybindManager.getCode('move_backward'));
-      const aDown = this.input.isBindDown(keybindManager.getCode('move_left'));
-      const dDown = this.input.isBindDown(keybindManager.getCode('move_right'));
-      const bothMouse = this.input.isMouseButtonDown('left') && this.input.isMouseButtonDown('right');
-      const jumping = this.input.isBindDown(keybindManager.getCode('jump'));
-      if (wDown || sDown || aDown || dDown || bothMouse || jumping) {
-        this.stopResting();
-      }
-    }
-
-    // Cancel resting on entering combat or taking damage
-    if (this.resting && this.playerController.inCombat) {
-      this.stopResting();
-    }
-
-    // Cancel resting on stun or death
-    if (this.resting && (this.playerController.stunned || this.playerController.dead)) {
-      this.stopResting();
-    }
+    // Process action keys (resting, god mode, cancel cast)
+    this.inputHandler.updateActions();
 
     // Update camera (same as playground)
     this.thirdPersonCamera.update(dt);
@@ -1526,27 +1206,8 @@ export class ClientEngine {
     // Send position updates (30Hz + immediate on state change)
     this.positionSync.update(dt);
 
-    // Update cooldowns
-    for (const [id, cd] of this.cooldowns) {
-      cd.remaining = Math.max(0, cd.remaining - dt);
-      if (cd.remaining <= 0) this.cooldowns.delete(id);
-    }
-    if (this.gcd) {
-      this.gcd.remaining -= dt;
-      if (this.gcd.remaining <= 0) this.gcd = null;
-    }
-
-    // Process ability queue — fire queued ability the instant GCD/cast ends
-    this.processAbilityQueue();
-
-    // Revert prediction if server hasn't responded within timeout.
-    // Cast-time predictions skip this — they're confirmed by ability_effect on completion
-    // or reverted by server error. The timeout only applies to instant abilities.
-    if (this.pendingPrediction &&
-        !this.pendingPrediction.castPredicted &&
-        performance.now() - this.pendingPrediction.predictedAt > ClientEngine.PREDICTION_TIMEOUT * 1000) {
-      this.revertPrediction();
-    }
+    // Update cooldowns, ability queue, and prediction timeout
+    this.abilitySystem.update(dt);
 
     // Locally decrement buff remaining timers so UI stays smooth between
     // server updates (server only sends buff changes on add/remove/shield change)
@@ -1577,82 +1238,8 @@ export class ClientEngine {
     // Update charge systems (sweep, tweaker sprint, knockbacks)
     this.charges.update(dt);
 
-    // Tab targeting — nearest hostile in front within 30 yards (blocked while blinded)
-    const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
-    if (tabDown && !this.tabKeyWasDown && !this.blindEffect.isActive()) {
-      const hostiles = this.getAllRemoteEntities().filter(e => !this.isEntityInvisibleToLocal(e.id)).map(e => e.targetable);
-      this.targetingSystem.selectNearestHostileInFront(hostiles, yardsToUnits(30));
-      const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
-      if (newTargetId !== this.selectedTargetId) {
-        this.selectedTargetId = newTargetId;
-        this.sendSetTarget(newTargetId);
-        this.onTargetChanged?.(newTargetId);
-      }
-    }
-    this.tabKeyWasDown = tabDown;
-
-    // Target of target key
-    const fDown = this.input.isBindDown(keybindManager.getCode('target_of_target'));
-    if (fDown && !this.fKeyWasDown && this.selectedTargetId) {
-      const isSelf = this.selectedTargetId === this.localEntityId;
-      const totId = isSelf
-        ? this.selectedTargetId
-        : this.getRemoteEntity(this.selectedTargetId)?.targetEntityId ?? null;
-      if (totId && totId !== this.selectedTargetId && !this.isEntityInvisibleToLocal(totId)) {
-        const totTargetable = totId === this.localEntityId
-          ? (this.playerController as unknown as Targetable)
-          : this.getRemoteEntity(totId)?.targetable ?? null;
-        if (totTargetable) {
-          this.targetingSystem.currentTarget = totTargetable;
-          this.selectedTargetId = totId;
-          this.sendSetTarget(totId);
-          this.onTargetChanged?.(totId);
-        }
-      }
-    }
-    this.fKeyWasDown = fDown;
-
-    // Process left click for target selection
-    const leftClick = this.input.getLeftClick();
-    if (leftClick) {
-      if (this.targetingSystem.groundTargetActive) {
-        if (!this.targetingSystem.groundTargetBlocked) {
-          this.onGroundTargetConfirmed?.();
-        }
-      } else if (!this.input.isMouseButtonDown('right')) {
-        // Only process target selection on normal left clicks — not while
-        // right-click drag (pointer lock) is active, to avoid accidentally
-        // clearing the current target.
-        this.targetingSystem.processClick(leftClick.x, leftClick.y);
-        const newTargetId = this.findEntityIdByTargetable(this.targetingSystem.currentTarget);
-        if (newTargetId !== this.selectedTargetId) {
-          this.selectedTargetId = newTargetId;
-          this.sendSetTarget(newTargetId);
-          this.onTargetChanged?.(newTargetId);
-        }
-      }
-    }
-
-    // Process right click for auto-attack
-    const rightClick = this.input.getRightClick();
-    if (rightClick) {
-      const target = this.targetingSystem.processRightClick(rightClick.x, rightClick.y);
-      if (target) {
-        const targetId = this.findEntityIdByTargetable(target);
-        if (targetId && targetId !== this.selectedTargetId) {
-          this.selectedTargetId = targetId;
-          this.sendSetTarget(targetId);
-          this.onTargetChanged?.(targetId);
-        }
-        if (targetId && target.isHostileTo(this.playerController) && !target.dead) {
-          if (this.resting) this.stopResting();
-          this.sendAutoAttack(targetId);
-        }
-      }
-    }
-
-    // Update cursor for hover detection (only when pointer is unlocked)
-    this.targetingSystem.updateHoverCursor(this.input.getMouseScreenPos(), this.input.isMouseButtonDown('right'));
+    // Process targeting keys and mouse clicks (tab, focus target, left/right click)
+    this.inputHandler.updateTargeting();
 
     // Update targeting ring animation + target highlight
     this.targetingSystem.update(dt);
