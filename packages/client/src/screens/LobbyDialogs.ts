@@ -1,0 +1,758 @@
+import type { NetworkManager } from '../network/NetworkManager';
+import type { UserProfileData } from '@gtr/shared';
+import { CHARACTER_LIST, xpToLevel, xpProgress } from '@gtr/shared';
+import { keybindManager, matchesKeybindEvent } from '../ui/KeybindManager';
+
+export class LobbyDialogs {
+  private container: HTMLDivElement;
+  private network: NetworkManager;
+  private profileOverlay: HTMLDivElement | null = null;
+  private profileUsername: string | null = null;
+
+  constructor(container: HTMLDivElement, network: NetworkManager) {
+    this.container = container;
+    this.network = network;
+  }
+
+  // ── Level badge ────────────────────────────────────────────────────
+
+  createLevelBadge(level: number, size: number): HTMLDivElement {
+    const badge = document.createElement('div');
+    const borderWidth = Math.max(2, Math.round(size * 0.06));
+    badge.style.cssText = `
+      width: ${size}px; height: ${size}px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+      background: radial-gradient(circle at 35% 35%, rgba(30,28,18,0.95), rgba(12,10,6,0.98));
+      border: ${borderWidth}px solid transparent;
+      background-clip: padding-box;
+    `;
+
+    // Golden ring (outer glow + ring)
+    const ring = document.createElement('div');
+    ring.style.cssText = `
+      position: absolute; inset: -${borderWidth + 1}px; border-radius: 50%;
+      border: ${borderWidth}px solid transparent;
+      background: linear-gradient(135deg, #c9a84c, #f0d878, #a07828, #f0d878, #c9a84c) border-box;
+      -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      filter: drop-shadow(0 0 ${Math.round(size * 0.08)}px rgba(200,170,60,0.4));
+    `;
+    badge.appendChild(ring);
+
+    // Inner decorative ring
+    const innerRing = document.createElement('div');
+    innerRing.style.cssText = `
+      position: absolute; inset: ${Math.round(size * 0.06)}px; border-radius: 50%;
+      border: 1px solid rgba(200,170,60,0.2);
+      pointer-events: none;
+    `;
+    badge.appendChild(innerRing);
+
+    // Level number
+    const levelNum = document.createElement('div');
+    const fontSize = level >= 100 ? size * 0.32 : level >= 10 ? size * 0.4 : size * 0.46;
+    levelNum.textContent = String(level);
+    levelNum.style.cssText = `
+      font-size: ${fontSize}px; font-weight: 800; line-height: 1;
+      color: #e8d48c;
+      text-shadow: 0 0 8px rgba(200,170,60,0.4), 0 1px 2px rgba(0,0,0,0.6);
+      position: relative; z-index: 1;
+      font-family: 'Georgia', 'Times New Roman', serif;
+    `;
+    badge.appendChild(levelNum);
+
+    return badge;
+  }
+
+  // ── Level-up animation ────────────────────────────────────────────
+
+  playLevelUpAnimation(
+    oldLevel: number,
+    newLevel: number,
+    localXp: number,
+    levelBadgeContainer: HTMLDivElement,
+    xpBarFill: HTMLDivElement,
+    xpText: HTMLDivElement,
+    renderLevelDisplay: () => void,
+  ): void {
+    // Re-render badge showing the OLD level so we can animate the transition
+    levelBadgeContainer.innerHTML = '';
+    levelBadgeContainer.appendChild(this.createLevelBadge(oldLevel, 52));
+
+    // Inject level-up keyframes once
+    if (!this.container.querySelector('#lby-levelup-style')) {
+      const style = document.createElement('style');
+      style.id = 'lby-levelup-style';
+      style.textContent = `
+        @keyframes lby-levelup-glow {
+          0% { box-shadow: 0 0 8px rgba(200,170,60,0.4); }
+          20% { box-shadow: 0 0 30px rgba(255,215,0,0.9), 0 0 60px rgba(255,200,50,0.5), 0 0 90px rgba(255,180,0,0.3); }
+          50% { box-shadow: 0 0 40px rgba(255,225,50,1), 0 0 80px rgba(255,200,50,0.6), 0 0 120px rgba(255,180,0,0.35); }
+          80% { box-shadow: 0 0 20px rgba(255,215,0,0.7), 0 0 50px rgba(255,200,50,0.3); }
+          100% { box-shadow: 0 0 8px rgba(200,170,60,0.4); }
+        }
+        @keyframes lby-levelup-spin {
+          0% { transform: rotate(0deg) scale(1); }
+          30% { transform: rotate(10deg) scale(1.15); }
+          60% { transform: rotate(-5deg) scale(1.2); }
+          100% { transform: rotate(0deg) scale(1); }
+        }
+        @keyframes lby-levelup-number-out {
+          0% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(0.3); filter: blur(4px); }
+        }
+        @keyframes lby-levelup-number-in {
+          0% { opacity: 0; transform: scale(2.5); filter: blur(6px); }
+          50% { opacity: 1; transform: scale(1.1); filter: blur(0); }
+          70% { transform: scale(0.95); }
+          100% { opacity: 1; transform: scale(1); filter: blur(0); }
+        }
+        @keyframes lby-levelup-burst {
+          0% { transform: scale(0); opacity: 1; }
+          50% { transform: scale(2.5); opacity: 0.6; }
+          100% { transform: scale(4); opacity: 0; }
+        }
+        @keyframes lby-levelup-sparkle {
+          0% { opacity: 0; transform: translate(0, 0) scale(0); }
+          20% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: translate(var(--sx), var(--sy)) scale(0); }
+        }
+      `;
+      this.container.appendChild(style);
+    }
+
+    const container = levelBadgeContainer;
+    const badge = container.querySelector('div') as HTMLDivElement;
+    if (!badge) { renderLevelDisplay(); return; }
+
+    // Wrap badge for animation
+    container.style.position = 'relative';
+
+    // Gold burst ring behind the badge
+    const burst = document.createElement('div');
+    burst.style.cssText = `
+      position: absolute; top: 50%; left: 50%; width: 52px; height: 52px;
+      margin-top: -26px; margin-left: -26px;
+      border-radius: 50%; pointer-events: none;
+      background: radial-gradient(circle, rgba(255,215,0,0.6), rgba(255,180,0,0.2), transparent 70%);
+      animation: lby-levelup-burst 1.2s ease-out forwards;
+    `;
+    container.appendChild(burst);
+
+    // Sparkle particles
+    for (let i = 0; i < 8; i++) {
+      const angle = (Math.PI * 2 * i) / 8;
+      const dist = 30 + Math.random() * 20;
+      const sparkle = document.createElement('div');
+      sparkle.style.cssText = `
+        position: absolute; top: 50%; left: 50%; width: 4px; height: 4px;
+        margin-top: -2px; margin-left: -2px;
+        border-radius: 50%; pointer-events: none;
+        background: #ffd700; box-shadow: 0 0 6px #ffd700;
+        --sx: ${Math.cos(angle) * dist}px; --sy: ${Math.sin(angle) * dist}px;
+        animation: lby-levelup-sparkle ${0.8 + Math.random() * 0.6}s ${0.1 + Math.random() * 0.3}s ease-out forwards;
+        opacity: 0;
+      `;
+      container.appendChild(sparkle);
+    }
+
+    // Animate the badge itself: glow + subtle spin
+    badge.style.animation = 'lby-levelup-glow 3s ease-in-out, lby-levelup-spin 1.5s ease-in-out';
+    badge.style.borderRadius = '50%';
+
+    // Find the level number element inside the badge (last child div with the level text)
+    const levelNumEl = badge.querySelector('div:last-child') as HTMLDivElement;
+    if (levelNumEl) {
+      // Fade out old number
+      levelNumEl.style.animation = 'lby-levelup-number-out 0.8s ease-in forwards';
+
+      // After fade-out, swap to new number and burst it in
+      setTimeout(() => {
+        levelNumEl.textContent = String(newLevel);
+        const fontSize = newLevel >= 100 ? 52 * 0.32 : newLevel >= 10 ? 52 * 0.4 : 52 * 0.46;
+        levelNumEl.style.fontSize = `${fontSize}px`;
+        levelNumEl.style.animation = 'lby-levelup-number-in 1s ease-out forwards';
+      }, 800);
+    }
+
+    // Update XP bar and text immediately
+    const progress = xpProgress(localXp);
+    const pct = progress.needed > 0 ? (progress.current / progress.needed) * 100 : 0;
+    xpBarFill.style.width = `${pct}%`;
+    xpText.textContent = `${progress.current} / ${progress.needed} XP`;
+
+    // After animation completes (~3s), clean up and show congratulations
+    setTimeout(() => {
+      // Clean up particles and burst
+      burst.remove();
+      container.querySelectorAll('[style*="lby-levelup-sparkle"]').forEach(el => el.remove());
+
+      // Reset badge animation
+      if (badge) badge.style.animation = '';
+
+      // Re-render cleanly
+      renderLevelDisplay();
+
+      // Show the congrats dialog
+      this.showLevelUpDialog(newLevel);
+    }, 3000);
+  }
+
+  private showLevelUpDialog(level: number): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      animation: lby-fade-in 0.15s ease both;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(14,16,32,0.98), rgba(6,8,18,0.99));
+      border: 1px solid rgba(200,170,60,0.3);
+      border-radius: 12px; padding: 0; min-width: 320px; overflow: hidden; text-align: center;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 40px rgba(200,170,60,0.1);
+      animation: lby-fade-in 0.25s ease both;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    `;
+
+    // Header with golden gradient
+    const header = document.createElement('div');
+    header.style.cssText = `
+      background: linear-gradient(135deg, rgba(80,60,10,0.6), rgba(60,40,5,0.4));
+      padding: 28px 32px 16px; border-bottom: 1px solid rgba(200,170,60,0.15);
+      position: relative; overflow: hidden;
+    `;
+    // Decorative glow
+    const glow = document.createElement('div');
+    glow.style.cssText = `
+      position: absolute; top: -30px; left: 50%; transform: translateX(-50%);
+      width: 200px; height: 100px;
+      background: radial-gradient(circle, rgba(255,215,0,0.15), transparent 70%);
+      pointer-events: none;
+    `;
+    header.appendChild(glow);
+
+    const titleEl = document.createElement('div');
+    titleEl.textContent = 'LEVEL UP';
+    titleEl.style.cssText = `
+      font-size: 12px; font-weight: 700; letter-spacing: 3px;
+      color: rgba(200,180,120,0.7); position: relative;
+    `;
+    header.appendChild(titleEl);
+
+    // Body
+    const body = document.createElement('div');
+    body.style.cssText = 'padding: 28px 32px 32px; display: flex; flex-direction: column; align-items: center; gap: 16px;';
+
+    // Large level badge
+    const badge = this.createLevelBadge(level, 80);
+    body.appendChild(badge);
+
+    const congratsEl = document.createElement('div');
+    congratsEl.textContent = `Congratulations!`;
+    congratsEl.style.cssText = `
+      font-size: 20px; font-weight: 700;
+      color: #e8d48c;
+      text-shadow: 0 0 12px rgba(200,170,60,0.3);
+    `;
+    body.appendChild(congratsEl);
+
+    const msgEl = document.createElement('div');
+    msgEl.textContent = `You have reached level ${level}.`;
+    msgEl.style.cssText = 'font-size: 14px; color: rgba(200,205,220,0.7); line-height: 1.5;';
+    body.appendChild(msgEl);
+
+    // Close button
+    const closeBtn = makeButton('Continue', 'linear-gradient(135deg, #5a4a1a, #3a3210)', 'linear-gradient(135deg, #6a5a2a, #4a4220)');
+    closeBtn.style.cssText += '; margin-top: 8px; border-color: rgba(200,170,60,0.25); color: #e8d48c; padding: 10px 32px;';
+    closeBtn.addEventListener('click', () => overlay.remove());
+    body.appendChild(closeBtn);
+
+    dialog.append(header, body);
+    overlay.appendChild(dialog);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    this.container.appendChild(overlay);
+  }
+
+  // ── Change password ───────────────────────────────────────────────
+
+  showChangePasswordDialog(): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      animation: lby-fade-in 0.15s ease both;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(18,20,35,0.98), rgba(8,10,18,0.99));
+      border: 1px solid rgba(100,120,200,0.15);
+      border-radius: 10px; padding: 32px 40px; min-width: 340px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(60,80,180,0.08);
+      animation: lby-fade-in 0.25s ease both;
+    `;
+
+    const title = document.createElement('div');
+    title.textContent = 'CHANGE PASSWORD';
+    title.style.cssText = `
+      font-size: 11px; font-weight: 700; letter-spacing: 2px;
+      color: rgba(130,150,210,0.8); margin-bottom: 24px;
+    `;
+
+    const makeInput = (placeholder: string): HTMLInputElement => {
+      const input = document.createElement('input');
+      input.type = 'password';
+      input.placeholder = placeholder;
+      input.className = 'lby-input';
+      input.style.cssText = `
+        width: 100%; padding: 10px 14px; font-size: 13px;
+        background: rgba(0,0,0,0.4); color: #ccc;
+        border: 1px solid rgba(100,120,200,0.12); border-radius: 6px; outline: none;
+        margin-bottom: 12px; box-sizing: border-box;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      `;
+      return input;
+    };
+
+    const currentPw = makeInput('Current password');
+    const newPw = makeInput('New password');
+    const confirmPw = makeInput('Confirm new password');
+
+    const errorEl = document.createElement('div');
+    errorEl.style.cssText = 'color: #cc4444; font-size: 12px; margin-bottom: 12px; min-height: 16px;';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display: flex; gap: 10px; justify-content: flex-end;';
+
+    const closeDialog = (): void => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      overlay.remove();
+    };
+
+    const cancelBtn = makeButton('Cancel', '#4a2a2a', '#5e3636');
+    cancelBtn.addEventListener('click', () => closeDialog());
+
+    const submitBtn = makeButton('Change', '#2a5090', '#3466b8');
+    submitBtn.style.fontWeight = '600';
+    submitBtn.addEventListener('click', () => {
+      errorEl.textContent = '';
+      if (!currentPw.value) { errorEl.textContent = 'Enter your current password'; return; }
+      if (!newPw.value) { errorEl.textContent = 'Enter a new password'; return; }
+      if (newPw.value.length < 3) { errorEl.textContent = 'New password must be at least 3 characters'; return; }
+      if (newPw.value !== confirmPw.value) { errorEl.textContent = 'Passwords do not match'; return; }
+      this.network.send({ type: 'change_password', currentPassword: currentPw.value, newPassword: newPw.value });
+      closeDialog();
+    });
+
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (matchesKeybindEvent(keybindManager.getCode('toggle_game_menu'), e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDialog();
+      }
+    };
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(submitBtn);
+
+    dialog.appendChild(title);
+    dialog.appendChild(currentPw);
+    dialog.appendChild(newPw);
+    dialog.appendChild(confirmPw);
+    dialog.appendChild(errorEl);
+    dialog.appendChild(btnRow);
+    overlay.appendChild(dialog);
+
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDialog(); });
+    this.container.appendChild(overlay);
+    document.addEventListener('keydown', onKeyDown, true);
+    currentPw.focus();
+  }
+
+  showChangePasswordResult(success: boolean, error?: string): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      animation: lby-fade-in 0.15s ease both;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(18,20,35,0.98), rgba(8,10,18,0.99));
+      border: 1px solid ${success ? 'rgba(60,200,100,0.3)' : 'rgba(200,60,60,0.3)'};
+      border-radius: 10px; padding: 32px 40px; min-width: 300px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+      animation: lby-fade-in 0.25s ease both; text-align: center;
+    `;
+
+    const msg = document.createElement('div');
+    msg.textContent = success ? 'Password changed successfully!' : (error || 'Failed to change password');
+    msg.style.cssText = `color: ${success ? '#66cc88' : '#cc4444'}; font-size: 14px; margin-bottom: 20px;`;
+
+    const closeBtn = makeButton('OK', '#3a3a50', '#4a4a66');
+    closeBtn.addEventListener('click', () => overlay.remove());
+
+    dialog.appendChild(msg);
+    dialog.appendChild(closeBtn);
+    overlay.appendChild(dialog);
+
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    this.container.appendChild(overlay);
+  }
+
+  // ── Profile dialog ────────────────────────────────────────────────
+
+  /** Update an already-open profile dialog if it matches the given username. */
+  updateOpenProfileDialog(profile: UserProfileData): void {
+    if (this.profileOverlay && this.profileUsername === profile.username) {
+      this.showProfileDialog(profile);
+    }
+  }
+
+  showProfileDialog(profile: UserProfileData): void {
+    // Remove existing profile dialog if open
+    this.profileOverlay?.remove();
+
+    this.profileUsername = profile.username;
+    const overlay = document.createElement('div');
+    this.profileOverlay = overlay;
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      animation: lby-fade-in 0.15s ease both;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(14,16,32,0.98), rgba(6,8,18,0.99));
+      border: 1px solid rgba(80,110,200,0.18);
+      border-radius: 12px; padding: 0; min-width: 340px; overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 60px rgba(40,60,160,0.06);
+      animation: lby-fade-in 0.25s ease both;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    `;
+
+    // Header banner
+    const header = document.createElement('div');
+    header.style.cssText = `
+      background: linear-gradient(135deg, rgba(30,50,100,0.6), rgba(50,30,90,0.4));
+      padding: 28px 32px 22px; border-bottom: 1px solid rgba(80,110,200,0.1);
+      position: relative; overflow: hidden;
+    `;
+    // Decorative glow
+    const glow = document.createElement('div');
+    glow.style.cssText = `
+      position: absolute; top: -40px; right: -20px; width: 120px; height: 120px;
+      background: radial-gradient(circle, rgba(80,120,255,0.12), transparent 70%);
+      pointer-events: none;
+    `;
+    header.appendChild(glow);
+
+    const nameEl = document.createElement('div');
+    nameEl.textContent = profile.username;
+    nameEl.style.cssText = 'font-size: 22px; font-weight: 700; color: #dde2f0; position: relative;';
+    const joinedEl = document.createElement('div');
+    const joinedDate = new Date(profile.createdAt + 'Z');
+    const lastPlayedText = profile.lastPlayed
+      ? new Date(profile.lastPlayed + 'Z').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+      : 'Never';
+    joinedEl.textContent = `Joined ${joinedDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+    joinedEl.style.cssText = 'font-size: 12px; color: rgba(130,150,200,0.6); margin-top: 4px; position: relative;';
+    const lastPlayedEl = document.createElement('div');
+    lastPlayedEl.textContent = `Last Played ${lastPlayedText}`;
+    lastPlayedEl.style.cssText = 'font-size: 12px; color: rgba(130,150,200,0.6); margin-top: 2px; position: relative;';
+    // Level badge (top-right of header)
+    const profileLevel = xpToLevel(profile.xp);
+    const profileLevelBadge = this.createLevelBadge(profileLevel, 48);
+    profileLevelBadge.style.position = 'absolute';
+    profileLevelBadge.style.top = '18px';
+    profileLevelBadge.style.right = '24px';
+    header.appendChild(profileLevelBadge);
+
+    header.append(nameEl, joinedEl, lastPlayedEl);
+
+    // Stats body
+    const body = document.createElement('div');
+    body.style.cssText = 'padding: 24px 32px 28px;';
+
+    const winRate = profile.gamesPlayed > 0 ? (profile.wins / profile.gamesPlayed * 100) : 0;
+
+    const statsGrid = document.createElement('div');
+    statsGrid.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr; gap: 16px;';
+
+    const addStat = (label: string, value: string, color: string) => {
+      const cell = document.createElement('div');
+      cell.style.cssText = `
+        background: rgba(15,18,35,0.6); border: 1px solid rgba(80,100,180,0.08);
+        border-radius: 8px; padding: 14px 16px; text-align: center;
+      `;
+      const valEl = document.createElement('div');
+      valEl.textContent = value;
+      valEl.style.cssText = `font-size: 24px; font-weight: 700; color: ${color}; line-height: 1;`;
+      const lblEl = document.createElement('div');
+      lblEl.textContent = label;
+      lblEl.style.cssText = 'font-size: 10px; font-weight: 600; letter-spacing: 1.5px; color: rgba(120,140,180,0.5); margin-top: 6px; text-transform: uppercase;';
+      cell.append(valEl, lblEl);
+      statsGrid.appendChild(cell);
+    };
+
+    addStat('Games Played', String(profile.gamesPlayed), '#8ab4f8');
+    addStat('Win Rate', profile.gamesPlayed > 0 ? `${winRate.toFixed(1)}%` : '-', winRate >= 50 ? '#66cc88' : '#cc8866');
+    addStat('Wins', String(profile.wins), '#66cc88');
+    addStat('Losses', String(profile.losses), '#cc6666');
+
+    body.appendChild(statsGrid);
+
+    // Per-character stats
+    if (profile.characterStats && profile.characterStats.length > 0) {
+      const charSection = document.createElement('div');
+      charSection.style.cssText = 'margin-top: 20px;';
+
+      const charHeader = document.createElement('div');
+      charHeader.textContent = 'CHARACTER STATS';
+      charHeader.style.cssText = 'font-size: 10px; font-weight: 600; letter-spacing: 1.5px; color: rgba(120,140,180,0.5); margin-bottom: 10px; text-transform: uppercase;';
+      charSection.appendChild(charHeader);
+
+      // Sort by games played descending
+      const sorted = [...profile.characterStats].sort((a, b) => b.gamesPlayed - a.gamesPlayed);
+      for (const cs of sorted) {
+        const charInfo = CHARACTER_LIST.find(c => c.id === cs.characterId);
+        const name = charInfo?.name ?? cs.characterId;
+        const charWinRate = cs.gamesPlayed > 0 ? (cs.wins / cs.gamesPlayed * 100) : 0;
+
+        const row = document.createElement('div');
+        row.style.cssText = `
+          display: flex; align-items: center; justify-content: space-between;
+          background: rgba(15,18,35,0.6); border: 1px solid rgba(80,100,180,0.08);
+          border-radius: 6px; padding: 10px 14px; margin-bottom: 6px;
+        `;
+
+        const charNameEl = document.createElement('div');
+        charNameEl.textContent = name;
+        charNameEl.style.cssText = 'font-size: 13px; font-weight: 600; color: #dde2f0;';
+
+        const statsEl = document.createElement('div');
+        statsEl.style.cssText = 'display: flex; gap: 12px; align-items: center; font-size: 12px;';
+
+        const gamesEl = document.createElement('span');
+        gamesEl.textContent = `${cs.gamesPlayed} played`;
+        gamesEl.style.cssText = 'color: #8ab4f8;';
+
+        const winsEl = document.createElement('span');
+        winsEl.textContent = `${cs.wins}W`;
+        winsEl.style.cssText = 'color: #66cc88;';
+
+        const lossesEl = document.createElement('span');
+        lossesEl.textContent = `${cs.losses}L`;
+        lossesEl.style.cssText = 'color: #cc6666;';
+
+        const wrEl = document.createElement('span');
+        wrEl.textContent = cs.gamesPlayed > 0 ? `${charWinRate.toFixed(0)}%` : '-';
+        wrEl.style.cssText = `color: ${charWinRate >= 50 ? '#66cc88' : '#cc8866'}; font-weight: 600; min-width: 32px; text-align: right;`;
+
+        statsEl.append(gamesEl, winsEl, lossesEl, wrEl);
+        row.append(charNameEl, statsEl);
+        charSection.appendChild(row);
+      }
+
+      body.appendChild(charSection);
+    }
+
+    // Close button
+    const closeRow = document.createElement('div');
+    closeRow.style.cssText = 'padding: 0 32px 20px; text-align: right;';
+    const closeBtn = makeButton('Close', '#3a3a50', '#4a4a66');
+    const closeProfile = () => {
+      overlay.remove();
+      if (this.profileOverlay === overlay) {
+        this.profileOverlay = null;
+        this.profileUsername = null;
+      }
+    };
+    closeBtn.addEventListener('click', closeProfile);
+    closeRow.appendChild(closeBtn);
+
+    dialog.append(header, body, closeRow);
+    overlay.appendChild(dialog);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeProfile(); });
+    this.container.appendChild(overlay);
+  }
+
+  // ── Leaderboard ───────────────────────────────────────────────────
+
+  showLeaderboard(entries: UserProfileData[]): void {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+      animation: lby-fade-in 0.15s ease both;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: linear-gradient(to bottom, rgba(14,16,32,0.98), rgba(6,8,18,0.99));
+      border: 1px solid rgba(80,110,200,0.18);
+      border-radius: 12px; padding: 0; min-width: 600px; max-width: 750px; max-height: 80vh;
+      overflow: hidden; display: flex; flex-direction: column;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.6), 0 0 60px rgba(40,60,160,0.06);
+      animation: lby-fade-in 0.25s ease both;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    `;
+
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = `
+      background: linear-gradient(135deg, rgba(30,50,100,0.6), rgba(50,30,90,0.4));
+      padding: 22px 32px; border-bottom: 1px solid rgba(80,110,200,0.1);
+      display: flex; justify-content: space-between; align-items: center;
+      flex-shrink: 0;
+    `;
+    const title = document.createElement('div');
+    title.textContent = 'LEADERBOARD';
+    title.style.cssText = 'font-size: 12px; font-weight: 700; letter-spacing: 2px; color: rgba(130,150,210,0.8);';
+    const closeBtn = makeButton('Close', '#3a3a50', '#4a4a66');
+    closeBtn.addEventListener('click', () => overlay.remove());
+    header.append(title, closeBtn);
+
+    // Table container
+    const tableWrap = document.createElement('div');
+    tableWrap.className = 'lby-scrollbar';
+    tableWrap.style.cssText = 'flex: 1; overflow-y: auto; padding: 16px 24px 24px;';
+
+    const table = document.createElement('table');
+    table.style.cssText = 'width: 100%; border-collapse: collapse; font-size: 13px;';
+
+    type SortKey = 'username' | 'level' | 'gamesPlayed' | 'wins' | 'losses' | 'winRate' | 'lastPlayed';
+    let sortKey: SortKey = 'wins';
+    let sortAsc = false;
+
+    const columns: { key: SortKey; label: string; align?: string }[] = [
+      { key: 'username', label: 'Player' },
+      { key: 'level', label: 'Level' },
+      { key: 'gamesPlayed', label: 'Games' },
+      { key: 'wins', label: 'Wins' },
+      { key: 'losses', label: 'Losses' },
+      { key: 'winRate', label: 'Win %' },
+      { key: 'lastPlayed', label: 'Last Played' },
+    ];
+
+    const getValue = (e: UserProfileData, key: SortKey): string | number => {
+      if (key === 'level') return xpToLevel(e.xp);
+      if (key === 'winRate') return e.gamesPlayed > 0 ? e.wins / e.gamesPlayed : 0;
+      if (key === 'lastPlayed') return e.lastPlayed ?? '';
+      return e[key as keyof UserProfileData] as string | number;
+    };
+
+    const renderTable = () => {
+      table.innerHTML = '';
+
+      // Thead
+      const thead = document.createElement('thead');
+      const hRow = document.createElement('tr');
+      for (const col of columns) {
+        const th = document.createElement('th');
+        const arrow = sortKey === col.key ? (sortAsc ? ' ▲' : ' ▼') : '';
+        th.textContent = col.label + arrow;
+        th.style.cssText = `
+          padding: 10px 12px; text-align: left; font-size: 10px; font-weight: 700;
+          letter-spacing: 1px; color: rgba(130,150,210,0.6); text-transform: uppercase;
+          border-bottom: 1px solid rgba(80,100,180,0.12); cursor: pointer;
+          user-select: none; white-space: nowrap; transition: color 0.15s;
+        `;
+        if (sortKey === col.key) th.style.color = 'rgba(160,180,255,0.9)';
+        th.addEventListener('mouseenter', () => { th.style.color = 'rgba(160,180,255,0.9)'; });
+        th.addEventListener('mouseleave', () => { th.style.color = sortKey === col.key ? 'rgba(160,180,255,0.9)' : 'rgba(130,150,210,0.6)'; });
+        th.addEventListener('click', () => {
+          if (sortKey === col.key) { sortAsc = !sortAsc; } else { sortKey = col.key; sortAsc = col.key === 'username'; }
+          renderTable();
+        });
+        hRow.appendChild(th);
+      }
+      thead.appendChild(hRow);
+      table.appendChild(thead);
+
+      // Sort entries
+      const sorted = [...entries].sort((a, b) => {
+        const av = getValue(a, sortKey);
+        const bv = getValue(b, sortKey);
+        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        return sortAsc ? cmp : -cmp;
+      });
+
+      // Tbody
+      const tbody = document.createElement('tbody');
+      for (const entry of sorted) {
+        const tr = document.createElement('tr');
+        tr.style.cssText = 'transition: background 0.15s;';
+        tr.addEventListener('mouseenter', () => { tr.style.background = 'rgba(40,50,80,0.2)'; });
+        tr.addEventListener('mouseleave', () => { tr.style.background = 'transparent'; });
+
+        const wr = entry.gamesPlayed > 0 ? (entry.wins / entry.gamesPlayed * 100) : 0;
+        const level = xpToLevel(entry.xp);
+        const lastPlayed = entry.lastPlayed
+          ? new Date(entry.lastPlayed + 'Z').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+          : 'Never';
+
+        const values: { text: string; color: string }[] = [
+          { text: entry.username, color: '#bbc4dd' },
+          { text: String(level), color: '#c8b478' },
+          { text: String(entry.gamesPlayed), color: '#8ab4f8' },
+          { text: String(entry.wins), color: '#66cc88' },
+          { text: String(entry.losses), color: '#cc6666' },
+          { text: entry.gamesPlayed > 0 ? `${wr.toFixed(1)}%` : '-', color: wr >= 50 ? '#66cc88' : '#cc8866' },
+          { text: lastPlayed, color: 'rgba(150,160,190,0.6)' },
+        ];
+
+        for (const v of values) {
+          const td = document.createElement('td');
+          td.textContent = v.text;
+          td.style.cssText = `padding: 10px 12px; color: ${v.color}; border-bottom: 1px solid rgba(80,100,180,0.05); white-space: nowrap;`;
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+    };
+
+    renderTable();
+    tableWrap.appendChild(table);
+    dialog.append(header, tableWrap);
+    overlay.appendChild(dialog);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    this.container.appendChild(overlay);
+  }
+}
+
+// ── Shared helper ─────────────────────────────────────────────────
+
+export function makeButton(text: string, bg: string, hoverBg: string): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.className = 'lby-btn';
+  btn.textContent = text;
+  btn.style.cssText = `
+    padding: 8px 18px; font-size: 12px; font-weight: 500;
+    background: ${bg}; color: rgba(220,225,240,0.9);
+    border: 1px solid rgba(255,255,255,0.06); border-radius: 5px;
+    cursor: pointer; outline: none; white-space: nowrap;
+  `;
+  btn.addEventListener('mouseenter', () => { btn.style.background = hoverBg; });
+  btn.addEventListener('mouseleave', () => { btn.style.background = bg; });
+  return btn;
+}
