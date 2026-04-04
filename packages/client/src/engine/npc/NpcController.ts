@@ -3,7 +3,6 @@ import { CharacterModel, AnimationInput } from '../player/characters/CharacterMo
 import { createCharacter, CharacterId } from '../player/characters';
 import type { Targetable } from '../types';
 import { createTargetingHitArea } from '../targeting/targetingHitArea';
-import { getCharacterStats, isRangedAutoAttack, GLOBAL_COOLDOWN } from '@gtr/shared';
 import type { NpcAiBrain } from './ai/NpcAiBrain';
 
 const IDLE_INPUT: AnimationInput = {
@@ -44,16 +43,10 @@ export class NpcController implements Targetable {
   /** AI brain — null means zombie/passive mode (existing behavior) */
   aiBrain: NpcAiBrain | null = null;
 
-  // NPC auto-attack
+  // NPC auto-attack target (set by AI brain / Engine, swung by shared AutoAttackSystem)
   autoAttackTarget: Targetable | null = null;
-  onAutoAttackHit?: (attacker: Targetable, target: Targetable, damage: number) => boolean;
-  getAutoAttackSpeedMultiplier?: () => number;
-  checkLineOfSight?: (a: THREE.Vector3, b: THREE.Vector3) => boolean;
   resolveGround?: (x: number, z: number, y: number) => number;
-  private autoAttackTimer = 0;
   private wasInCombat = false;
-  private rangedResumeDelay = 0;
-  private rangedWasMoving = false;
 
   constructor(characterId: CharacterId, position: THREE.Vector3, team = 1, name = 'NPC') {
     this.name = name;
@@ -93,6 +86,10 @@ export class NpcController implements Targetable {
 
   get dodgeChance(): number {
     return this.characterModel.dodgeChance;
+  }
+
+  get autoAttackRange(): number {
+    return this.characterModel.autoAttackRange;
   }
 
   setStunned(active: boolean): void {
@@ -139,62 +136,13 @@ export class NpcController implements Targetable {
       this.aiBrain.update(dt);
     }
 
-    // Combat state transitions
+    // Combat state transitions (auto-attack swinging is driven by Engine's shared AutoAttackSystem)
     if (this.inCombat && !this.wasInCombat) {
-      // Entered combat — begin auto-attacking
       this.characterModel.setAutoAttacking(true);
-      this.autoAttackTimer = 0;
-      // Ranged NPCs get a GCD delay before first shot
-      if (isRangedAutoAttack(getCharacterStats(this.characterId))) {
-        this.rangedResumeDelay = GLOBAL_COOLDOWN;
-      }
     } else if (!this.inCombat && this.wasInCombat) {
-      // Left combat — stop auto-attacking
       this.characterModel.setAutoAttacking(false);
-      this.autoAttackTimer = 0;
     }
     this.wasInCombat = this.inCombat;
-
-    // Auto-attack logic (stunned/blinded NPCs cannot attack)
-    const target = this.autoAttackTarget;
-    if (this.inCombat && target && !target.dead && !this.stunned && !this.blinded) {
-      const dx = target.mesh.position.x - this.mesh.position.x;
-      const dz = target.mesh.position.z - this.mesh.position.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-
-      // Facing check (120° cone, same as player)
-      const toTarget = new THREE.Vector3(dx, 0, dz).normalize();
-      const rotY = this.mesh.rotation.y;
-      const forward = new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY));
-      const facing = forward.dot(toTarget) > 0.5;
-
-      // Swing timer (always ticks — ranged movement check is at fire time)
-      this.autoAttackTimer += dt;
-      const isRanged = isRangedAutoAttack(getCharacterStats(this.characterId));
-      // Ranged: detect movement→stop transition and add GCD delay
-      if (isRanged && this.rangedWasMoving && !this.isMoving) {
-        this.rangedResumeDelay = GLOBAL_COOLDOWN;
-      }
-      this.rangedWasMoving = isRanged && this.isMoving;
-      if (this.rangedResumeDelay > 0) {
-        this.rangedResumeDelay = Math.max(0, this.rangedResumeDelay - dt);
-      }
-      const rangedBlocked = isRanged && (this.isMoving || this.rangedResumeDelay > 0);
-      const atkSpeedMult = this.getAutoAttackSpeedMultiplier?.() ?? 1;
-      if (this.autoAttackTimer >= this.characterModel.autoAttackSpeed / atkSpeedMult && !rangedBlocked) {
-        const hasLos = !this.checkLineOfSight || this.checkLineOfSight(this.mesh.position, target.mesh.position);
-        if (facing && dist <= this.characterModel.autoAttackRange && hasLos) {
-          this.autoAttackTimer = 0;
-          // Set target pos for ranged bullet visual before triggering swing
-          this.characterModel.swingTargetWorldPos = target.mesh.position.clone();
-          const isCrit = this.onAutoAttackHit?.(this, target, this.characterModel.rollAutoAttackDamage()) ?? false;
-          this.characterModel.triggerSwing(isCrit);
-        } else {
-          // Not facing or out of range — hold timer
-          this.autoAttackTimer = this.characterModel.autoAttackSpeed;
-        }
-      }
-    }
 
     // Track moving ground (e.g. elevator platforms) — only for zombie NPCs
     // AI NPCs get ground resolution from MovementController

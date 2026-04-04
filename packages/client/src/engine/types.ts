@@ -28,6 +28,7 @@ export interface Targetable {
   dead: boolean;
   readonly critChance: number;
   readonly dodgeChance: number;
+  readonly autoAttackRange: number;
   readonly mesh: THREE.Group;
   die(): void;
   // Casting state (for nameplate cast bars)

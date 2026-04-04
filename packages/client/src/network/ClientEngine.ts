@@ -3,11 +3,11 @@ import type { EntitySnapshot, EntityBuffSnapshot } from '@gtr/shared';
 import type {
   S2C_GameState, S2C_GameStateUpdate, S2C_GameStateSnapshot,
   S2C_CombatEvent, S2C_Flinch, S2C_AbilityEffect, S2C_CooldownUpdate,
-  S2C_GasCloudSpawn, S2C_ChemPoolSpawn, S2C_AutoAttackSwing, S2C_Knockback,
+  S2C_AutoAttackSwing, S2C_Knockback,
   S2C_EntityDied, S2C_PositionRelay, S2C_PositionUpdate,
 } from '@gtr/shared';
 import type { CharacterId } from '@gtr/shared';
-import { yardsToUnits, getCharacterStats, getCharacterSfx, getSharedSfx, Sweep, TweakerSprint, Bandage, GLOBAL_COOLDOWN } from '@gtr/shared';
+import { yardsToUnits, getCharacterStats, GLOBAL_COOLDOWN } from '@gtr/shared';
 import type { NetworkManager } from './NetworkManager';
 import { SnapshotBuffer } from './SnapshotBuffer';
 import { Renderer } from '../engine/renderer/Renderer';
@@ -19,21 +19,14 @@ import { TargetingSystem } from '../engine/targeting/TargetingSystem';
 import { createCharacter, type CharacterModel } from '../engine/player/characters';
 import type { Targetable } from '../engine/types';
 import { createTargetingHitArea } from '../engine/targeting/targetingHitArea';
-import {
-  type GasCloudVisual, type ChemPoolVisual, type FullRetardAuraVisual, type CrotchRotVisual,
-  POOL_CONSUME_DURATION,
-  createGasCloud, updateGasCloud,
-  createChemPool, updateChemPool,
-  createFullRetardAura, updateFullRetardAura as updateFullRetardAuraVisual,
-  createCrotchRotCloud, updateCrotchRotCloud,
-  createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
-  type BandageHealVisual, createBandageHealEffect, updateBandageHealEffect, removeBandageHealEffect,
-  disposeGroup,
-} from '../engine/effects/VisualEffects';
 import { BlindEffect } from '../engine/effects/BlindEffect';
+import { ClientEffects } from './ClientEffects';
+import { ClientChargeSystem } from './ClientChargeSystem';
+import { ClientSoundManager } from './ClientSoundManager';
+import { PositionSync } from './PositionSync';
+import { RemoteEntityRenderer } from './RemoteEntityRenderer';
 import { DeadReckoning } from './DeadReckoning';
 import { keybindManager } from '../ui/KeybindManager';
-import { soundEffects, type LoopHandle } from '../ui/SoundEffects';
 
 interface RemoteEntity {
   id: string;
@@ -77,7 +70,6 @@ export class ClientEngine {
 
   // Remote entities (other players) — interpolated from server state
   private remoteEntities = new Map<string, RemoteEntity>();
-  private aaSfxToggle = new Map<string, boolean>(); // per-entity toggle for alternating auto-attack SFX
 
   // Snapshot interpolation buffer — smoothly interpolates remote entity positions
   // between two known server states instead of exponential chase lerp
@@ -85,29 +77,13 @@ export class ClientEngine {
   private deadReckoning = new DeadReckoning();
 
   private animationFrameId: number | null = null;
-  private static readonly SEND_RATE = 1000 / 30; // 30 Hz — higher rate feeds fresher data to dead reckoning
-  private sendAccumulator = 0;
-  private lastSentPosition = { x: NaN, y: NaN, z: NaN, rotationY: NaN, isMoving: false };
-  private prevSendPosition = { x: 0, y: 0, z: 0 };
-  private prevSendTime = 0;
 
-  // ── Movement state change detection ────────────────────────────────
-  // Sends position updates immediately on start/stop/direction change
-  // instead of waiting for the next 30Hz tick, reducing perceived latency
-  // for other players by up to 33ms.
-  private lastImmediateSendTime = 0;
-  private prevMoving = false;
-  private prevMoveFlags = 0;
-  private prevMoveAngle = 0;
-  private static readonly IMMEDIATE_SEND_MIN_INTERVAL = 30; // ms — rate limit for immediate sends
-  private static readonly DIRECTION_CHANGE_THRESHOLD = 0.2; // radians (~11°) — detect turns faster for smoother dead reckoning
-
-  // Visual effects
-  private gasClouds = new Map<string, GasCloudVisual & { elapsed: number; duration: number }>();
-  private chemPools = new Map<string, ChemPoolVisual & {
-    elapsed: number; duration: number;
-    activationDelay: number; consumed: boolean; consumeElapsed: number;
-  }>();
+  // Extracted subsystems
+  private readonly effects: ClientEffects;
+  private readonly charges: ClientChargeSystem;
+  private readonly sound: ClientSoundManager;
+  private readonly positionSync: PositionSync;
+  private readonly remoteRenderer: RemoteEntityRenderer;
 
   // Cooldowns (local tracking from server updates)
   private cooldowns = new Map<string, { remaining: number; total: number }>();
@@ -139,15 +115,6 @@ export class ClientEngine {
   private localBuffs: EntityBuffSnapshot['buffs'] = [];
   private localDRTimers: EntityBuffSnapshot['drTimers'] = undefined;
 
-  // Sweep charge (local player only — client-side movement during charge)
-  private sweepCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number; savedAutoAttackTargetId: string | null } | null = null;
-
-  // Tweaker Sprint charge (local player only — dash to target)
-  private tweakerSprintCharge: { elapsed: number; duration: number; direction: THREE.Vector3; speed: number; savedAutoAttackTargetId: string | null } | null = null;
-
-  // Active knockbacks (visual displacement on client)
-  private activeKnockbacks: { entityId: string; dirX: number; dirZ: number; distance: number; duration: number; elapsed: number; startY: number }[] = [];
-
   // Blind state (blur + sand specks + eyelid blinks + targeting prevention)
   private readonly blindEffect = new BlindEffect();
 
@@ -161,32 +128,6 @@ export class ClientEngine {
     return this.network.rtt;
   }
 
-  // Channel beam visual
-  private channelBeam: THREE.Mesh | null = null;
-  private channelBeamElapsed = 0;
-
-  // Bandage heal visual
-  private bandageHealVisual: BandageHealVisual | null = null;
-  private bandageHealElapsed = 0;
-
-  // Bandage loop SFX (keyed by entity ID)
-  private bandageLoops = new Map<string, LoopHandle>();
-  // Dr. Retardo cast-spell loop SFX (keyed by entity ID)
-  private castSpellLoops = new Map<string, LoopHandle>();
-  // Full Retard looping SFX (keyed by entity ID)
-  private fullRetardLoops = new Map<string, LoopHandle>();
-  // OD looping SFX (keyed by entity ID)
-  private odLoops = new Map<string, LoopHandle>();
-
-  // Full Retard aura visual (per entity)
-  private fullRetardAuras = new Map<string, FullRetardAuraVisual & { elapsed: number }>();
-
-  // Crotch Rot cloud visual (per entity)
-  private crotchRotVisuals = new Map<string, CrotchRotVisual & { elapsed: number }>();
-
-  // Entities fading out before removal
-  private static readonly ENTITY_FADE_DURATION = 1.5;
-  private fadingEntities = new Map<string, { model: CharacterModel; mesh: THREE.Group; elapsed: number }>();
 
   // Resting state
   private resting = false;
@@ -286,15 +227,48 @@ export class ClientEngine {
       vx: 0, vz: 0,
     })));
 
-    // Preload combat sound effects
-    soundEffects.init();
+    // Initialize extracted subsystems
+    this.effects = new ClientEffects(this.scene, {
+      localEntityId: this.localEntityId,
+      remoteEntities: this.remoteEntities as ReadonlyMap<string, import('./ClientEffects').EffectEntityView>,
+      getLocalBuffs: () => this.localBuffs,
+      getLocalCastingAbilityId: () => this.localCastingAbilityId,
+      isLocalCastingChannel: () => this.localCastingIsChannel,
+      getLocalTargetEntityId: () => this.localTargetEntityId,
+      getPlayerMesh: () => this.playerController.mesh,
+      getPlayerCharacterId: () => this.playerController.characterId as CharacterId,
+      getPlayerAutoAttackRange: () => this.playerController.autoAttackRange,
+      getEntityMesh: (id) => this.getEntityMesh(id),
+      distToEntity: (id) => this.distToEntity(id),
+      panToEntity: (id) => this.panToEntity(id),
+      distToPosition: (pos) => this.distToPosition(pos),
+      panToPosition: (pos) => this.panToPosition(pos),
+    });
+
+    this.charges = new ClientChargeSystem({
+      localEntityId: this.localEntityId,
+      playerController: this.playerController,
+      getSelectedTargetId: () => this.selectedTargetId,
+      getEntityMesh: (id) => this.getEntityMesh(id),
+      sendStopAutoAttack: () => this.sendStopAutoAttack(),
+      sendAutoAttack: (id) => this.sendAutoAttack(id),
+    });
+
+    this.sound = new ClientSoundManager({
+      localEntityId: this.localEntityId,
+      getLocalCharacterId: () => this.playerController.characterId as CharacterId,
+      getEntityCharacterId: (id) => this.remoteEntities.get(id)?.characterId as CharacterId | undefined,
+      distToEntity: (id) => this.distToEntity(id),
+      panToEntity: (id) => this.panToEntity(id),
+    });
+
+    this.positionSync = new PositionSync(network, () => this.playerController);
+    this.remoteRenderer = new RemoteEntityRenderer(this.deadReckoning, () => this.mapManager.collision);
 
     // Dumpster Dive emerge SFX (local Crackhead player)
     if ('onDumpsterEmerge' in this.playerController.model) {
       (this.playerController.model as any).onDumpsterEmerge = (phase: 1 | 2) => {
-        const sfx = getCharacterSfx(this.playerController.characterId);
-        const entry = phase === 1 ? sfx?.dumpsterDive1 : sfx?.dumpsterDive2;
-        if (entry) soundEffects.play(entry.url, 0, 0, entry.volume);
+        this.sound.playDumpsterEmerge(this.localEntityId, this.playerController.characterId as CharacterId, phase);
       };
     }
 
@@ -323,9 +297,7 @@ export class ClientEngine {
     // Dumpster Dive emerge SFX (remote Crackhead players)
     if ('onDumpsterEmerge' in model) {
       (model as any).onDumpsterEmerge = (phase: 1 | 2) => {
-        const sfx = getCharacterSfx(snap.characterId as CharacterId);
-        const entry = phase === 1 ? sfx?.dumpsterDive1 : sfx?.dumpsterDive2;
-        if (entry) soundEffects.play(entry.url, this.distToEntity(snap.id), this.panToEntity(snap.id), entry.volume, snap.id);
+        this.sound.playDumpsterEmerge(snap.id, snap.characterId as CharacterId, phase);
       };
     }
 
@@ -371,6 +343,7 @@ export class ClientEngine {
       set dead(v) { entity.dead = v; },
       get critChance() { return 0; },
       get dodgeChance() { return 0; },
+      get autoAttackRange() { return getCharacterStats(entity.characterId as CharacterId).autoAttackRange; },
       mesh,
       isHostileTo(other: Targetable) { return entity.team !== other.team; },
       die() { /* server-authoritative */ },
@@ -450,14 +423,7 @@ export class ClientEngine {
       this.snapshotBuffer.updateWorldEffects(msg.gasClouds, msg.chemicalPools);
     }
     if (msg.chemicalPools) {
-      for (const cpSnap of msg.chemicalPools) {
-        const pool = this.chemPools.get(cpSnap.id);
-        if (pool && cpSnap.consumed && !pool.consumed) {
-          pool.consumed = true;
-          const triggerSfx = getCharacterSfx('dr-retardo')?.chemicalSpillTrigger;
-          if (triggerSfx) soundEffects.play(triggerSfx.url, this.distToPosition(pool.group.position), this.panToPosition(pool.group.position), triggerSfx.volume);
-        }
-      }
+      this.effects.syncChemPoolState(msg.chemicalPools);
     }
 
     // Process bundled events (avoids separate WebSocket frames per event)
@@ -496,9 +462,9 @@ export class ClientEngine {
       case 'ability_effect': this.handleAbilityEffect(event); break;
       case 'cooldown_update': this.handleCooldownUpdate(event); break;
       case 'auto_attack_swing': this.handleAutoAttackSwing(event); break;
-      case 'gas_cloud_spawn': this.handleGasCloudSpawn(event); break;
-      case 'chem_pool_spawn': this.handleChemPoolSpawn(event); break;
-      case 'knockback': this.handleKnockback(event); break;
+      case 'gas_cloud_spawn': this.effects.handleGasCloudSpawn(event); break;
+      case 'chem_pool_spawn': this.effects.handleChemPoolSpawn(event); break;
+      case 'knockback': this.charges.handleKnockback(event); break;
       case 'entity_died': this.handleEntityDied(event); break;
     }
   }
@@ -534,14 +500,7 @@ export class ClientEngine {
     this.applyBuffUpdates(msg.buffs);
 
     // Update chemical pool consumed state
-    for (const cpSnap of msg.chemicalPools) {
-      const pool = this.chemPools.get(cpSnap.id);
-      if (pool && cpSnap.consumed && !pool.consumed) {
-        pool.consumed = true;
-        const triggerSfx = getCharacterSfx('dr-retardo')?.chemicalSpillTrigger;
-        if (triggerSfx) soundEffects.play(triggerSfx.url, this.distToPosition(pool.group.position), this.panToPosition(pool.group.position), triggerSfx.volume);
-      }
-    }
+    this.effects.syncChemPoolState(msg.chemicalPools);
 
     // Sync elapsed time from server keyframe — gameElapsed is authoritative
     if (msg.gameElapsed !== undefined) {
@@ -611,11 +570,7 @@ export class ClientEngine {
     }
 
     // Start fade-out — mesh stays in scene until fade completes
-    this.fadingEntities.set(entityId, {
-      model: entity.model,
-      mesh: entity.mesh,
-      elapsed: 0,
-    });
+    this.effects.addFadingEntity(entityId, entity.model, entity.mesh);
 
     this.remoteEntities.delete(entityId);
     this.snapshotBuffer.removeEntity(entityId);
@@ -649,8 +604,8 @@ export class ClientEngine {
           if (this.pendingPrediction?.castPredicted && delta.castingAbilityId === this.pendingPrediction.abilityId) {
             this.pendingPrediction = null;
           }
-          this.updateBandageLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
-          this.updateCastSpellLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
+          this.sound.updateBandageLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
+          this.sound.updateCastSpellLoop(delta.id, this.localCastingAbilityId, delta.castingAbilityId!);
           this.localCastingAbilityId = delta.castingAbilityId!;
         }
         if (delta.castingElapsed !== undefined) this.localCastingElapsed = delta.castingElapsed;
@@ -676,8 +631,8 @@ export class ClientEngine {
       if (delta.charging !== undefined) entity.charging = delta.charging;
       if (delta.isAutoAttacking !== undefined) entity.isAutoAttacking = delta.isAutoAttacking;
       if ('castingAbilityId' in delta) {
-        this.updateBandageLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
-        this.updateCastSpellLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
+        this.sound.updateBandageLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
+        this.sound.updateCastSpellLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
         entity.castingAbilityId = delta.castingAbilityId!;
       }
       if (delta.castingElapsed !== undefined) entity.castingElapsed = delta.castingElapsed;
@@ -709,8 +664,8 @@ export class ClientEngine {
     pc.charging = snap.charging;
     pc.setAutoAttacking(snap.isAutoAttacking);
     pc.setStunned(snap.stunned);
-    this.updateBandageLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
-    this.updateCastSpellLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
+    this.sound.updateBandageLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
+    this.sound.updateCastSpellLoop(snap.id, this.localCastingAbilityId, snap.castingAbilityId);
     this.localCastingAbilityId = snap.castingAbilityId;
     this.localCastingElapsed = snap.castingElapsed;
     this.localCastingTotalTime = snap.castingTotalTime;
@@ -730,8 +685,8 @@ export class ClientEngine {
     entity.charging = snap.charging;
     entity.isMoving = snap.isMoving;
     entity.isAutoAttacking = snap.isAutoAttacking;
-    this.updateBandageLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
-    this.updateCastSpellLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
+    this.sound.updateBandageLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
+    this.sound.updateCastSpellLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
     entity.castingAbilityId = snap.castingAbilityId;
     entity.castingElapsed = snap.castingElapsed;
     entity.castingTotalTime = snap.castingTotalTime;
@@ -750,10 +705,7 @@ export class ClientEngine {
         for (const b of buffSnap.buffs) {
           if (!oldIds.has(b.id)) {
             this.onBuffApplied?.(buffSnap.entityId, b);
-            if (b.id === 'rotten-crotch' || b.id === 'od-stun') {
-              const struckSfx = getCharacterSfx(this.playerController.characterId)?.struck;
-              if (struckSfx) soundEffects.play(struckSfx.url, undefined, undefined, struckSfx.volume);
-            }
+            this.sound.playBuffAppliedSfx(buffSnap.entityId, b.id);
           }
         }
         for (const b of this.localBuffs) {
@@ -794,8 +746,7 @@ export class ClientEngine {
           (buffSnap.buffs.some(b => b.id === 'rotten-crotch') && !entity.buffs.some(b => b.id === 'rotten-crotch')) ||
           (buffSnap.buffs.some(b => b.id === 'od-stun') && !entity.buffs.some(b => b.id === 'od-stun'))
         ) {
-          const struckSfx = getCharacterSfx(entity.characterId)?.struck;
-          if (struckSfx) soundEffects.play(struckSfx.url, this.distToEntity(entity.id), this.panToEntity(entity.id), struckSfx.volume, entity.id);
+          this.sound.playBuffAppliedSfx(entity.id, 'rotten-crotch');
         }
         entity.buffs = buffSnap.buffs;
         entity.drTimers = buffSnap.drTimers;
@@ -817,75 +768,15 @@ export class ClientEngine {
   handleCombatEvent(msg: S2C_CombatEvent): void {
     this.onCombatText?.(msg.sourceEntityId, msg.targetEntityId, msg.amount, msg.combatType);
 
-    // Play sound effects for auto-attack hits
-    if (msg.isAutoAttack && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
-      const charId = msg.sourceEntityId === this.localEntityId
-        ? this.playerController.characterId
-        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
-      if (charId) {
-        const sfx = getCharacterSfx(charId);
-        let aaSfx = (msg.combatType === 'crit' && sfx?.autoAttackCrit) || sfx?.autoAttackHit;
-        // Alternate between two auto-attack sounds when available (e.g. Dr. Retardo's flask/test tube)
-        if (msg.combatType !== 'crit' && sfx?.autoAttackHit2) {
-          const toggle = this.aaSfxToggle.get(msg.sourceEntityId) ?? false;
-          aaSfx = toggle ? sfx.autoAttackHit2 : sfx.autoAttackHit;
-          this.aaSfxToggle.set(msg.sourceEntityId, !toggle);
-        }
-        if (aaSfx) soundEffects.play(aaSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), aaSfx.volume, msg.sourceEntityId);
-      }
-    }
-
-    // Play sound effects for ability hits (mop, big boot)
-    if (msg.abilityId === 'mop' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
-      const charId = msg.sourceEntityId === this.localEntityId
-        ? this.playerController.characterId
-        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
-      if (charId) {
-        const mopSfx = getCharacterSfx(charId)?.mop;
-        if (mopSfx) soundEffects.play(mopSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), mopSfx.volume, msg.sourceEntityId);
-      }
-    }
-    if (msg.abilityId === 'big-boot' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
-      const charId = msg.sourceEntityId === this.localEntityId
-        ? this.playerController.characterId
-        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
-      if (charId) {
-        const bigBootSfx = getCharacterSfx(charId)?.bigBoot;
-        if (bigBootSfx) soundEffects.play(bigBootSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), bigBootSfx.volume, msg.sourceEntityId);
-      }
-    }
-    if (msg.abilityId === 'jimmy-legs' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
-      const charId = msg.sourceEntityId === this.localEntityId
-        ? this.playerController.characterId
-        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
-      if (charId) {
-        const jimmyLegsSfx = getCharacterSfx(charId)?.jimmyLegs;
-        if (jimmyLegsSfx) soundEffects.play(jimmyLegsSfx.url, this.distToEntity(msg.sourceEntityId), this.panToEntity(msg.sourceEntityId), jimmyLegsSfx.volume, msg.sourceEntityId);
-      }
-    }
-    if (msg.abilityId === 'bottle-chuck' && msg.amount > 0 && (msg.combatType === 'damage' || msg.combatType === 'crit')) {
-      const charId = msg.sourceEntityId === this.localEntityId
-        ? this.playerController.characterId
-        : this.remoteEntities.get(msg.sourceEntityId)?.characterId;
-      if (charId) {
-        const bcSfx = getCharacterSfx(charId)?.bottleChuck;
-        if (bcSfx) soundEffects.play(bcSfx.url, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId), bcSfx.volume, msg.targetEntityId);
-      }
-    }
+    // Sound effects (auto-attack hits, ability hits, dodge)
+    this.sound.playCombatEventSfx(msg);
 
     // Dodge animation on the target
     if (msg.combatType === 'dodge') {
       if (msg.targetEntityId === this.localEntityId) {
         this.playerController.triggerDodge();
-        const localDodgeSfx = getCharacterSfx(this.playerController.characterId)?.dodge;
-        if (localDodgeSfx) soundEffects.play(localDodgeSfx.url, undefined, undefined, localDodgeSfx.volume);
       } else {
-        const entity = this.remoteEntities.get(msg.targetEntityId);
-        if (entity) {
-          entity.model.triggerDodge();
-          const dodgeSfx = getCharacterSfx(entity.characterId)?.dodge;
-          if (dodgeSfx) soundEffects.play(dodgeSfx.url, this.distToEntity(msg.targetEntityId), this.panToEntity(msg.targetEntityId), dodgeSfx.volume, msg.targetEntityId);
-        }
+        this.remoteEntities.get(msg.targetEntityId)?.model.triggerDodge();
       }
     }
 
@@ -906,71 +797,8 @@ export class ClientEngine {
       ? new THREE.Vector3(msg.groundTargetX, msg.groundTargetY ?? 0, msg.groundTargetZ)
       : undefined;
 
-    // Play ability-specific sound effects
-    const abilitySfxCharId = msg.entityId === this.localEntityId
-      ? this.playerController.characterId
-      : this.remoteEntities.get(msg.entityId)?.characterId;
-    if (abilitySfxCharId) {
-      const sfx = getCharacterSfx(abilitySfxCharId);
-      if (msg.abilityId === 'crash-out' && sfx?.crashOut) {
-        soundEffects.play(sfx.crashOut.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.crashOut.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'bucket-splash' && sfx?.bucketSplash) {
-        soundEffects.play(sfx.bucketSplash.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.bucketSplash.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'fart-bomb' && sfx?.fartBomb) {
-        soundEffects.play(sfx.fartBomb.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.fartBomb.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'janitors-helper' && sfx?.janitorsHelper) {
-        soundEffects.play(sfx.janitorsHelper.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.janitorsHelper.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'sweep' && sfx?.sweepStart) {
-        soundEffects.play(sfx.sweepStart.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.sweepStart.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'sweep-finish' && sfx?.sweepSpin) {
-        soundEffects.play(sfx.sweepSpin.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.sweepSpin.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'discombobulate' && sfx?.discombobulate) {
-        const spatialId = msg.targetId ?? msg.entityId;
-        soundEffects.play(sfx.discombobulate.url, this.distToEntity(spatialId), this.panToEntity(spatialId), sfx.discombobulate.volume, spatialId);
-      }
-      if (msg.abilityId === 'chemical-spill' && sfx?.chemicalSpill) {
-        soundEffects.play(sfx.chemicalSpill.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.chemicalSpill.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'retard-strength' && sfx?.retardStrength) {
-        soundEffects.play(sfx.retardStrength.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.retardStrength.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'crotch-rot' && sfx?.crotchRot) {
-        const spatialId = msg.targetId ?? msg.entityId;
-        soundEffects.play(sfx.crotchRot.url, this.distToEntity(spatialId), this.panToEntity(spatialId), sfx.crotchRot.volume, spatialId);
-      }
-      if (msg.abilityId === 'kaboom' && sfx?.kaboom) {
-        soundEffects.play(sfx.kaboom.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.kaboom.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'shank' && sfx?.shank) {
-        soundEffects.play(sfx.shank.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.shank.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'gank' && sfx?.gank) {
-        soundEffects.play(sfx.gank.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.gank.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'pocket-sand' && sfx?.pocketSand) {
-        soundEffects.play(sfx.pocketSand.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.pocketSand.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'sticky-fingers' && sfx?.stickyFingers) {
-        soundEffects.play(sfx.stickyFingers.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.stickyFingers.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'tweaker-sprint' && sfx?.tweakerSprint) {
-        soundEffects.play(sfx.tweakerSprint.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.tweakerSprint.volume, msg.entityId);
-      }
-      if (msg.abilityId === 'crack-rock' && sfx?.crackRock) {
-        soundEffects.play(sfx.crackRock.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), sfx.crackRock.volume, msg.entityId);
-      }
-    }
-    // Shared ability SFX (all characters)
-    if (msg.abilityId === 'pvp-trinket') {
-      const trinketSfx = getSharedSfx().pvpTrinket;
-      if (trinketSfx) soundEffects.play(trinketSfx.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), trinketSfx.volume, msg.entityId);
-    }
+    // Sound effects
+    this.sound.playAbilityEffectSfx(msg);
 
     if (msg.entityId === this.localEntityId) {
       // If we predicted this ability, clear prediction state
@@ -1001,14 +829,14 @@ export class ClientEngine {
       }
       // Start sweep charge for local player
       if (msg.abilityId === 'sweep') {
-        this.startSweepCharge();
+        this.charges.startSweepCharge();
       }
       // Start tweaker sprint charge for local player
       if (msg.abilityId === 'tweaker-sprint') {
-        this.startTweakerSprintCharge();
+        this.charges.startTweakerSprintCharge();
       }
       if (msg.abilityId === 'kaboom') {
-        this.spawnKaboomGust(this.playerController.mesh.position, this.playerController.mesh.rotation.y);
+        this.effects.spawnKaboomGust(this.playerController.mesh.position, this.playerController.mesh.rotation.y);
       }
     } else {
       const entity = this.remoteEntities.get(msg.entityId);
@@ -1016,24 +844,18 @@ export class ClientEngine {
         const targetPos = groundPos ?? (entity.targetEntityId ? this.getEntityMesh(entity.targetEntityId)?.position.clone() : undefined);
         entity.model.triggerAbilityAnimation(msg.abilityId, targetPos);
         if (msg.abilityId === 'kaboom') {
-          this.spawnKaboomGust(entity.mesh.position, entity.mesh.rotation.y);
+          this.effects.spawnKaboomGust(entity.mesh.position, entity.mesh.rotation.y);
         }
       }
     }
   }
 
   handleFlinch(msg: S2C_Flinch): void {
+    this.sound.playFlinchSfx(msg);
     if (msg.entityId === this.localEntityId) {
       this.playerController.triggerFlinch();
-      const localStruckSfx = getCharacterSfx(this.playerController.characterId)?.struck;
-      if (localStruckSfx) soundEffects.play(localStruckSfx.url, undefined, undefined, localStruckSfx.volume);
     } else {
-      const entity = this.remoteEntities.get(msg.entityId);
-      if (entity) {
-        entity.model.triggerFlinch();
-        const struckSfx = getCharacterSfx(entity.characterId)?.struck;
-        if (struckSfx) soundEffects.play(struckSfx.url, this.distToEntity(msg.entityId), this.panToEntity(msg.entityId), struckSfx.volume, msg.entityId);
-      }
+      this.remoteEntities.get(msg.entityId)?.model.triggerFlinch();
     }
   }
 
@@ -1099,6 +921,14 @@ export class ClientEngine {
     return (Math.cos(rotY) * dx - Math.sin(rotY) * dz) / len;
   }
 
+  handleGasCloudSpawn(msg: import('@gtr/shared').S2C_GasCloudSpawn): void {
+    this.effects.handleGasCloudSpawn(msg);
+  }
+
+  handleChemPoolSpawn(msg: import('@gtr/shared').S2C_ChemPoolSpawn): void {
+    this.effects.handleChemPoolSpawn(msg);
+  }
+
   handleCooldownUpdate(msg: S2C_CooldownUpdate): void {
     if (msg.abilityId === '__gcd__') {
       this.gcd = { remaining: msg.remaining, total: msg.total };
@@ -1108,18 +938,6 @@ export class ClientEngine {
     this.onCooldownUpdate?.(msg.abilityId, msg.remaining, msg.total);
   }
 
-  handleGasCloudSpawn(msg: S2C_GasCloudSpawn): void {
-    const visual = createGasCloud(this.scene, msg.x, msg.z, msg.radius, msg.y);
-    this.gasClouds.set(msg.id, { ...visual, elapsed: 0, duration: msg.duration });
-  }
-
-  handleChemPoolSpawn(msg: S2C_ChemPoolSpawn): void {
-    const visual = createChemPool(this.scene, msg.x, msg.z, msg.radius, msg.y);
-    this.chemPools.set(msg.id, {
-      ...visual, elapsed: 0, duration: msg.duration,
-      activationDelay: msg.activationDelay, consumed: false, consumeElapsed: 0,
-    });
-  }
 
   handleEntityDied(msg: S2C_EntityDied): void {
     const killerTeam = this.getEntityTeam(msg.killerEntityId);
@@ -1146,131 +964,13 @@ export class ClientEngine {
   }
 
   handleKnockback(msg: S2C_Knockback): void {
-    // Capture the entity's current Y so the arc is relative to their actual height
-    let startY = 0;
-    if (msg.entityId === this.localEntityId) {
-      startY = this.playerController.mesh.position.y;
-    } else {
-      const entity = this.remoteEntities.get(msg.entityId);
-      if (entity) startY = entity.mesh.position.y;
-    }
-    this.activeKnockbacks.push({
-      entityId: msg.entityId,
-      dirX: msg.dirX,
-      dirZ: msg.dirZ,
-      distance: msg.distance,
-      duration: msg.duration,
-      elapsed: 0,
-      startY,
-    });
+    this.charges.handleKnockback(msg);
   }
 
   /** Server rejected our position — snap local player back to the corrected position. */
   handlePositionCorrection(msg: { x: number; y: number; z: number; rotationY: number }): void {
     this.playerController.mesh.position.set(msg.x, msg.y, msg.z);
     this.playerController.mesh.rotation.y = msg.rotationY;
-  }
-
-  private updateKnockbacks(dt: number): void {
-    for (let i = this.activeKnockbacks.length - 1; i >= 0; i--) {
-      const kb = this.activeKnockbacks[i];
-      kb.elapsed += dt;
-      const t = Math.min(1, kb.elapsed / kb.duration);
-
-      const speed = kb.distance / kb.duration;
-      const height = 3.0 * 4 * t * (1 - t); // parabolic arc (relative offset)
-
-      if (kb.entityId === this.localEntityId) {
-        this.playerController.mesh.position.x += kb.dirX * speed * dt;
-        this.playerController.mesh.position.z += kb.dirZ * speed * dt;
-        this.playerController.mesh.position.y = kb.startY + height;
-      } else {
-        const entity = this.remoteEntities.get(kb.entityId);
-        if (entity) {
-          entity.mesh.position.x += kb.dirX * speed * dt;
-          entity.mesh.position.z += kb.dirZ * speed * dt;
-          entity.mesh.position.y = kb.startY + height;
-        }
-      }
-
-      if (t >= 1) {
-        if (kb.entityId === this.localEntityId) {
-          // Return to starting height — PlayerController physics will handle
-          // the fall if knocked off a ledge (gravity, grounded detection, etc.)
-          this.playerController.mesh.position.y = kb.startY;
-          this.playerController.grounded = false;
-          this.playerController.velocityY = 0;
-          (this.playerController as any).fallPeakY = kb.startY;
-        } else {
-          const entity = this.remoteEntities.get(kb.entityId);
-          if (entity) entity.mesh.position.y = kb.startY;
-        }
-        this.activeKnockbacks.splice(i, 1);
-      }
-    }
-  }
-
-  private spawnKaboomGust(origin: THREE.Vector3, rotY: number): void {
-    const halfAngle = Math.PI / 6;
-    const range = yardsToUnits(8);
-    const particleCount = 30;
-    const group = new THREE.Group();
-    group.position.set(origin.x, 0, origin.z);
-
-    const particles: { mesh: THREE.Mesh; vx: number; vz: number; speed: number; life: number }[] = [];
-
-    for (let i = 0; i < particleCount; i++) {
-      const angle = rotY - halfAngle + Math.random() * 2 * halfAngle;
-      const speed = range * (0.8 + Math.random() * 0.4);
-      const size = 0.08 + Math.random() * 0.12;
-
-      const geo = new THREE.SphereGeometry(size, 4, 4);
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0xccddee,
-        transparent: true,
-        opacity: 0.5 + Math.random() * 0.3,
-        depthWrite: false,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(0, 0.3 + Math.random() * 1.0, 0);
-
-      group.add(mesh);
-      particles.push({ mesh, vx: Math.sin(angle), vz: Math.cos(angle), speed, life: 0 });
-    }
-
-    this.scene.add(group);
-
-    const duration = 0.4;
-    const startTime = performance.now();
-
-    const animate = () => {
-      const elapsed = (performance.now() - startTime) / 1000;
-      const t = elapsed / duration;
-
-      if (t >= 1) {
-        this.scene.remove(group);
-        for (const p of particles) {
-          (p.mesh.geometry as THREE.BufferGeometry).dispose();
-          (p.mesh.material as THREE.Material).dispose();
-        }
-        return;
-      }
-
-      for (const p of particles) {
-        p.life += 1 / 60;
-        const dist = p.speed * p.life;
-        p.mesh.position.x = p.vx * dist;
-        p.mesh.position.z = p.vz * dist;
-        (p.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - t) * (0.5 + Math.random() * 0.1);
-        p.mesh.position.y += 0.01;
-        const scale = 1 + t * 1.5;
-        p.mesh.scale.setScalar(scale);
-      }
-
-      requestAnimationFrame(animate);
-    };
-
-    requestAnimationFrame(animate);
   }
 
   // ── Accessors for UI ─────────────────────────────────────────────────
@@ -1375,8 +1075,8 @@ export class ClientEngine {
     // Predict cast bar for cast-time abilities (only if not moving/falling — server rejects casts while moving)
     let castPredicted = false;
     if (ability.castTime && !pc.isMoving && pc.grounded) {
-      this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
-      this.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
+      this.sound.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
+      this.sound.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, abilityId);
       this.localCastingAbilityId = abilityId;
       this.localCastingElapsed = 0;
       this.localCastingTotalTime = ability.castTime;
@@ -1453,8 +1153,8 @@ export class ClientEngine {
 
     // Revert predicted cast bar
     if (pred.castPredicted && this.localCastingAbilityId === pred.abilityId) {
-      this.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, null);
-      this.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, null);
+      this.sound.updateBandageLoop(this.localEntityId!, this.localCastingAbilityId, null);
+      this.sound.updateCastSpellLoop(this.localEntityId!, this.localCastingAbilityId, null);
       this.localCastingAbilityId = null;
       this.localCastingElapsed = 0;
       this.localCastingTotalTime = 0;
@@ -1691,28 +1391,9 @@ export class ClientEngine {
       }
     }
 
-    // Gas cloud visuals
-    for (const [id, cloud] of this.gasClouds) {
-      cloud.elapsed += gap;
-    }
-
-    // Chem pool visuals
-    for (const [id, pool] of this.chemPools) {
-      pool.elapsed += gap;
-      if (pool.consumed) pool.consumeElapsed += gap;
-    }
-
-    // Sweep/sprint charge — if we were mid-charge when backgrounded, it's certainly
-    // finished by now.  Clear it so the player isn't stuck in a charge state.
-    if (this.sweepCharge) {
-      this.sweepCharge = null;
-      this.playerController.charging = false;
-    }
-    if (this.tweakerSprintCharge) {
-      this.tweakerSprintCharge = null;
-      this.playerController.charging = false;
-      this.playerController.chargeAnimSpeed = 1;
-    }
+    // Fast-forward visual effects and charge systems
+    this.effects.fastForward(gap);
+    this.charges.fastForward();
   }
 
   private update(dt: number): void {
@@ -1842,55 +1523,8 @@ export class ClientEngine {
     this.thirdPersonCamera.update(dt);
     this.playerController.setOpacity(this.thirdPersonCamera.getPlayerModelOpacity());
 
-    // ── Movement state change → immediate send ──
-    // Detect start/stop/direction changes and send position right away
-    // instead of waiting for the next 30Hz tick. This reduces perceived
-    // latency for remote players by up to 33ms per state change.
-    const isMovingNow = this.playerController.isMoving ?? false;
-    const currentMoveFlags = this.playerController.moveFlags;
-    const now = performance.now();
-    let immediateNeeded = false;
-
-    // Compute current movement direction (before any send updates prevSendPosition)
-    let currentMoveAngle = this.prevMoveAngle;
-    if (isMovingNow) {
-      const pos = this.playerController.getPosition();
-      const dx = pos.x - this.prevSendPosition.x;
-      const dz = pos.z - this.prevSendPosition.z;
-      if (dx * dx + dz * dz > 0.001) {
-        currentMoveAngle = Math.atan2(dx, dz);
-      }
-    }
-
-    if (isMovingNow !== this.prevMoving || currentMoveFlags !== this.prevMoveFlags) {
-      // Start, stop, or flag change (e.g. W→W+A) — always send immediately
-      immediateNeeded = true;
-    } else if (isMovingNow) {
-      // Still moving — check for significant direction change
-      let angleDelta = currentMoveAngle - this.prevMoveAngle;
-      while (angleDelta > Math.PI) angleDelta -= Math.PI * 2;
-      while (angleDelta < -Math.PI) angleDelta += Math.PI * 2;
-      if (Math.abs(angleDelta) > ClientEngine.DIRECTION_CHANGE_THRESHOLD) {
-        immediateNeeded = true;
-      }
-    }
-
-    if (immediateNeeded && (now - this.lastImmediateSendTime) >= ClientEngine.IMMEDIATE_SEND_MIN_INTERVAL) {
-      this.prevMoveAngle = currentMoveAngle;
-      this.sendPositionUpdate();
-      this.lastImmediateSendTime = now;
-      this.sendAccumulator = 0; // reset so the periodic tick stays evenly spaced
-    }
-    this.prevMoving = isMovingNow;
-    this.prevMoveFlags = currentMoveFlags;
-
-    // Periodic 30Hz position updates — drift correction between state changes
-    this.sendAccumulator += dt * 1000;
-    if (this.sendAccumulator >= ClientEngine.SEND_RATE) {
-      this.sendAccumulator -= ClientEngine.SEND_RATE;
-      this.prevMoveAngle = currentMoveAngle;
-      this.sendPositionUpdate();
-    }
+    // Send position updates (30Hz + immediate on state change)
+    this.positionSync.update(dt);
 
     // Update cooldowns
     for (const [id, cd] of this.cooldowns) {
@@ -1931,193 +1565,17 @@ export class ClientEngine {
     }
 
     // Update spatial audio positions so sounds track entity movement
-    soundEffects.updateSpatialPositions((key) => {
-      if (key === this.localEntityId) return null;
-      return { distance: this.distToEntity(key), pan: this.panToEntity(key) };
-    });
+    this.sound.updateSpatialPositions();
 
-    // Dead-reckon remote entity positions — predict current position from
-    // last known server state + velocity, with smooth error correction.
-    for (const entity of this.remoteEntities.values()) {
-      const dr = this.deadReckoning.getPosition(entity.id, dt);
-      let interpVx = 0;
-      let interpVz = 0;
-      if (dr) {
-        entity.isMoving = dr.isMoving;
+    // Dead-reckon remote entity positions, resolve collisions, update animations
+    this.remoteRenderer.updateAll(this.remoteEntities.values(), dt);
 
-        if (entity.disconnected) {
-          // Disconnected entities: freeze X/Z exactly where they are.
-          // Use the server-sent Y from dead reckoning so gravity-simulated
-          // falls are visible to remote players. Fall back to collision
-          // resolution only when vy is zero (tracking moving surfaces).
-          if (dr.vy !== 0) {
-            // Server is simulating gravity — use its Y position
-            entity.mesh.position.y = dr.y;
-          } else {
-            const baseY = entity.mesh.position.y;
-            const groundY = this.mapManager.collision.resolve(
-              entity.mesh.position.x, entity.mesh.position.z, baseY + 1, 0.4,
-            ).groundY;
-            const diff = groundY - baseY;
-            if (Math.abs(diff) < 2) {
-              entity.mesh.position.y = groundY;
-            }
-          }
-        } else {
-          // When grounded (vy=0), resolve Y against the client's collision system
-          // so remote players track animated surfaces like the Celestial Ballroom
-          // elevator and Cage pillars.  We resolve from the entity's last rendered
-          // Y (which was on the platform surface last frame) rather than the stale
-          // DR Y.  This way the boost only needs to cover one frame of platform
-          // movement (~0.44u at 60fps, max) instead of the full network lag,
-          // avoiding false snaps to distant surfaces (e.g. a pillar top when the
-          // entity is at ground level).
-          let finalY = dr.y;
-          if (dr.vy === 0 && !entity.godMode) {
-            const baseY = entity.mesh.position.y;
-            const groundY = this.mapManager.collision.resolve(dr.x, dr.z, baseY + 1, 0.4).groundY;
-            const diff = groundY - baseY;
-            if (Math.abs(diff) < 2) {
-              finalY = groundY;
-            }
-          }
-          entity.mesh.position.set(dr.x, finalY, dr.z);
-          entity.mesh.rotation.y = dr.rotationY;
-          interpVx = dr.vx;
-          interpVz = dr.vz;
-        }
-      }
 
-      // Update model animation state
-      entity.model.setAutoAttacking(entity.isAutoAttacking);
-      entity.model.setStunned(entity.stunned);
+    // Update visual effects (gas clouds, chem pools, auras, beams, etc.)
+    this.effects.update(dt);
 
-      if (entity.castingAbilityId) {
-        if (entity.castingIsChannel) {
-          const progress = entity.castingTotalTime > 0
-            ? Math.min(1, entity.castingElapsed / entity.castingTotalTime)
-            : 0;
-          entity.model.setChannelAnimation(entity.castingAbilityId, progress);
-          entity.model.setCastAnimation(null, 0);
-        } else {
-          const progress = entity.castingTotalTime > 0
-            ? Math.min(1, entity.castingElapsed / entity.castingTotalTime)
-            : 0;
-          entity.model.setCastAnimation(entity.castingAbilityId, progress);
-          entity.model.setChannelAnimation(null, 0);
-        }
-      } else {
-        entity.model.setCastAnimation(null, 0);
-        entity.model.setChannelAnimation(null, 0);
-      }
-
-      // Handle death animation
-      if (entity.dead && !entity.model.isDying) {
-        entity.model.startDeath();
-      } else if (!entity.dead && entity.model.isDying) {
-        entity.model.resetDeath();
-      }
-
-      // ── Derive animation params from interpolated velocity ──
-
-      // Speed multiplier: ratio of actual speed to base walk speed (5.6 units/sec)
-      const speed = Math.sqrt(interpVx * interpVx + interpVz * interpVz);
-      const speedMultiplier = entity.isMoving && speed > 0.1 ? speed / 5.6 : 1;
-
-      // Strafe direction: project velocity onto the entity's right vector.
-      // Uses a continuous [-1, 1] value so the animation blends smoothly
-      // between forward run and side-shuffle, including diagonal movement.
-      let strafeDirection = 0;
-      if (entity.isMoving && speed > 0.1) {
-        const facingSin = Math.sin(entity.mesh.rotation.y);
-        const facingCos = Math.cos(entity.mesh.rotation.y);
-        // Forward dot: positive = moving forward, negative = backpedaling
-        const forwardDot = facingSin * interpVx + facingCos * interpVz;
-        // Right dot: positive = moving right, negative = moving left
-        const rightDot = -facingCos * interpVx + facingSin * interpVz;
-        // Strafe amount = right component / speed, but only when not mostly moving forward/back
-        // atan2 gives us the angle between velocity and facing direction
-        const moveAngle = Math.atan2(rightDot, forwardDot);
-        // Map the angle to strafe: 0 = forward, ±π/2 = pure strafe, ±π = backward
-        // Use sin of the angle — peaks at ±π/2 (pure strafe), zero at forward/back
-        strafeDirection = Math.sin(moveAngle);
-        // Suppress very small values to avoid jitter in the animation blend
-        if (Math.abs(strafeDirection) < 0.15) strafeDirection = 0;
-      }
-
-      // Turn speed: angular velocity in rad/sec, computed from frame-to-frame rotation delta
-      let turnSpeed = 0;
-      if (dt > 0) {
-        let rotDiff = entity.mesh.rotation.y - entity.prevRotationY;
-        // Normalize to [-π, π]
-        while (rotDiff > Math.PI) rotDiff -= Math.PI * 2;
-        while (rotDiff < -Math.PI) rotDiff += Math.PI * 2;
-        turnSpeed = rotDiff / dt;
-      }
-      entity.prevRotationY = entity.mesh.rotation.y;
-
-      entity.model.update(dt, {
-        isMoving: entity.isMoving,
-        isGrounded: (dr?.vy ?? 0) === 0,
-        velocityY: dr?.vy ?? 0,
-        turnSpeed,
-        speedMultiplier,
-        strafeDirection,
-      });
-    }
-
-    // Update fading-out entities
-    for (const [id, fading] of this.fadingEntities) {
-      fading.elapsed += dt;
-      const t = fading.elapsed / ClientEngine.ENTITY_FADE_DURATION;
-      if (t >= 1) {
-        this.scene.remove(fading.mesh);
-        this.fadingEntities.delete(id);
-      } else {
-        fading.model.setOpacity(1 - t);
-      }
-    }
-
-    // Update gas cloud visuals
-    for (const [id, cloud] of this.gasClouds) {
-      cloud.elapsed += dt;
-      if (updateGasCloud(cloud, cloud.elapsed, cloud.duration, dt)) {
-        disposeGroup(this.scene, cloud.group);
-        this.gasClouds.delete(id);
-      }
-    }
-
-    // Update chem pool visuals
-    for (const [id, pool] of this.chemPools) {
-      pool.elapsed += dt;
-      if (pool.consumed) pool.consumeElapsed += dt;
-      if (updateChemPool(pool, pool.elapsed, pool.duration, pool.activationDelay, pool.consumed, pool.consumeElapsed, dt)) {
-        disposeGroup(this.scene, pool.group);
-        this.chemPools.delete(id);
-      }
-    }
-
-    // Update sweep charge (local player movement during charge)
-    this.updateSweepCharge(dt);
-    this.updateTweakerSprintCharge(dt);
-
-    // Update knockbacks (visual displacement)
-    this.updateKnockbacks(dt);
-
-    // Update channel beam visual
-    this.updateChannelBeam(dt);
-
-    // Update bandage heal visual
-    this.updateBandageHeal(dt);
-
-    // Update Full Retard aura visuals
-    this.updateFullRetardAuras(dt);
-
-    // Update OD looping SFX
-    this.updateODLoops();
-
-    // Update Crotch Rot cloud visuals
-    this.updateCrotchRotVisuals(dt);
+    // Update charge systems (sweep, tweaker sprint, knockbacks)
+    this.charges.update(dt);
 
     // Tab targeting — nearest hostile in front within 30 yards (blocked while blinded)
     const tabDown = this.input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
@@ -2203,460 +1661,16 @@ export class ClientEngine {
     this.input.resetDeltas();
   }
 
-  private static readonly POSITION_EPSILON = 0.001;
-  private static readonly ROTATION_EPSILON = 0.001;
-
-  private sendPositionUpdate(): void {
-    const pos = this.playerController.getPosition();
-    const rotationY = this.playerController.mesh.rotation.y;
-    const isMoving = this.playerController.isMoving ?? false;
-    const prev = this.lastSentPosition;
-
-    // Skip sending if nothing changed
-    if (
-      Math.abs(prev.x - pos.x) < ClientEngine.POSITION_EPSILON
-      && Math.abs(prev.y - pos.y) < ClientEngine.POSITION_EPSILON
-      && Math.abs(prev.z - pos.z) < ClientEngine.POSITION_EPSILON
-      && Math.abs(prev.rotationY - rotationY) < ClientEngine.ROTATION_EPSILON
-      && prev.isMoving === isMoving
-    ) {
-      return;
-    }
-
-    // Compute horizontal velocity from position delta between sends
-    const now = performance.now();
-    let vx = 0;
-    let vz = 0;
-    if (this.prevSendTime > 0) {
-      const dtSec = (now - this.prevSendTime) / 1000;
-      if (dtSec > 0) {
-        vx = (pos.x - this.prevSendPosition.x) / dtSec;
-        vz = (pos.z - this.prevSendPosition.z) / dtSec;
-      }
-    }
-    this.prevSendPosition.x = pos.x;
-    this.prevSendPosition.y = pos.y;
-    this.prevSendPosition.z = pos.z;
-    this.prevSendTime = now;
-
-    prev.x = pos.x;
-    prev.y = pos.y;
-    prev.z = pos.z;
-    prev.rotationY = rotationY;
-    prev.isMoving = isMoving;
-
-    this.network.send({
-      type: 'player_state',
-      x: pos.x,
-      y: pos.y,
-      z: pos.z,
-      rotationY,
-      isMoving,
-      vx,
-      vz,
-      moveFlags: this.playerController.moveFlags,
-      moveSpeed: this.playerController.currentMoveSpeed,
-      vy: this.playerController.velocityY,
-      turnSpeed: this.playerController.turnSpeed,
-      grounded: this.playerController.grounded,
-    });
-  }
-
-  // ── Sweep charge ──────────────────────────────────────────────────────
-
-  private startSweepCharge(): void {
-    const rotY = this.playerController.mesh.rotation.y;
-    this.playerController.charging = true;
-    const savedAutoAttackTargetId = this.selectedTargetId;
-    this.sendStopAutoAttack();
-    this.sweepCharge = {
-      elapsed: 0,
-      duration: Sweep.chargeDuration!,
-      direction: new THREE.Vector3(Math.sin(rotY), 0, Math.cos(rotY)),
-      speed: Sweep.chargeSpeed!,
-      savedAutoAttackTargetId,
-    };
-  }
-
-  private updateSweepCharge(dt: number): void {
-    if (!this.sweepCharge) return;
-    this.sweepCharge.elapsed += dt;
-    // Move player forward (client-authoritative movement)
-    this.playerController.mesh.position.addScaledVector(
-      this.sweepCharge.direction, this.sweepCharge.speed * dt
-    );
-    if (this.sweepCharge.elapsed >= this.sweepCharge.duration) {
-      // Trigger sweep finish spin animation + wind burst
-      this.playerController.triggerAbilityAnimation('sweep-finish');
-
-      // Re-engage auto-attack if we were auto-attacking before sweep
-      const targetId = this.sweepCharge.savedAutoAttackTargetId;
-      if (targetId) {
-        this.sendAutoAttack(targetId);
-      }
-
-      this.playerController.charging = false;
-      this.sweepCharge = null;
-    }
-  }
-
-  // ── Tweaker Sprint charge ───────────────────────────────────────────
-
-  private startTweakerSprintCharge(): void {
-    // Dash toward the selected target
-    const targetId = this.selectedTargetId;
-    const targetMesh = targetId ? this.getEntityMesh(targetId) : null;
-    if (!targetMesh) return;
-
-    const dx = targetMesh.position.x - this.playerController.mesh.position.x;
-    const dz = targetMesh.position.z - this.playerController.mesh.position.z;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-    if (dist < 0.01) return;
-
-    const direction = new THREE.Vector3(dx / dist, 0, dz / dist);
-    // Face the target
-    this.playerController.mesh.rotation.y = Math.atan2(direction.x, direction.z);
-
-    const speed = TweakerSprint.chargeSpeed!;
-    const chargeDist = Math.max(0, dist - yardsToUnits(1)); // stop 1 yard short
-    const duration = chargeDist / speed;
-
-    const savedAutoAttackTargetId = this.selectedTargetId;
-    this.sendStopAutoAttack();
-    this.playerController.charging = true;
-    this.playerController.chargeAnimSpeed = 3; // fast frantic run
-    this.tweakerSprintCharge = {
-      elapsed: 0,
-      duration,
-      direction,
-      speed,
-      savedAutoAttackTargetId,
-    };
-  }
-
-  private updateTweakerSprintCharge(dt: number): void {
-    if (!this.tweakerSprintCharge) return;
-    this.tweakerSprintCharge.elapsed += dt;
-    this.playerController.mesh.position.addScaledVector(
-      this.tweakerSprintCharge.direction, this.tweakerSprintCharge.speed * dt
-    );
-    if (this.tweakerSprintCharge.elapsed >= this.tweakerSprintCharge.duration) {
-      const targetId = this.tweakerSprintCharge.savedAutoAttackTargetId;
-      if (targetId) {
-        this.sendAutoAttack(targetId);
-      }
-
-      this.playerController.charging = false;
-      this.playerController.chargeAnimSpeed = 1;
-      this.tweakerSprintCharge = null;
-    }
-  }
-
-  // ── Channel beam visual ─────────────────────────────────────────────
-
-  private updateChannelBeam(dt: number): void {
-    // Find any entity that is channeling and has a target
-    let casterPos: THREE.Vector3 | null = null;
-    let targetPos: THREE.Vector3 | null = null;
-
-    // Check local player — use server-authoritative target, not current UI selection
-    // Skip beam for friendly-only channels (e.g., Bandage)
-    if (this.localCastingAbilityId && this.localCastingIsChannel && this.localTargetEntityId
-        && this.localCastingAbilityId !== Bandage.id) {
-      casterPos = this.playerController.mesh.position;
-      const targetMesh = this.getEntityMesh(this.localTargetEntityId);
-      if (targetMesh) targetPos = targetMesh.position;
-    }
-
-    // Check remote entities (find first channeling remote)
-    if (!casterPos) {
-      for (const entity of this.remoteEntities.values()) {
-        if (entity.castingAbilityId && entity.castingIsChannel && entity.targetEntityId
-            && entity.castingAbilityId !== Bandage.id) {
-          casterPos = entity.mesh.position;
-          const targetMesh = this.getEntityMesh(entity.targetEntityId);
-          if (targetMesh) targetPos = targetMesh.position;
-          break;
-        }
-      }
-    }
-
-    if (!casterPos || !targetPos) {
-      if (this.channelBeam) {
-        removeChannelBeam(this.scene, this.channelBeam);
-        this.channelBeam = null;
-      }
-      this.channelBeamElapsed = 0;
-      return;
-    }
-
-    this.channelBeamElapsed += dt;
-    if (!this.channelBeam) {
-      this.channelBeam = createChannelBeam(this.scene);
-    }
-    updateChannelBeamVisual(this.channelBeam, casterPos, targetPos, this.channelBeamElapsed);
-  }
-
-  // ── Bandage heal visual ─────────────────────────────────────────────
-
-  private updateBandageHeal(dt: number): void {
-    // Find the target position of any entity channeling bandage
-    let targetPos: THREE.Vector3 | null = null;
-
-    // Check local player
-    if (this.localCastingAbilityId === Bandage.id && this.localCastingIsChannel && this.localTargetEntityId) {
-      const targetMesh = this.getEntityMesh(this.localTargetEntityId);
-      if (targetMesh) targetPos = targetMesh.position;
-    }
-
-    // Check remote entities
-    if (!targetPos) {
-      for (const entity of this.remoteEntities.values()) {
-        if (entity.castingAbilityId === Bandage.id && entity.castingIsChannel && entity.targetEntityId) {
-          const targetMesh = this.getEntityMesh(entity.targetEntityId);
-          if (targetMesh) targetPos = targetMesh.position;
-          break;
-        }
-      }
-    }
-
-    if (!targetPos) {
-      if (this.bandageHealVisual) {
-        removeBandageHealEffect(this.scene, this.bandageHealVisual);
-        this.bandageHealVisual = null;
-      }
-      this.bandageHealElapsed = 0;
-      return;
-    }
-
-    this.bandageHealElapsed += dt;
-    if (!this.bandageHealVisual) {
-      this.bandageHealVisual = createBandageHealEffect(this.scene);
-    }
-    updateBandageHealEffect(this.bandageHealVisual, targetPos, this.bandageHealElapsed);
-  }
-
-  // ── Full Retard aura visuals ────────────────────────────────────────
-
-  private updateFullRetardAuras(dt: number): void {
-    // Check all entities (local + remote) for full-retard buff
-    const activeIds = new Set<string>();
-
-    // Local player
-    if (this.localBuffs.some(b => b.id === 'full-retard')) {
-      activeIds.add(this.localEntityId);
-      if (!this.fullRetardAuras.has(this.localEntityId)) {
-        const pos = this.playerController.mesh.position;
-        const visual = createFullRetardAura(this.scene, pos.x, pos.z, this.playerController.autoAttackRange);
-        this.fullRetardAuras.set(this.localEntityId, { ...visual, elapsed: 0 });
-        // Start looping SFX
-        const frSfx = getCharacterSfx(this.playerController.characterId)?.fullRetard;
-        if (frSfx) {
-          const handle = soundEffects.playLoop(frSfx.url, undefined, undefined, frSfx.volume, this.localEntityId);
-          if (handle) this.fullRetardLoops.set(this.localEntityId, handle);
-        }
-      }
-    }
-
-    // Remote entities
-    for (const entity of this.remoteEntities.values()) {
-      if (entity.buffs.some(b => b.id === 'full-retard')) {
-        activeIds.add(entity.id);
-        if (!this.fullRetardAuras.has(entity.id)) {
-          const visual = createFullRetardAura(this.scene, entity.mesh.position.x, entity.mesh.position.z, 1.5);
-          this.fullRetardAuras.set(entity.id, { ...visual, elapsed: 0 });
-          // Start looping SFX
-          const frSfx = getCharacterSfx(entity.characterId)?.fullRetard;
-          if (frSfx) {
-            const handle = soundEffects.playLoop(frSfx.url, this.distToEntity(entity.id), this.panToEntity(entity.id), frSfx.volume, entity.id);
-            if (handle) this.fullRetardLoops.set(entity.id, handle);
-          }
-        }
-      }
-    }
-
-    // Update existing auras
-    for (const [entityId, aura] of this.fullRetardAuras) {
-      if (!activeIds.has(entityId)) {
-        disposeGroup(this.scene, aura.group);
-        this.fullRetardAuras.delete(entityId);
-        // Stop looping SFX
-        const loop = this.fullRetardLoops.get(entityId);
-        if (loop) { loop.stop(); this.fullRetardLoops.delete(entityId); }
-        continue;
-      }
-
-      aura.elapsed += dt;
-      const mesh = this.getEntityMesh(entityId);
-      const followX = mesh ? mesh.position.x : aura.group.position.x;
-      const followZ = mesh ? mesh.position.z : aura.group.position.z;
-      updateFullRetardAuraVisual(aura, aura.elapsed, dt, followX, followZ);
-    }
-  }
-
-  // ── OD looping SFX ──────────────────────────────────────────────────
-  private updateODLoops(): void {
-    const activeIds = new Set<string>();
-
-    // Local player
-    if (this.localBuffs.some(b => b.id === 'overdosing')) {
-      activeIds.add(this.localEntityId);
-      if (!this.odLoops.has(this.localEntityId)) {
-        const odSfx = getCharacterSfx(this.playerController.characterId)?.od;
-        if (odSfx) {
-          const handle = soundEffects.playLoop(odSfx.url, undefined, undefined, odSfx.volume, this.localEntityId);
-          if (handle) this.odLoops.set(this.localEntityId, handle);
-        }
-      }
-    }
-
-    // Remote entities
-    for (const entity of this.remoteEntities.values()) {
-      if (entity.buffs.some(b => b.id === 'overdosing')) {
-        activeIds.add(entity.id);
-        if (!this.odLoops.has(entity.id)) {
-          const odSfx = getCharacterSfx(entity.characterId)?.od;
-          if (odSfx) {
-            const handle = soundEffects.playLoop(odSfx.url, this.distToEntity(entity.id), this.panToEntity(entity.id), odSfx.volume, entity.id);
-            if (handle) this.odLoops.set(entity.id, handle);
-          }
-        }
-      }
-    }
-
-    // Stop loops for entities that no longer have the buff
-    for (const [entityId, loop] of this.odLoops) {
-      if (!activeIds.has(entityId)) {
-        loop.stop();
-        this.odLoops.delete(entityId);
-      }
-    }
-  }
-
-  // ── Crotch Rot cloud visuals ─────────────────────────────────────────
-
-  private updateCrotchRotVisuals(dt: number): void {
-    const activeIds = new Set<string>();
-
-    // Local player
-    if (this.localBuffs.some(b => b.id === 'crotch-rot')) {
-      activeIds.add(this.localEntityId);
-      if (!this.crotchRotVisuals.has(this.localEntityId)) {
-        const visual = createCrotchRotCloud();
-        this.playerController.mesh.add(visual.group);
-        this.crotchRotVisuals.set(this.localEntityId, { ...visual, elapsed: 0 });
-      }
-    }
-
-    // Remote entities
-    for (const entity of this.remoteEntities.values()) {
-      if (entity.buffs.some(b => b.id === 'crotch-rot')) {
-        activeIds.add(entity.id);
-        if (!this.crotchRotVisuals.has(entity.id)) {
-          const visual = createCrotchRotCloud();
-          entity.mesh.add(visual.group);
-          this.crotchRotVisuals.set(entity.id, { ...visual, elapsed: 0 });
-        }
-      }
-    }
-
-    // Update existing visuals and remove expired ones
-    for (const [entityId, visual] of this.crotchRotVisuals) {
-      if (!activeIds.has(entityId)) {
-        const mesh = this.getEntityMesh(entityId);
-        if (mesh) mesh.remove(visual.group);
-        visual.group.traverse(child => {
-          if (child instanceof THREE.Mesh) {
-            child.geometry.dispose();
-            (child.material as THREE.Material).dispose();
-          }
-        });
-        this.crotchRotVisuals.delete(entityId);
-        continue;
-      }
-
-      visual.elapsed += dt;
-      // Group is parented to entity mesh, so pass 0,0,0 for follow position
-      updateCrotchRotCloud(visual, visual.elapsed, 0, 0, 0);
-    }
-  }
-
-  /** Start or stop the bandage loop SFX when an entity's castingAbilityId changes. */
-  private updateBandageLoop(entityId: string, prev: string | null, next: string | null): void {
-    if (prev === next) return;
-    // Stop existing loop for this entity
-    if (prev === 'bandage') {
-      const handle = this.bandageLoops.get(entityId);
-      if (handle) { handle.stop(); this.bandageLoops.delete(entityId); }
-    }
-    // Start new loop
-    if (next === 'bandage') {
-      const sfx = getSharedSfx().bandage;
-      if (sfx) {
-        const dist = entityId === this.localEntityId ? undefined : this.distToEntity(entityId);
-        const pan = entityId === this.localEntityId ? undefined : this.panToEntity(entityId);
-        const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, entityId);
-        if (handle) this.bandageLoops.set(entityId, handle);
-      }
-    }
-  }
-
-  /** Start or stop Dr. Retardo's cast-spell loop SFX when casting state changes. */
-  private updateCastSpellLoop(entityId: string, prev: string | null, next: string | null): void {
-    if (prev === next) return;
-    const charId = entityId === this.localEntityId
-      ? this.playerController?.characterId
-      : this.remoteEntities.get(entityId)?.characterId;
-    if (charId !== 'dr-retardo') return;
-    // Stop existing loop
-    if (prev && prev !== 'bandage') {
-      const handle = this.castSpellLoops.get(entityId);
-      if (handle) { handle.stop(); this.castSpellLoops.delete(entityId); }
-    }
-    // Start new loop
-    if (next && next !== 'bandage') {
-      const sfx = getSharedSfx().castSpell;
-      if (sfx) {
-        const dist = entityId === this.localEntityId ? undefined : this.distToEntity(entityId);
-        const pan = entityId === this.localEntityId ? undefined : this.panToEntity(entityId);
-        const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, entityId);
-        if (handle) this.castSpellLoops.set(entityId, handle);
-      }
-    }
-  }
 
   destroy(): void {
     this.stop();
     this.blindEffect.deactivate();
-    for (const handle of this.bandageLoops.values()) handle.stop();
-    this.bandageLoops.clear();
-    for (const handle of this.castSpellLoops.values()) handle.stop();
-    this.castSpellLoops.clear();
-    for (const handle of this.fullRetardLoops.values()) handle.stop();
-    this.fullRetardLoops.clear();
-    for (const handle of this.odLoops.values()) handle.stop();
-    this.odLoops.clear();
+    this.sound.destroy();
+    this.effects.destroy();
     this.input.dispose();
     this.targetingSystem.dispose();
     this.mapManager.dispose();
     this.renderer.dispose();
-    for (const cloud of this.gasClouds.values()) disposeGroup(this.scene, cloud.group);
-    this.gasClouds.clear();
-    for (const pool of this.chemPools.values()) disposeGroup(this.scene, pool.group);
-    this.chemPools.clear();
-    if (this.channelBeam) removeChannelBeam(this.scene, this.channelBeam);
-    if (this.bandageHealVisual) removeBandageHealEffect(this.scene, this.bandageHealVisual);
-    for (const aura of this.fullRetardAuras.values()) disposeGroup(this.scene, aura.group);
-    this.fullRetardAuras.clear();
-    for (const visual of this.crotchRotVisuals.values()) {
-      visual.group.traverse(child => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          (child.material as THREE.Material).dispose();
-        }
-      });
-    }
-    this.crotchRotVisuals.clear();
     for (const entity of this.remoteEntities.values()) this.scene.remove(entity.mesh);
     this.remoteEntities.clear();
     this.deadReckoning.clear();

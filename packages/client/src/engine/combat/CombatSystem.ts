@@ -5,23 +5,13 @@ import type { Targetable } from '../types';
 import type { RegenSystem } from './RegenSystem';
 import type { BuffSystem } from './BuffSystem';
 import type { CollisionSystem } from '../physics/CollisionSystem';
+import { type CombatError, type CombatResult, type CombatTextType, COMBAT_DURATION, MISS_CHANCE, GOD_MODE_DAMAGE_MULT, rollAbilityBaseDamage, applyBonusDamage, isFacingCheck } from '@gtr/shared';
 
-export type CombatError = 'no-target' | 'out-of-range' | 'not-facing' | 'on-cooldown' | 'not-enough-mana' | 'dead' | 'not-in-los' | 'stunned' | 'casting' | 'moving' | 'locked';
-
-export interface CombatResult {
-  success: boolean;
-  error?: CombatError;
-  errorMessage?: string;
-}
-
-export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'immune';
+export type { CombatError, CombatResult, CombatTextType };
 
 export class CombatSystem {
   private cooldowns = new Map<string, { remaining: number; total: number }>(); // ability id → cooldown state
   private gcd: { remaining: number; total: number } | null = null;
-  private static readonly COMBAT_DURATION = 5; // seconds before leaving combat
-  private static readonly MISS_CHANCE = 0.03; // 3% flat miss chance
-  private static readonly GOD_MODE_DAMAGE_MULT = 11; // +1000% damage
   private combatTimers = new Map<Targetable, number>(); // entity → seconds remaining
   private regenSystem: RegenSystem;
   private buffSystem: BuffSystem;
@@ -59,7 +49,7 @@ export class CombatSystem {
     if (entity.dead) return;
     const wasInCombat = entity.inCombat;
     entity.inCombat = true;
-    this.combatTimers.set(entity, CombatSystem.COMBAT_DURATION);
+    this.combatTimers.set(entity, COMBAT_DURATION);
     if (!wasInCombat) {
       this.onEnterCombat?.(entity);
     }
@@ -75,18 +65,10 @@ export class CombatSystem {
     attackerRotY: number,
     targetPos: THREE.Vector3
   ): boolean {
-    const toTarget = new THREE.Vector3()
-      .subVectors(targetPos, attackerPos)
-      .normalize();
-    // Player forward is along +Z in local space, rotated by mesh.rotation.y
-    const forward = new THREE.Vector3(
-      Math.sin(attackerRotY),
-      0,
-      Math.cos(attackerRotY)
+    return isFacingCheck(
+      Math.sin(attackerRotY), Math.cos(attackerRotY),
+      targetPos.x - attackerPos.x, targetPos.z - attackerPos.z
     );
-    const dot = forward.dot(new THREE.Vector3(toTarget.x, 0, toTarget.z).normalize());
-    // cos(60°) = 0.5 → 120° cone in front
-    return dot > 0.5;
   }
 
   /** Check if attacker is behind the target (180° rear arc) */
@@ -111,14 +93,14 @@ export class CombatSystem {
   /** Roll hit outcome: miss → dodge → crit → normal */
   private rollOutcome(attacker: Targetable, target: Targetable, canDodge = true): 'miss' | 'dodge' | 'crit' | 'normal' {
     const roll = Math.random();
-    if (roll < CombatSystem.MISS_CHANCE) return 'miss';
+    if (roll < MISS_CHANCE) return 'miss';
     // Can only dodge if facing the attacker (and dodge is allowed — abilities disable this)
     if (canDodge) {
       const targetFacingAttacker = this.isFacing(
         target.mesh.position, target.mesh.rotation.y, attacker.mesh.position
       );
       const targetStunned = this.buffSystem.isStunned(target);
-      if (targetFacingAttacker && !targetStunned && roll < CombatSystem.MISS_CHANCE + target.dodgeChance) return 'dodge';
+      if (targetFacingAttacker && !targetStunned && roll < MISS_CHANCE + target.dodgeChance) return 'dodge';
     }
     // Resting targets are always crit
     if (this.buffSystem.hasBuff(target, 'resting')) return 'crit';
@@ -128,7 +110,7 @@ export class CombatSystem {
 
   /** Roll miss check only (for channel start). Returns true if the attack misses. */
   rollMiss(): boolean {
-    return Math.random() < CombatSystem.MISS_CHANCE;
+    return Math.random() < MISS_CHANCE;
   }
 
   private getDistance(a: THREE.Vector3, b: THREE.Vector3): number {
@@ -312,22 +294,10 @@ export class CombatSystem {
         this.onCombatText?.(target, 0, outcome);
         if (outcome === 'dodge') this.onDodge?.(target);
       } else {
-        // Calculate base damage (variable or flat)
-        let baseDamage: number;
-        if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
-          baseDamage = ability.damageMin + Math.floor(
-            Math.random() * (ability.damageMax - ability.damageMin + 1)
-          );
-        } else {
-          baseDamage = ability.damage;
-        }
-
-        // Apply conditional bonus damage
-        if (ability.bonusDamagePercent && ability.bonusDamageRequiresDebuff) {
-          if (this.buffSystem.hasDebuff(target, ability.bonusDamageRequiresDebuff)) {
-            baseDamage = Math.round(baseDamage * (1 + ability.bonusDamagePercent / 100));
-          }
-        }
+        // Calculate base damage (variable or flat) + conditional bonus
+        let baseDamage = rollAbilityBaseDamage(ability);
+        baseDamage = applyBonusDamage(baseDamage, ability,
+          !!ability.bonusDamageRequiresDebuff && this.buffSystem.hasDebuff(target, ability.bonusDamageRequiresDebuff));
 
         // Shank: 50% bonus damage from behind
         if (ability.id === 'shank' && this.isBehind(attacker.mesh.position, target.mesh.position, target.mesh.rotation.y)) {
@@ -336,7 +306,7 @@ export class CombatSystem {
 
         // Apply attacker's damage dealt modifier (e.g. Retard Strength)
         let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
-        if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
+        if (this.godModeEntities.has(attacker)) damageMult *= GOD_MODE_DAMAGE_MULT;
         baseDamage = Math.round(baseDamage * damageMult);
 
         const multiplier = outcome === 'crit' ? 2 : 1;
@@ -423,7 +393,7 @@ export class CombatSystem {
 
     // Apply attacker's damage dealt modifier
     let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
-    if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
+    if (this.godModeEntities.has(attacker)) damageMult *= GOD_MODE_DAMAGE_MULT;
     const adjustedBase = Math.round(baseDamage * damageMult);
 
     const multiplier = outcome === 'crit' ? 2 : 1;
@@ -463,15 +433,10 @@ export class CombatSystem {
       return;
     }
 
-    let baseDamage: number;
-    if (ability.damageMin !== undefined && ability.damageMax !== undefined) {
-      baseDamage = ability.damageMin + Math.floor(Math.random() * (ability.damageMax - ability.damageMin + 1));
-    } else {
-      baseDamage = ability.damage;
-    }
+    let baseDamage = rollAbilityBaseDamage(ability);
 
     let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
-    if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
+    if (this.godModeEntities.has(attacker)) damageMult *= GOD_MODE_DAMAGE_MULT;
     baseDamage = Math.round(baseDamage * damageMult);
 
     const isCrit = outcome === 'crit';
@@ -526,7 +491,7 @@ export class CombatSystem {
     if (attacker.dead || target.dead) return;
 
     this.onHostileAction?.(attacker, target);
-    const godMult = this.godModeEntities.has(attacker) ? CombatSystem.GOD_MODE_DAMAGE_MULT : 1;
+    const godMult = this.godModeEntities.has(attacker) ? GOD_MODE_DAMAGE_MULT : 1;
     const adjustedTick = Math.round(tickDamage * damageMultiplier * godMult);
     const isCrit = Math.random() < attacker.critChance;
     const mult = isCrit ? 2 : 1;
@@ -590,7 +555,7 @@ export class CombatSystem {
       const critMult = outcome === 'crit' ? 2 : 1;
       const buffMult = this.buffSystem.getAutoAttackDamageTakenMultiplier(target);
       let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
-      if (this.godModeEntities.has(attacker)) damageMult *= CombatSystem.GOD_MODE_DAMAGE_MULT;
+      if (this.godModeEntities.has(attacker)) damageMult *= GOD_MODE_DAMAGE_MULT;
       const damage = Math.round(baseDamage * buffMult * damageMult * critMult);
       const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
       target.hp = Math.max(0, target.hp - actualDamage);
