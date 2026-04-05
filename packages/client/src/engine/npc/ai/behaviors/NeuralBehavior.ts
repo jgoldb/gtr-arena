@@ -62,7 +62,6 @@ export class NeuralBehavior implements CharacterBehavior {
   private inferring = false;
   private cachedAbilityIdx = 0;   // 0 = no ability
   private cachedMoveDir = 0;      // 0 = stand still
-  private debugCounter = 0;
 
   constructor(characterId: CharacterId, npc: NpcController, engine: AiEngineInterface) {
     this.characterId = characterId;
@@ -106,6 +105,15 @@ export class NeuralBehavior implements CharacterBehavior {
       const slotIndex = this.cachedAbilityIdx - 1;
       const ability = this.abilities[slotIndex];
       if (ability && !ability.isAutoAttack && cooldowns.isReady(ability.id)) {
+        // For charge abilities (Sweep), aim toward the target — matches headless arena
+        // where entities always faceToward(opponent) before ability usage.
+        let aimRotation: number | undefined;
+        if (ability.chargeDuration) {
+          const dx = currentTarget.position.x - this.npc.mesh.position.x;
+          const dz = currentTarget.position.z - this.npc.mesh.position.z;
+          aimRotation = Math.atan2(dx, dz);
+        }
+
         actions.push({
           type: 'ability',
           score: 100,
@@ -113,6 +121,7 @@ export class NeuralBehavior implements CharacterBehavior {
           ability,
           target: ability.requiresHostileTarget ? currentTarget : undefined,
           isCastTime: ability.castTime != null && ability.castTime > 0,
+          aimRotation,
           execute: () => {},
         });
       }
@@ -174,17 +183,6 @@ export class NeuralBehavior implements CharacterBehavior {
 
       this.cachedAbilityIdx = actions[0];
       this.cachedMoveDir = actions[1];
-
-      // Debug: log every 50th inference
-      if (++this.debugCounter % 50 === 1) {
-        const abilityName = actions[0] > 0 ? this.abilities[actions[0] - 1]?.name ?? '??' : 'none';
-        console.log(
-          `[Neural] action=[ability:${actions[0]}(${abilityName}), move:${actions[1]}, cancel:${actions[2]}]`,
-          `obs[0..5]=[${obs.slice(0, 6).map(v => v.toFixed(3)).join(',')}]`,
-          `normScale=${this.normScale.toFixed(1)}`,
-          `obsLen=${obs.length}`,
-        );
-      }
     }).catch(err => {
       console.warn('[NeuralBehavior] Inference failed:', err);
     }).finally(() => {
@@ -233,6 +231,9 @@ export class NeuralBehavior implements CharacterBehavior {
     const oppLoS = collision.hasLineOfSight(
       selfPos.x, selfPos.z, oppPos.x, oppPos.z, selfPos.y, oppPos.y,
     ) ? 1 : 0;
+
+    // Dynamic map features
+    const pillarState = this.engine.getPillarState();
 
     // Flatten in exact same order as HeadlessArena.flattenObservation()
     return [
@@ -285,6 +286,8 @@ export class NeuralBehavior implements CharacterBehavior {
       // Spatial
       oppLoS,
       ...wallDist,
+      // Dynamic map features
+      pillarState.ewPillarUp, pillarState.nsPillarUp, pillarState.pillarPhasePct,
     ];
   }
 }

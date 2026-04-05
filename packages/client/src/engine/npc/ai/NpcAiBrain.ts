@@ -36,6 +36,7 @@ export interface AiEngineInterface {
   npcApplyChannelTick(npc: NpcController, target: Targetable, tickDamage: number, healAmount: number, damageMultiplier: number): void;
   isNpcCharging(npc: NpcController): boolean;
   isArenaPreparationActive(): boolean;
+  getPillarState(): { ewPillarUp: number; nsPillarUp: number; pillarPhasePct: number };
 }
 
 export class NpcAiBrain {
@@ -59,9 +60,6 @@ export class NpcAiBrain {
   /** Discombobulate adaptation — tracks how long we've been scrambled */
   private discombobActive = false;
   private discombobElapsed = 0;
-
-  /** DEBUG: navigation logging timer */
-  private _navDebugTimer = 0;
 
   private readonly navigation: NpcNavigation;
 
@@ -223,16 +221,6 @@ export class NpcAiBrain {
           };
         }
       }
-      // DEBUG: log navigation state once per second
-      // this._navDebugTimer = (this._navDebugTimer ?? 0) + dt;
-      // if (this._navDebugTimer > 1) {
-      //   this._navDebugTimer = 0;
-      //   const p = this.npc.mesh.position;
-      //   const tp = this.currentTargetEntity.mesh.position;
-      //   const nr = navResult;
-      //   const wp = nr && nr.type === 'waypoint' ? nr.target : null;
-      //   console.log(`[NAV] npc=(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}) target=(${tp.x.toFixed(1)},${tp.y.toFixed(1)},${tp.z.toFixed(1)}) nav=${nr ? nr.type : 'null'}${wp ? ` wp=(${wp.x.toFixed(1)},${wp.y.toFixed(1)},${wp.z.toFixed(1)}) stop=${(nr as any).stopDistance?.toFixed(1)}` : ''} intent=${this.movement.intent.type} isMoving=${this.npc.isMoving} stuck=${(this.movement as any).stuckDuration?.toFixed(1)}`);
-      // }
     }
 
     // Movement runs every frame for smooth motion

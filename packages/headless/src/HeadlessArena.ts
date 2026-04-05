@@ -44,6 +44,7 @@ import {
 } from '@gtr/shared';
 import { HeadlessEntity } from './HeadlessEntity.js';
 import { HeadlessCombat } from './HeadlessCombat.js';
+import { HeadlessNpcBrain } from './HeadlessNpcBrain.js';
 
 // ── Action / Observation Types ───────────────────────────────────────────
 
@@ -118,6 +119,7 @@ export interface EntityObservation {
   // Dynamic map features (Cage pillars)
   ewPillarUp: number;    // 1 = E/W pillars fully raised, 0 = fully submerged
   nsPillarUp: number;    // 1 = N/S pillars fully raised, 0 = fully submerged
+  pillarPhasePct: number; // 0–1 progress through current pillar phase (1 = transition imminent)
 }
 
 export interface StepResult {
@@ -139,6 +141,13 @@ export interface ArenaConfig {
   tickRate?: number;
   /** Max match duration in seconds before draw (default 120). */
   maxDuration?: number;
+  /** If true, entity[1] is controlled by a scripted Master-level NPC brain. */
+  scriptedOpponent?: boolean;
+  /** Pool of opponent characters to randomly select from each episode (scripted mode). */
+  opponentCharacters?: CharacterId[];
+  /** Fraction of episodes (0–1) that use a scripted opponent instead of external actions.
+   *  Overrides scriptedOpponent when set. E.g. 0.3 = 30% scripted, 70% external (self-play). */
+  scriptedMixRate?: number;
 }
 
 // ── Pending AoE ──────��──────────────────────────────────────────────────
@@ -151,6 +160,20 @@ interface PendingAoeImpact {
   elapsed: number;
   owner: HeadlessEntity;
 }
+
+interface ActiveBuffWindow {
+  entityIdx: number;
+  abilityId: string;
+  buffId: string;
+  /** Ability cooldown in seconds (for scaling waste penalty). */
+  cooldown: number;
+  /** Total ticks the buff has been active. */
+  ticksActive: number;
+  /** Ticks where the entity was in productive range of the opponent. */
+  ticksProductive: number;
+}
+
+const BUFF_WASTE_BASE_PENALTY = 0.015;
 
 const BOTTLE_CHUCK_IMPACT_DELAY = 0.825;
 
@@ -185,6 +208,8 @@ export class HeadlessArena {
   private chargeSystem: ChargeSystem<HeadlessEntity>;
   private fullRetardAura: FullRetardAuraSystem<HeadlessEntity>;
   private pendingAoeImpacts: PendingAoeImpact[] = [];
+  /** Scripted AI brain for entity[1] (opponent). Null if opponent is external. */
+  private opponentBrain: HeadlessNpcBrain | null = null;
 
   // Dynamic pillars (Cage map only)
   private readonly PILLAR_Y_UP = 3;
@@ -216,8 +241,24 @@ export class HeadlessArena {
   private abilityUsedCount: [number, number] = [0, 0];
   private abilityFailedCount: [number, number] = [0, 0];
   private ccAppliedCount: [number, number] = [0, 0];
+  private autoAttackHits: [number, number] = [0, 0];
+  /** Accumulated buff waste penalty for the current step (replaces flat selfBuffWasted). */
+  private buffWastePenalty: [number, number] = [0, 0];
+  /** Tracks trinket uses while not CC'd (wasted). */
+  private trinketWastedCount: [number, number] = [0, 0];
+  /** Active self-buff windows being tracked for utilization. Persists across steps. */
+  private activeBuffWindows: ActiveBuffWindow[] = [];
+
+  // Opponent config
+  /** 0–1 fraction of episodes using scripted AI. 1.0 = pure scripted, 0 = pure external. */
+  private scriptedMixRate: number;
+  private opponentCharacters: CharacterId[];
+  private defaultOpponentCharacter: CharacterId;
 
   constructor(config: ArenaConfig) {
+    this.scriptedMixRate = config.scriptedMixRate ?? (config.scriptedOpponent ? 1.0 : 0);
+    this.opponentCharacters = config.opponentCharacters ?? [];
+    this.defaultOpponentCharacter = config.characters[1];
     this.mapId = config.mapId ?? 'cage';
     this.tickRate = config.tickRate ?? DEFAULT_TICK_RATE;
     this.maxDuration = config.maxDuration ?? DEFAULT_MAX_DURATION;
@@ -352,7 +393,12 @@ export class HeadlessArena {
         );
       },
       hasLineOfSight: (a, b) => this.collision.hasLineOfSight(a.x, a.z, b.x, b.z, a.y, b.y),
-      applyMeleeDamage: (a, t, dmg) => this.combat.applyAutoAttackDamage(a, t, dmg),
+      applyMeleeDamage: (a, t, dmg) => {
+        const result = this.combat.applyAutoAttackDamage(a, t, dmg);
+        const idx = this.entities.indexOf(a);
+        if (idx >= 0) this.autoAttackHits[idx]++;
+        return result;
+      },
       applyProjectileDamage: (a, t, dmg) => { this.combat.applyAutoAttackDamage(a, t, dmg, false); },
     });
 
@@ -436,6 +482,15 @@ export class HeadlessArena {
       onDamageDealt: (source, target, amount) => this.combat.onDamageDealt?.(source, target, amount),
       onEntityDied: (target, killer) => this.combat.onDeath?.(target, killer),
     });
+
+    // Scripted opponent brain (Master-level AI for entity[1]).
+    // In mix mode (0 < rate < 1) reset() handles per-episode brain creation.
+    if (this.scriptedMixRate >= 1.0) {
+      this.opponentBrain = new HeadlessNpcBrain(
+        this.entities[1], this.entities[0],
+        this.buffSystem, this.collision,
+      );
+    }
   }
 
   // ── Collision helper ────────────────────────────────────────────────────
@@ -501,6 +556,16 @@ export class HeadlessArena {
     for (const c of this.nsPillarColliders) c.centerY = nsY;
   }
 
+  private getPillarPhasePct(): number {
+    if (!this.hasPillars) return 0;
+    switch (this.pillarState) {
+      case 'up': return this.pillarStateTimer / this.currentPillarUpDuration;
+      case 'dropping': return this.pillarStateTimer / this.PILLAR_DROP_ANIM;
+      case 'down': return this.pillarStateTimer / this.PILLAR_DOWN_TIME;
+      case 'rising': return this.pillarStateTimer / this.PILLAR_RISE_ANIM;
+    }
+  }
+
   // ── Reset ──────────────────────────────────────────────────────────────
 
   reset(): [EntityObservation, EntityObservation] {
@@ -513,27 +578,12 @@ export class HeadlessArena {
     this.abilityUsedCount = [0, 0];
     this.abilityFailedCount = [0, 0];
     this.ccAppliedCount = [0, 0];
+    this.autoAttackHits = [0, 0];
+    this.buffWastePenalty = [0, 0];
+    this.trinketWastedCount = [0, 0];
+    this.activeBuffWindows = [];
 
-    // Reset entities to real map spawn points
-    const sp0 = this.spawnPoints[0] ?? { x: 0, y: 0, z: 10 };
-    const sp1 = this.spawnPoints[1] ?? { x: 0, y: 0, z: -10 };
-    this.entities[0].respawn(sp0.x, sp0.z, sp0.y);
-    this.entities[1].respawn(sp1.x, sp1.z, sp1.y);
-    // Face each other
-    this.entities[0].faceToward(this.entities[1]);
-    this.entities[1].faceToward(this.entities[0]);
-
-    // Reset pillar state
-    if (this.hasPillars) {
-      this.pillarState = 'up';
-      this.pillarStateTimer = 0;
-      this.currentPillarUpDuration = this.PILLAR_INITIAL_UP_TIME;
-      this.ewPillarProgress = 0;
-      this.nsPillarProgress = 1;
-      this.updatePillarColliderY();
-    }
-
-    // Clear all system state
+    // Clear all system state (before potential entity swap)
     this.buffSystem.clearEntity(this.entities[0]);
     this.buffSystem.clearEntity(this.entities[1]);
     this.combat.clearEntity(this.entities[0]);
@@ -545,6 +595,78 @@ export class HeadlessArena {
     this.dotSystem.dots.length = 0;
     this.chemPoolSystem.pools.length = 0;
     this.pendingAoeImpacts.length = 0;
+
+    // Per-episode opponent selection
+    if (this.scriptedMixRate > 0) {
+      const useScripted = Math.random() < this.scriptedMixRate;
+      if (useScripted) {
+        // Scripted episode — pick random character from pool (or keep default)
+        if (this.opponentCharacters.length > 0) {
+          const charId = this.opponentCharacters[
+            Math.floor(Math.random() * this.opponentCharacters.length)
+          ];
+          this.entities[1] = new HeadlessEntity(charId, 2, 'Agent2');
+        }
+        this.opponentBrain = new HeadlessNpcBrain(
+          this.entities[1], this.entities[0],
+          this.buffSystem, this.collision,
+        );
+      } else {
+        // External episode (self-play / random) — restore default character if swapped
+        if (this.entities[1].characterId !== this.defaultOpponentCharacter) {
+          this.entities[1] = new HeadlessEntity(this.defaultOpponentCharacter, 2, 'Agent2');
+        }
+        this.opponentBrain = null;
+      }
+    }
+
+    // Reset entities to real map spawn points
+    const sp0 = this.spawnPoints[0] ?? { x: 0, y: 0, z: 10 };
+    const sp1 = this.spawnPoints[1] ?? { x: 0, y: 0, z: -10 };
+    this.entities[0].respawn(sp0.x, sp0.z, sp0.y);
+    this.entities[1].respawn(sp1.x, sp1.z, sp1.y);
+    // Face each other
+    this.entities[0].faceToward(this.entities[1]);
+    this.entities[1].faceToward(this.entities[0]);
+
+    // Randomize pillar phase so the model experiences transitions throughout episodes
+    if (this.hasPillars) {
+      const upT = this.PILLAR_UP_TIME;
+      const dropT = this.PILLAR_DROP_ANIM;
+      const downT = this.PILLAR_DOWN_TIME;
+      const riseT = this.PILLAR_RISE_ANIM;
+      const cycleLen = upT + dropT + downT + riseT;
+      const t = Math.random() * cycleLen;
+
+      if (t < upT) {
+        this.pillarState = 'up';
+        this.pillarStateTimer = t;
+        this.currentPillarUpDuration = upT;
+        this.ewPillarProgress = 0;
+        this.nsPillarProgress = 1;
+      } else if (t < upT + dropT) {
+        this.pillarState = 'dropping';
+        this.pillarStateTimer = t - upT;
+        this.currentPillarUpDuration = upT;
+        const p = this.pillarStateTimer / dropT;
+        this.ewPillarProgress = p;
+        this.nsPillarProgress = 1 - p;
+      } else if (t < upT + dropT + downT) {
+        this.pillarState = 'down';
+        this.pillarStateTimer = t - upT - dropT;
+        this.currentPillarUpDuration = upT;
+        this.ewPillarProgress = 1;
+        this.nsPillarProgress = 0;
+      } else {
+        this.pillarState = 'rising';
+        this.pillarStateTimer = t - upT - dropT - downT;
+        this.currentPillarUpDuration = upT;
+        const p = this.pillarStateTimer / riseT;
+        this.ewPillarProgress = 1 - p;
+        this.nsPillarProgress = p;
+      }
+      this.updatePillarColliderY();
+    }
 
     // Apply starting buffs
     for (const entity of this.entities) {
@@ -574,6 +696,17 @@ export class HeadlessArena {
 
     const dt = this.tickRate;
 
+    // Override agent 1's action with scripted brain if active
+    if (this.opponentBrain) {
+      actions[1] = this.opponentBrain.decide(dt);
+      // Scripted NPC enters combat immediately (matches client NpcAiBrain behavior)
+      // so auto-attacks start as soon as a target is available.
+      const npc = this.entities[1];
+      if (!npc.dead && !npc.inCombat && !this.entities[0].dead) {
+        this.combat.enterCombat(npc);
+      }
+    }
+
     // Tick pillar state machine
     if (this.hasPillars) this.tickPillars(dt);
 
@@ -584,6 +717,9 @@ export class HeadlessArena {
     this.abilityUsedCount = [0, 0];
     this.abilityFailedCount = [0, 0];
     this.ccAppliedCount = [0, 0];
+    this.autoAttackHits = [0, 0];
+    this.buffWastePenalty = [0, 0];
+    this.trinketWastedCount = [0, 0];
 
     // Process actions for each entity
     for (let i = 0; i < 2; i++) {
@@ -681,6 +817,13 @@ export class HeadlessArena {
             if (validation.success) {
               this.castingSystem.start(entity, ability, target);
               this.abilityUsedCount[i]++;
+              if (ability.appliesSelfBuff) {
+                this.activeBuffWindows.push({
+                  entityIdx: i, abilityId: ability.id,
+                  buffId: ability.appliesSelfBuff.id,
+                  cooldown: ability.cooldown, ticksActive: 0, ticksProductive: 0,
+                });
+              }
               if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
                 this.ccAppliedCount[i]++;
               }
@@ -699,8 +842,22 @@ export class HeadlessArena {
             }
             const result = this.combat.useAbility(ability, entity, target);
             if (result.success) {
+              // Track trinket used while not CC'd (before post-effects clear CC)
+              if (ability.id === 'pvp-trinket' &&
+                  !this.buffSystem.isStunned(entity) &&
+                  !this.buffSystem.isSleeping(entity) &&
+                  !this.buffSystem.isBlinded(entity)) {
+                this.trinketWastedCount[i]++;
+              }
               this.handleAbilityPostEffects(entity, ability, target, opponent);
               this.abilityUsedCount[i]++;
+              if (ability.appliesSelfBuff) {
+                this.activeBuffWindows.push({
+                  entityIdx: i, abilityId: ability.id,
+                  buffId: ability.appliesSelfBuff.id,
+                  cooldown: ability.cooldown, ticksActive: 0, ticksProductive: 0,
+                });
+              }
               if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
                 this.ccAppliedCount[i]++;
               }
@@ -758,6 +915,31 @@ export class HeadlessArena {
       e.blinded = this.buffSystem.isBlinded(e);
     }
 
+    // Update buff utilization windows (after buffSystem.update so expired buffs are gone)
+    for (let w = this.activeBuffWindows.length - 1; w >= 0; w--) {
+      const win = this.activeBuffWindows[w];
+      const entity = this.entities[win.entityIdx];
+      const opponent = this.entities[1 - win.entityIdx];
+
+      if (this.buffSystem.hasBuff(entity, win.buffId)) {
+        // Buff still active — track utilization
+        win.ticksActive++;
+        if (!entity.dead && !opponent.dead
+            && entity.distanceTo(opponent) <= entity.autoAttackRange * 1.5) {
+          win.ticksProductive++;
+        }
+      } else {
+        // Buff expired — evaluate utilization and apply penalty if wasted
+        if (win.ticksActive > 0) {
+          const utilization = win.ticksProductive / win.ticksActive;
+          // Scale penalty by cooldown: 60s CD with 0% util = full penalty
+          const cdScale = Math.min(win.cooldown / 30, 1);
+          this.buffWastePenalty[win.entityIdx] += (1 - utilization) * cdScale * BUFF_WASTE_BASE_PENALTY;
+        }
+        this.activeBuffWindows.splice(w, 1);
+      }
+    }
+
     this.elapsed += dt;
 
     // Check timeout
@@ -769,17 +951,44 @@ export class HeadlessArena {
     // ── Compute rewards ────────────────────────────────────────────────
     const rewards: [number, number] = [0, 0];
     for (let i = 0; i < 2; i++) {
+      const entity = this.entities[i];
+      const opponent = this.entities[1 - i];
+
       // Damage / healing shaping
       rewards[i] += this.damageDealt[i] * 0.00005;
       rewards[i] -= this.damageTaken[i] * 0.00003;
       rewards[i] += this.healingDone[i] * 0.00003;
-      // Ability usage incentives
-      rewards[i] += this.abilityUsedCount[i] * 0.004;
-      rewards[i] -= this.abilityFailedCount[i] * 0.001;
+
+      // Ability usage — small flat bonus; effective use rewarded via damage/CC
+      rewards[i] += this.abilityUsedCount[i] * 0.001;
+      rewards[i] -= this.abilityFailedCount[i] * 0.002;
+
+      // Buff waste penalty — duration-aware, scaled by cooldown length
+      rewards[i] -= this.buffWastePenalty[i];
+
+      // Trinket wasted penalty — used while not CC'd
+      rewards[i] -= this.trinketWastedCount[i] * 0.02;
+
       // CC application bonus (stun/sleep/blind)
       rewards[i] += this.ccAppliedCount[i] * 0.008;
-      // Small step penalty — encourages aggression, discourages stalling
-      rewards[i] -= 0.0003;
+
+      // Auto-attack hit bonus — directly rewards melee engagement
+      rewards[i] += this.autoAttackHits[i] * 0.003;
+
+      // Proximity reward — encourages closing distance and melee engagement
+      if (!entity.dead && !opponent.dead) {
+        const dist = entity.distanceTo(opponent);
+        // Continuous gradient: closer = more reward (up to +0.001/tick at point-blank)
+        const maxRewardDist = yardsToUnits(30);
+        rewards[i] += 0.001 * Math.max(0, 1 - dist / maxRewardDist);
+        // Melee engagement bonus for being in auto-attack range
+        if (dist <= entity.autoAttackRange * 1.5) {
+          rewards[i] += 0.002;
+        }
+      }
+
+      // Step penalty — encourages aggression, discourages stalling
+      rewards[i] -= 0.0005;
     }
     // Terminal rewards
     if (this.done) {
@@ -1069,6 +1278,7 @@ export class HeadlessArena {
       // Dynamic map features (1 = fully raised, 0 = fully submerged)
       ewPillarUp: 1 - this.ewPillarProgress,
       nsPillarUp: 1 - this.nsPillarProgress,
+      pillarPhasePct: this.getPillarPhasePct(),
     };
   }
 
@@ -1105,7 +1315,7 @@ export class HeadlessArena {
       obs.oppLoS,
       ...obs.wallDist,
       // Dynamic map features
-      obs.ewPillarUp, obs.nsPillarUp,
+      obs.ewPillarUp, obs.nsPillarUp, obs.pillarPhasePct,
     ];
   }
 }

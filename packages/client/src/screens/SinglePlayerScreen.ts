@@ -263,6 +263,7 @@ export class SinglePlayerScreen {
         } else {
           this.opponentCharId = char.id as CharacterId;
           this.setPreviewCharacter(this.opponentCharId);
+          this.refreshDiffButtons();
         }
         this.refreshCharGrid();
         this.refreshPickCards();
@@ -468,6 +469,7 @@ export class SinglePlayerScreen {
         background: rgba(20,25,40,0.6); color: rgba(150,160,180,0.6);
       `;
       btn.addEventListener('click', () => {
+        if (btn.disabled) return;
         this.difficulty = key;
         this.refreshDiffButtons();
       });
@@ -562,18 +564,36 @@ export class SinglePlayerScreen {
   }
 
   private refreshDiffButtons(): void {
+    const neuralLocked = this.opponentCharId !== 'janitor';
+
+    // If neural is selected but no longer available, fall back to expert
+    if (neuralLocked && this.difficulty === 'neural') {
+      this.difficulty = 'expert';
+    }
+
     for (const btn of this.diffBtns) {
       const key = btn.dataset.diff as DifficultyLevel;
       const info = DIFFICULTY_LABELS[key];
       const isActive = key === this.difficulty;
-      if (isActive) {
+      const isDisabled = key === 'neural' && neuralLocked;
+
+      btn.disabled = isDisabled;
+
+      if (isDisabled) {
+        btn.style.background = 'rgba(20,25,40,0.3)';
+        btn.style.borderColor = 'rgba(100,120,200,0.05)';
+        btn.style.color = 'rgba(100,110,130,0.3)';
+        btn.style.cursor = 'not-allowed';
+      } else if (isActive) {
         btn.style.background = `rgba(${this.hexToRgb(info.color)}, 0.2)`;
         btn.style.borderColor = info.color;
         btn.style.color = info.color;
+        btn.style.cursor = 'pointer';
       } else {
         btn.style.background = 'rgba(20,25,40,0.6)';
         btn.style.borderColor = 'rgba(100,120,200,0.1)';
         btn.style.color = 'rgba(150,160,180,0.6)';
+        btn.style.cursor = 'pointer';
       }
     }
     this.diffDescEl.textContent = DIFFICULTY_LABELS[this.difficulty].desc;

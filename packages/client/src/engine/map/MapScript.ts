@@ -22,4 +22,6 @@ export interface MapScript {
    * returns the surface Y to snap entities at (px, pz) to. Returns undefined otherwise.
    */
   getMovingPlatformSnapY?(px: number, pz: number): number | undefined;
+  /** Returns dynamic pillar state for maps with animated pillars (e.g. The Cage). */
+  getPillarState?(): { ewPillarUp: number; nsPillarUp: number; pillarPhasePct: number };
 }

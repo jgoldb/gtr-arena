@@ -86,6 +86,9 @@ function handleInit(cmd: Record<string, unknown>): void {
   const mapId = (cmd.mapId as string) ?? 'cage';
   const tickRate = cmd.tickRate as number | undefined;
   const maxDuration = cmd.maxDuration as number | undefined;
+  const scriptedOpponent = cmd.opponentMode === 'scripted';
+  const opponentCharacters = cmd.opponentCharacters as string[] | undefined;
+  const scriptedMixRate = cmd.scriptedMixRate as number | undefined;
 
   arenas = [];
   for (let i = 0; i < numEnvs; i++) {
@@ -94,6 +97,9 @@ function handleInit(cmd: Record<string, unknown>): void {
       mapId,
       tickRate,
       maxDuration,
+      scriptedOpponent,
+      opponentCharacters: opponentCharacters as CharacterId[] | undefined,
+      scriptedMixRate,
     }));
   }
 

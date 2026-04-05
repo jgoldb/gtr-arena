@@ -58,6 +58,7 @@ export interface PlaygroundLoopHost {
   // Mutable Engine state
   godMode: boolean;
   isAdmin: boolean;
+  spectatorMode: boolean;
   resting: boolean;
   pendingNpcSpawn: { characterId: import('@gtr/shared').CharacterId; team?: number } | null;
 
@@ -70,6 +71,9 @@ export interface PlaygroundLoopHost {
   updatePendingAoeImpacts(dt: number): void;
   removeNpc(npc: NpcController): void;
   sfxPan(sourcePos: THREE.Vector3): number;
+
+  // Spectator
+  cycleSpectatorTarget(): void;
 
   // Callbacks
   onGroundTargetConfirmed?: () => void;
@@ -95,6 +99,31 @@ export class PlaygroundLoop {
   update(deltaTime: number): void {
     const { host } = this;
     const { input, playerController, targetingSystem, buffSystem, autoAttackSystem } = host;
+
+    // ── Spectator mode: only Tab to cycle target + camera ──────────
+    if (host.spectatorMode) {
+      // Consume clicks so they don't queue up
+      input.getLeftClick();
+      input.getRightClick();
+
+      // Tab to cycle spectator camera target
+      const tabDown = input.isBindDown(keybindManager.getCode('target_nearest_enemy'));
+      if (tabDown && !this.tabKeyWasDown) {
+        host.cycleSpectatorTarget();
+      }
+      this.tabKeyWasDown = tabDown;
+
+      // NPC auto-attack updates (NPCs still fight each other)
+      for (const npc of host.npcSystem.getNpcs()) {
+        if (npc.inCombat && npc.autoAttackTarget && !npc.dead && !npc.stunned && !npc.blinded) {
+          autoAttackSystem.start(npc, npc.autoAttackTarget);
+        } else if (autoAttackSystem.isAttacking(npc)) {
+          autoAttackSystem.stop(npc);
+        }
+        autoAttackSystem.update(npc, deltaTime);
+      }
+      autoAttackSystem.updateProjectiles(deltaTime);
+    } else {
 
     // ── Input processing ──────────────────────────────────────────
 
@@ -247,6 +276,8 @@ export class PlaygroundLoop {
       host.blindEffect.deactivate();
     }
 
+    } // end non-spectator player input
+
     // ── NPC state sync ────────────────────────────────────────────
 
     for (const npc of host.npcSystem.getNpcs()) {
@@ -265,34 +296,36 @@ export class PlaygroundLoop {
 
     // ── Casting / channeling ──────────────────────────────────────
 
-    host.castingSystem.update(playerController, deltaTime);
+    if (!host.spectatorMode) {
+      host.castingSystem.update(playerController, deltaTime);
 
-    const castState = host.castingSystem.getState(playerController);
-    if (castState) {
-      const progress = Math.min(1, castState.elapsed / castState.totalTime);
-      if (castState.isChannel) {
-        playerController.setChannelAnimation(castState.ability.id, progress);
-        playerController.setCastAnimation(null, 0);
+      const castState = host.castingSystem.getState(playerController);
+      if (castState) {
+        const progress = Math.min(1, castState.elapsed / castState.totalTime);
+        if (castState.isChannel) {
+          playerController.setChannelAnimation(castState.ability.id, progress);
+          playerController.setCastAnimation(null, 0);
+        } else {
+          playerController.setCastAnimation(castState.ability.id, progress);
+          playerController.setChannelAnimation(null, 0);
+        }
       } else {
-        playerController.setCastAnimation(castState.ability.id, progress);
+        playerController.setCastAnimation(null, 0);
         playerController.setChannelAnimation(null, 0);
       }
-    } else {
-      playerController.setCastAnimation(null, 0);
-      playerController.setChannelAnimation(null, 0);
-    }
 
-    // Sync casting state to PlayerController so the target frame cast bar works
-    if (castState) {
-      playerController.castingAbilityName = castState.ability.name;
-      playerController.castingElapsed = castState.elapsed;
-      playerController.castingTotalTime = castState.totalTime;
-      playerController.castingIsChannel = castState.isChannel;
-    } else {
-      playerController.castingAbilityName = null;
-      playerController.castingElapsed = 0;
-      playerController.castingTotalTime = 0;
-      playerController.castingIsChannel = false;
+      // Sync casting state to PlayerController so the target frame cast bar works
+      if (castState) {
+        playerController.castingAbilityName = castState.ability.name;
+        playerController.castingElapsed = castState.elapsed;
+        playerController.castingTotalTime = castState.totalTime;
+        playerController.castingIsChannel = castState.isChannel;
+      } else {
+        playerController.castingAbilityName = null;
+        playerController.castingElapsed = 0;
+        playerController.castingTotalTime = 0;
+        playerController.castingIsChannel = false;
+      }
     }
 
     // ── Charges ───────────────────────────────────────────────────
@@ -302,27 +335,23 @@ export class PlaygroundLoop {
         host.chargeSystem.cancelCharges(npc);
       }
     }
-    if (playerStunned && host.chargeSystem.isCharging(playerController)) {
-      playerController.charging = false;
-      playerController.chargeAnimSpeed = 1;
-      host.chargeSystem.cancelCharges(playerController);
-    }
     host.chargeSystem.update(deltaTime);
 
     // ── System updates ────────────────────────────────────────────
 
     host.mapManager.update(deltaTime);
 
-    const snapY = host.mapManager.getMovingPlatformSnapY(
-      playerController.mesh.position.x,
-      playerController.mesh.position.z,
-    );
-    if (snapY !== undefined) {
-      playerController.mesh.position.y = snapY;
-      playerController.velocityY = 0;
+    if (!host.spectatorMode) {
+      const snapY = host.mapManager.getMovingPlatformSnapY(
+        playerController.mesh.position.x,
+        playerController.mesh.position.z,
+      );
+      if (snapY !== undefined) {
+        playerController.mesh.position.y = snapY;
+        playerController.velocityY = 0;
+      }
+      playerController.update(deltaTime);
     }
-
-    playerController.update(deltaTime);
     for (const npc of host.npcSystem.getNpcs()) npc.update(deltaTime);
 
     // Despawn dead NPCs after their timer expires
@@ -342,7 +371,9 @@ export class PlaygroundLoop {
     host.combatSystem.update(deltaTime);
     buffSystem.update(deltaTime);
     // Re-run casting update after buff tick so channel aura remaining overrides the buff system's decrement
-    host.castingSystem.update(playerController, 0);
+    if (!host.spectatorMode) {
+      host.castingSystem.update(playerController, 0);
+    }
     host.regenSystem.update(deltaTime);
     targetingSystem.update(deltaTime);
 
@@ -360,7 +391,9 @@ export class PlaygroundLoop {
     });
 
     host.thirdPersonCamera.update(deltaTime);
-    playerController.setOpacity(host.thirdPersonCamera.getPlayerModelOpacity());
+    if (!host.spectatorMode) {
+      playerController.setOpacity(host.thirdPersonCamera.getPlayerModelOpacity());
+    }
     host.renderer.render(host.scene, host.camera);
     input.resetDeltas();
   }

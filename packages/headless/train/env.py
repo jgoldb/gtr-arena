@@ -107,8 +107,12 @@ class GtrVecEnv(VecEnv):
         headless_dir: str | None = None,
         tick_rate: float | None = None,
         max_duration: float | None = None,
+        opponent_mode: str | None = None,
+        opponent_characters: list[str] | None = None,
+        scripted_mix_rate: float | None = None,
     ):
         self.headless_dir = headless_dir or str(Path(__file__).parent.parent)
+        self.opponent_mode = opponent_mode
 
         # Start bridge subprocess
         self.proc = subprocess.Popen(
@@ -131,6 +135,12 @@ class GtrVecEnv(VecEnv):
             init_cmd["tickRate"] = tick_rate
         if max_duration is not None:
             init_cmd["maxDuration"] = max_duration
+        if opponent_mode == "scripted" and scripted_mix_rate is None:
+            init_cmd["opponentMode"] = "scripted"
+        if opponent_characters:
+            init_cmd["opponentCharacters"] = opponent_characters
+        if scripted_mix_rate is not None:
+            init_cmd["scriptedMixRate"] = scripted_mix_rate
 
         self._send(init_cmd)
         init_resp = self._recv()
@@ -147,8 +157,12 @@ class GtrVecEnv(VecEnv):
         # Both agents' observations: [num_envs, 2, obs_size]
         self.all_obs = np.array(init_resp["obs"], dtype=np.float32)
 
-        # Opponent policy
-        self.opponent = opponent or RandomOpponent(self.num_abilities)
+        # Opponent policy: pure scripted mode sends no-ops (bridge handles AI).
+        # Mix mode needs real actions for non-scripted episodes.
+        if opponent_mode == "scripted" and scripted_mix_rate is None:
+            self.opponent = DoNothingOpponent()
+        else:
+            self.opponent = opponent or RandomOpponent(self.num_abilities)
 
         # Define spaces
         observation_space = spaces.Box(

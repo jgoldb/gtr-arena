@@ -47,6 +47,7 @@ export interface PlaygroundNpcSystemHost {
   readonly targetingSystem: TargetingSystem;
 
   isGodMode(): boolean;
+  isSpectatorMode(): boolean;
   isArenaPreparationActive(): boolean;
   sfxPan(sourcePos: THREE.Vector3): number;
   handleEntityDeath(victim: Targetable, killer: Targetable | null): void;
@@ -194,7 +195,9 @@ export class PlaygroundNpcSystem {
           ? host.mapManager.getNpcSpawnBounds()
           : host.mapManager.getBounds(),
         getNpcSpawnBounds: () => host.mapManager.getNpcSpawnBounds(),
-        getAllTargetables: () => [host.playerController as Targetable, ...this.npcs],
+        getAllTargetables: () => host.isSpectatorMode()
+          ? [...this.npcs]
+          : [host.playerController as Targetable, ...this.npcs],
         getHazards: () => {
           const hazards: HazardInfo[] = [];
           for (const cloud of host.gasCloudSystem.clouds) {
@@ -220,6 +223,10 @@ export class PlaygroundNpcSystem {
         },
         isNpcCharging: (npc) => host.chargeSystem.isCharging(npc),
         isArenaPreparationActive: () => host.isArenaPreparationActive(),
+        getPillarState: () => {
+          const script = host.mapManager.getScript();
+          return script?.getPillarState?.() ?? { ewPillarUp: 0, nsPillarUp: 0, pillarPhasePct: 0 };
+        },
       };
     }
     return this.aiEngineInterface;

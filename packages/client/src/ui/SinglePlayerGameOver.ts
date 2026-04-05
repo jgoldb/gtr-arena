@@ -3,6 +3,10 @@ export interface SinglePlayerGameOverOptions {
   opponentName: string;
   onRematch: () => void;
   onExit: () => void;
+  /** Override the large heading text (default: "VICTORY" / "DEFEAT"). */
+  title?: string;
+  /** Override the subtitle text. */
+  subtitle?: string;
 }
 
 /**
@@ -32,7 +36,7 @@ export function showSinglePlayerGameOver(opts: SinglePlayerGameOverOptions): () 
   `;
 
   const resultText = document.createElement('div');
-  resultText.textContent = opts.won ? 'VICTORY' : 'DEFEAT';
+  resultText.textContent = opts.title ?? (opts.won ? 'VICTORY' : 'DEFEAT');
   resultText.style.cssText = `
     font-size: 36px; font-weight: 900; letter-spacing: 6px;
     color: ${opts.won ? '#44cc66' : '#cc4444'};
@@ -41,9 +45,9 @@ export function showSinglePlayerGameOver(opts: SinglePlayerGameOverOptions): () 
   `;
 
   const subText = document.createElement('div');
-  subText.textContent = opts.won
+  subText.textContent = opts.subtitle ?? (opts.won
     ? `You defeated ${opts.opponentName}!`
-    : `${opts.opponentName} defeated you.`;
+    : `${opts.opponentName} defeated you.`);
   subText.style.cssText = 'font-size: 14px; color: #aaa; margin-bottom: 28px;';
 
   const btnRow = document.createElement('div');

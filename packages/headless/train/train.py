@@ -1,14 +1,21 @@
 """
 PPO training for GTR Arena 1v1.
 
-Trains agent (janitor) with optional self-play opponent pool.
-Starts against random opponent, then switches to self-play after --self-play-start steps.
+Trains agent (janitor) with optional self-play opponent pool, scripted opponents, or a mix.
 
 Usage:
-    python train.py                           # defaults: 5M steps, janitor vs janitor
+    python train.py                           # defaults: 5M steps, janitor vs janitor, self-play
     python train.py --timesteps 10000000      # longer run
     python train.py --no-self-play            # disable self-play (random opponent only)
     python train.py --resume models/ppo_gtr_checkpoint_500000  # resume training
+    python train.py --opponent scripted-master # train against Master-level scripted AI
+    python train.py --opponent scripted-master --opponent-characters janitor crackhead dr-retardo
+                                              # rotate opponent character each episode
+
+    # Recommended: self-play + 30% scripted opponents across all characters
+    python train.py --opponent self-play \\
+        --opponent-characters janitor crackhead dr-retardo \\
+        --scripted-mix-rate 0.3
 
 Requirements:
     pip install -r requirements.txt
@@ -137,6 +144,9 @@ def main():
     parser.add_argument("--save-freq", type=int, default=100_000, help="Checkpoint save frequency (steps)")
     parser.add_argument("--resume", default=None, help="Path to saved model to resume training")
     # Self-play options
+    parser.add_argument("--opponent", choices=["random", "scripted-master", "self-play"],
+                        default="self-play",
+                        help="Opponent type: random, scripted-master (Master NPC AI), or self-play (default)")
     parser.add_argument("--no-self-play", action="store_true", help="Disable self-play (random opponent only)")
     parser.add_argument("--self-play-start", type=int, default=300_000,
                         help="Timestep to activate self-play opponent pool")
@@ -146,9 +156,19 @@ def main():
                         help="Max opponents in the pool")
     parser.add_argument("--self-play-random-prob", type=float, default=0.2,
                         help="Probability of random opponent per episode (for diversity)")
+    parser.add_argument("--opponent-characters", nargs="+", default=None,
+                        help="Pool of opponent characters to rotate per episode (e.g. janitor crackhead dr-retardo)")
+    parser.add_argument("--scripted-mix-rate", type=float, default=None,
+                        help="Fraction (0-1) of episodes using scripted opponents. "
+                             "Remaining episodes use self-play/random. E.g. 0.3 = 30%% scripted")
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
+
+    # Resolve opponent mode (--no-self-play overrides --opponent for backwards compat)
+    opponent_mode = args.opponent
+    if args.no_self_play and opponent_mode == "self-play":
+        opponent_mode = "random"
 
     # Create vectorized environment
     print(f"Starting {args.num_envs} environments: {args.characters[0]} vs {args.characters[1]} on {args.map}")
@@ -156,6 +176,9 @@ def main():
         num_envs=args.num_envs,
         characters=tuple(args.characters),
         map_id=args.map,
+        opponent_mode="scripted" if opponent_mode == "scripted-master" else None,
+        opponent_characters=args.opponent_characters,
+        scripted_mix_rate=args.scripted_mix_rate,
     )
     print(f"Observation size: {env.obs_size}, abilities: {env.num_abilities}")
 
@@ -193,7 +216,7 @@ def main():
         ),
     ]
 
-    if not args.no_self_play:
+    if opponent_mode == "self-play":
         sp_cb = SelfPlayCallback(
             env=env,
             save_dir=args.save_dir,
@@ -207,8 +230,17 @@ def main():
         print(f"Self-play: activates at {args.self_play_start:,} steps, "
               f"snapshots every {args.self_play_freq:,} steps, "
               f"pool size {args.self_play_pool_size}")
+    elif opponent_mode == "scripted-master":
+        print("Opponent: scripted Master-level NPC (bridge-side AI)")
     else:
-        print("Self-play: disabled (random opponent)")
+        print("Opponent: random actions")
+
+    if args.scripted_mix_rate is not None:
+        chars = ", ".join(args.opponent_characters) if args.opponent_characters else "default"
+        print(f"Scripted mix: {args.scripted_mix_rate:.0%} of episodes use scripted AI "
+              f"(characters: {chars})")
+    elif args.opponent_characters:
+        print(f"Opponent characters: {', '.join(args.opponent_characters)}")
 
     # Train
     print(f"\nTraining for {args.timesteps:,} timesteps (LR {args.lr} → 0)...")

@@ -5,6 +5,7 @@ import { LobbyScreen } from './screens/LobbyScreen';
 import { GameLobbyScreen } from './screens/GameLobbyScreen';
 import { AdminScreen } from './screens/AdminScreen';
 import { SinglePlayerScreen, type SinglePlayerConfig } from './screens/SinglePlayerScreen';
+import { SpectatorScreen, type SpectatorConfig } from './screens/SpectatorScreen';
 import { NetworkManager } from './network/NetworkManager';
 import { ClientEngine } from './network/ClientEngine';
 import { EscapeMenu, type EscapeMenuButton } from './ui/EscapeMenu';
@@ -59,6 +60,7 @@ let lobbyScreen: LobbyScreen | null = null;
 let gameLobbyScreen: GameLobbyScreen | null = null;
 let adminScreen: AdminScreen | null = null;
 let singlePlayerScreen: SinglePlayerScreen | null = null;
+let spectatorScreen: SpectatorScreen | null = null;
 let clientEngine: ClientEngine | null = null;
 const reconnectOverlay = new ReconnectOverlay();
 
@@ -162,6 +164,8 @@ function cleanupCurrentState(): void {
   adminScreen = null;
   singlePlayerScreen?.destroy();
   singlePlayerScreen = null;
+  spectatorScreen?.dispose();
+  spectatorScreen = null;
   practiceMusic.fadeOut();
   soundEffects.fadeOutAll();
   cleanupMultiplayerUI();
@@ -393,6 +397,12 @@ function showLobby(): void {
       color: 'rgba(90, 61, 138, 0.8)',
       hoverColor: 'rgba(112, 80, 168, 0.9)',
       spaceBefore: true,
+    });
+    lobbyMenuButtons.push({
+      label: 'Spectator',
+      onClick: () => showSpectatorScreen(),
+      color: 'rgba(90, 61, 138, 0.8)',
+      hoverColor: 'rgba(112, 80, 168, 0.9)',
     });
     lobbyMenuButtons.push({
       label: 'Manage Users',
@@ -754,6 +764,157 @@ async function startSinglePlayer(config: SinglePlayerConfig): Promise<void> {
       network?.send({ type: 'return_to_lobby' });
     },
     onFrameUpdate: checkGameOver,
+  });
+}
+
+// ── Spectator Mode ────────────────────────────────────────────────────
+
+function showSpectatorScreen(): void {
+  cleanupCurrentState();
+  currentState = 'single-player'; // reuse state (no new AppState needed)
+  hideGameUI();
+
+  spectatorScreen = new SpectatorScreen();
+  spectatorScreen.onWatch = (config) => startSpectatorMode(config);
+  spectatorScreen.onBack = () => {
+    showLobby();
+    network?.send({ type: 'return_to_lobby' });
+  };
+  document.body.appendChild(spectatorScreen.element);
+
+  // Escape menu
+  const specMenuButtons: EscapeMenuButton[] = [
+    {
+      label: 'Back to Lobby',
+      onClick: () => spectatorScreen?.onBack?.(),
+      color: 'rgba(160, 50, 50, 0.8)',
+      hoverColor: 'rgba(180, 60, 60, 0.9)',
+    },
+  ];
+  lobbyEscapeMenu = new EscapeMenu({
+    onReturnToLobby: () => {},
+    customButtons: specMenuButtons,
+    onKeybinds: () => {
+      lobbyEscapeMenu?.close();
+      keybindMenu.open(() => lobbyEscapeMenu?.open());
+    },
+    onAudio: () => {
+      lobbyEscapeMenu?.close();
+      new AudioSettingsDialog(() => lobbyEscapeMenu?.open()).open();
+    },
+  });
+  lobbyEscapeMenu.element.style.zIndex = '1050';
+  document.body.appendChild(lobbyEscapeMenu.element);
+}
+
+async function startSpectatorMode(config: SpectatorConfig): Promise<void> {
+  lobbyMusic.fadeOut();
+  cleanupCurrentState();
+  currentState = 'single-player';
+
+  const uiOverlay = document.getElementById('ui-overlay');
+  if (uiOverlay) uiOverlay.style.display = '';
+  canvas.style.display = 'block';
+
+  const { Engine } = await import('./engine/Engine');
+  const { createPlaygroundSession } = await import('./engine/PlaygroundSession');
+
+  const engine = new Engine(canvas);
+  engine.isAdmin = isAdmin;
+  engine.loadMap(config.mapId);
+
+  // Enable spectator mode - hides player, overrides camera
+  engine.enableSpectatorMode();
+
+  // Spawn both NPC fighters
+  const mapConfig = engine.mapManager.getCurrentConfig();
+  const spawn1 = mapConfig?.spawnPoints?.[0] ?? { x: 0, y: 0, z: 5 };
+  const spawn2 = mapConfig?.spawnPoints?.[1] ?? { x: 0, y: 0, z: -5 };
+
+  const name1 = CHARACTERS[config.char1].displayName;
+  const name2 = CHARACTERS[config.char2].displayName;
+
+  const npc1 = engine.spawnAiNpc(
+    config.char1,
+    new THREEVector3(spawn1.x, spawn1.y, spawn1.z),
+    0, name1, config.diff1,
+  );
+  npc1.mesh.rotation.y = Math.atan2(spawn2.x - spawn1.x, spawn2.z - spawn1.z);
+
+  const npc2 = engine.spawnAiNpc(
+    config.char2,
+    new THREEVector3(spawn2.x, spawn2.y, spawn2.z),
+    1, name2, config.diff2,
+  );
+  npc2.mesh.rotation.y = Math.atan2(spawn1.x - spawn2.x, spawn1.z - spawn2.z);
+
+  // Apply starting buffs
+  for (const [npc, charId] of [[npc1, config.char1], [npc2, config.char2]] as const) {
+    const stats = getCharacterStats(charId);
+    if (stats.startingBuffs) {
+      for (const buff of stats.startingBuffs) {
+        engine.buffSystem.apply(npc, buff);
+      }
+    }
+  }
+
+  // Camera follows first NPC initially
+  engine.setSpectatorTarget(npc1);
+
+  // ── Game-over detection ──
+  let specGameOver = false;
+  let specGameOverCleanup: (() => void) | null = null;
+
+  function checkGameOver(): void {
+    if (specGameOver) return;
+    const dead1 = npc1.dead;
+    const dead2 = npc2.dead;
+    if (!dead1 && !dead2) return;
+
+    specGameOver = true;
+    const winnerName = dead2 && !dead1 ? name1 : dead1 && !dead2 ? name2 : null;
+
+    setTimeout(() => {
+      specGameOverCleanup = showSinglePlayerGameOver({
+        won: !!winnerName,
+        opponentName: '',
+        title: winnerName ? `${winnerName} wins!` : 'DRAW',
+        subtitle: winnerName
+          ? `${dead1 ? name1 : name2} has been defeated.`
+          : 'Both fighters went down!',
+        onRematch: () => {
+          specGameOverCleanup = null;
+          cleanupPlaygroundUI();
+          startSpectatorMode(config);
+        },
+        onExit: () => {
+          specGameOverCleanup = null;
+          showLobby();
+          network?.send({ type: 'return_to_lobby' });
+        },
+      });
+    }, 1500);
+  }
+
+  // Wire up arena frames for both fighters
+  const arenaEntities = [
+    { entityId: 'spec_npc_0', targetable: npc1 as unknown as Targetable },
+    { entityId: 'spec_npc_1', targetable: npc2 as unknown as Targetable },
+  ];
+
+  pgSession = createPlaygroundSession({
+    engine,
+    canvas,
+    getPortrait,
+    keybindMenu,
+    onReturnToLobby: () => {
+      specGameOverCleanup?.();
+      showLobby();
+      network?.send({ type: 'return_to_lobby' });
+    },
+    onFrameUpdate: checkGameOver,
+    skipArenaPreparation: true,
+    arenaFrameEntities: arenaEntities,
   });
 }
 

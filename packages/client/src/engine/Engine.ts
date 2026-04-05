@@ -61,6 +61,9 @@ export class Engine {
   resting = false;
   isAdmin = false;
   godMode = false;
+  /** Spectator mode: player is invisible ghost, camera follows NPCs. */
+  spectatorMode = false;
+  private spectatorTarget: NpcController | null = null;
   onRestError?: (message: string) => void;
   onCharacterChange?: (abilities: readonly (Ability | null)[]) => void;
   onAutoAttackError?: (message: string) => void;
@@ -515,6 +518,7 @@ export class Engine {
   // ── PlaygroundNpcSystemHost methods ──────────────────────────────
 
   isGodMode(): boolean { return this.godMode; }
+  isSpectatorMode(): boolean { return this.spectatorMode; }
   isArenaPreparationActive(): boolean { return this.arenaPreparationActive; }
   addPendingAoeImpact(impact: PendingAoeImpact): void { this.pendingAoeImpacts.push(impact); }
 
@@ -648,6 +652,44 @@ export class Engine {
 
   npcUseAbility(npc: NpcController, abilityId: string, target: Targetable | null, groundPos?: THREE.Vector3): boolean {
     return this.npcSystem.npcUseAbility(npc, abilityId, target, groundPos);
+  }
+
+  // ── Spectator Mode ─────────────────────────────────
+
+  /** Activate spectator mode: player becomes invisible ghost, camera follows NPCs. */
+  enableSpectatorMode(): void {
+    this.spectatorMode = true;
+    this.godMode = true;
+    // Hide the player model
+    this.playerController.mesh.visible = false;
+    // Move player out of the arena so it doesn't collide with anything
+    this.playerController.mesh.position.set(0, -100, 0);
+    // Override camera target to follow the spectated NPC
+    this.thirdPersonCamera.targetGetter = () => {
+      if (this.spectatorTarget && !this.spectatorTarget.dead) {
+        return this.spectatorTarget.mesh.position;
+      }
+      // Fallback: find any living NPC
+      const npcs = this.npcSystem.getNpcs();
+      for (const npc of npcs) {
+        if (!npc.dead) return npc.mesh.position;
+      }
+      return new THREE.Vector3(0, 0, 0);
+    };
+  }
+
+  /** Set which NPC the spectator camera follows. */
+  setSpectatorTarget(npc: NpcController): void {
+    this.spectatorTarget = npc;
+  }
+
+  /** Cycle spectator camera to the next NPC. */
+  cycleSpectatorTarget(): void {
+    const npcs = this.npcSystem.getNpcs().filter(n => !n.dead);
+    if (npcs.length === 0) return;
+    const currentIdx = this.spectatorTarget ? npcs.indexOf(this.spectatorTarget) : -1;
+    const nextIdx = (currentIdx + 1) % npcs.length;
+    this.spectatorTarget = npcs[nextIdx];
   }
 
   // ── Casting ─────────────────────────────────────────

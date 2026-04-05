@@ -35,6 +35,10 @@ export class CageArenaScript extends ArenaScript {
   private pillarState: 'up' | 'dropping' | 'down' | 'rising' = 'up';
   private pillarStateTimer = 0;
   private currentPillarUpDuration = 30; // first cycle uses initial delay
+  /** 0 = E/W fully raised, 1 = E/W fully submerged */
+  private ewPillarProgress = 0;
+  /** 0 = N/S fully raised, 1 = N/S fully submerged (starts at 1 = down) */
+  private nsPillarProgress = 1;
 
   // Crowd animation (GPU-driven via vertex shader)
   private crowdTimeUniform = { value: 0 };
@@ -360,6 +364,7 @@ export class CageArenaScript extends ArenaScript {
   }
 
   private setPillarProgress(t: number): void {
+    this.ewPillarProgress = t;
     const y = this.PILLAR_Y_UP + (this.PILLAR_Y_DOWN - this.PILLAR_Y_UP) * t;
     for (let i = 0; i < this.pillarMeshes.length; i++) {
       this.pillarMeshes[i].position.y = y;
@@ -369,11 +374,27 @@ export class CageArenaScript extends ArenaScript {
 
   /** Same as setPillarProgress but for the north/south pair. */
   private setNSPillarProgress(t: number): void {
+    this.nsPillarProgress = t;
     const y = this.PILLAR_Y_UP + (this.PILLAR_Y_DOWN - this.PILLAR_Y_UP) * t;
     for (let i = 0; i < this.nsPillarMeshes.length; i++) {
       this.nsPillarMeshes[i].position.y = y;
       this.nsPillarColliders[i].centerY = y;
     }
+  }
+
+  getPillarState(): { ewPillarUp: number; nsPillarUp: number; pillarPhasePct: number } {
+    let phaseDuration: number;
+    switch (this.pillarState) {
+      case 'up': phaseDuration = this.currentPillarUpDuration; break;
+      case 'dropping': phaseDuration = this.PILLAR_DROP_ANIM; break;
+      case 'down': phaseDuration = this.PILLAR_DOWN_TIME; break;
+      case 'rising': phaseDuration = this.PILLAR_RISE_ANIM; break;
+    }
+    return {
+      ewPillarUp: 1 - this.ewPillarProgress,
+      nsPillarUp: 1 - this.nsPillarProgress,
+      pillarPhasePct: phaseDuration > 0 ? this.pillarStateTimer / phaseDuration : 0,
+    };
   }
 
   // ---------------------------------------------------------------------------

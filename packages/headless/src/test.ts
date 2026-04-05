@@ -84,3 +84,36 @@ const obs = arena.reset();
 const flat = HeadlessArena.flattenObservation(obs[0]);
 console.log(`\nObservation vector size: ${flat.length}`);
 console.log(`Sample observation:`, flat.map(v => v.toFixed(3)).join(', '));
+
+// ── Scripted opponent test ──────────────────────────────────────────────
+console.log(`\n=== Scripted Opponent Test ===`);
+const scriptedMatchups: [CharacterId, CharacterId][] = [
+  ['janitor', 'janitor'],
+  ['crackhead', 'crackhead'],
+  ['dr-retardo', 'dr-retardo'],
+];
+const SCRIPTED_MATCHES = 50;
+for (const matchup of scriptedMatchups) {
+  const sr = { team1: 0, team2: 0, draw: 0 };
+  let ssteps = 0;
+  const st0 = performance.now();
+  for (let i = 0; i < SCRIPTED_MATCHES; i++) {
+    const sa = new HeadlessArena({ characters: matchup, mapId: 'cage', scriptedOpponent: true });
+    sa.reset();
+    let steps = 0;
+    while (!sa.isDone) {
+      sa.step([randomAction(matchup[0]), { abilityIndex: null, moveAngle: null, moveSpeed: 0 }]);
+      steps++;
+    }
+    ssteps += steps;
+    if (sa.matchWinner === 1) sr.team1++;
+    else if (sa.matchWinner === 2) sr.team2++;
+    else sr.draw++;
+  }
+  const se = performance.now() - st0;
+  console.log(
+    `${matchup[0]} (random) vs ${matchup[1]} (scripted Master): ` +
+    `Agent=${sr.team1} NPC=${sr.team2} Draw=${sr.draw} ` +
+    `(${(ssteps / SCRIPTED_MATCHES).toFixed(0)} avg steps, ${se.toFixed(0)}ms)`
+  );
+}

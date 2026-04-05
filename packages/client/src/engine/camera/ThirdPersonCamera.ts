@@ -4,7 +4,7 @@ import { InputManager } from '../input/InputManager';
 export class ThirdPersonCamera {
   private camera: THREE.PerspectiveCamera;
   private input: InputManager;
-  private targetGetter: () => THREE.Vector3;
+  targetGetter: () => THREE.Vector3;
   private scene: THREE.Scene;
   private raycaster = new THREE.Raycaster();
 
