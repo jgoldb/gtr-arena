@@ -13,6 +13,7 @@ import {
   createGlassPlatform,
 } from './celestial/CelestialGeometry';
 import { createDiamondArchways } from './celestial/CelestialArchways';
+import { buildNavigationGraph } from '../npc/ai/buildNavigationGraph';
 
 export class CelestialBallroomScript extends ArenaScript {
   // Oval arena dimensions
@@ -75,6 +76,13 @@ export class CelestialBallroomScript extends ArenaScript {
     const platform = createGlassPlatform(this.group, this.collision);
     this.glassPlatformGroup = platform.platformGroup;
     this.glassPlatformCollider = platform.collider;
+
+    // Build navigation graph from registered paths + platforms
+    const navGraph = buildNavigationGraph(
+      this.collision.getNavigationPaths(),
+      this.collision.getMovingPlatforms(),
+    );
+    this.collision.setNavigationGraph(navGraph);
   }
 
   protected updateArena(): void {

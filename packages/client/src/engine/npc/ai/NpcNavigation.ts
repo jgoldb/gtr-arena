@@ -1,27 +1,34 @@
 import * as THREE from 'three';
-import type { CollisionSystem, NavigationPath, MovingPlatform } from '../../physics/CollisionSystem';
+import type { CollisionSystem, MovingPlatform } from '../../physics/CollisionSystem';
 import { getCharacterStats, MELEE_RANGE_THRESHOLD, type CharacterId } from '@gtr/shared';
+import type { NavNode, NavigationGraph } from './NavigationGraph';
 
 type NavResult = { type: 'waypoint'; target: THREE.Vector3; stopDistance: number } | { type: 'wait' } | null;
 
 /**
- * Handles archway path-following and elevator/platform awareness for NPC AI.
+ * Graph-based NPC navigation.
  *
- * Extracted from NpcAiBrain to keep navigation logic separate from
- * decision-making and combat AI.
+ * Uses the NavigationGraph (built at map init from archway chains + elevator +
+ * ground connectors) to find optimal routes via A*. Falls back to the legacy
+ * heuristic-based navigation when no graph is available.
  */
 export class NpcNavigation {
   private collision: () => CollisionSystem;
   private characterId: CharacterId;
 
-  /** Navigation commitment — prevents frame-by-frame waypoint oscillation.
-   *  When the NPC picks a navigation target, it commits for a short duration
-   *  before re-evaluating, preventing rapid flipping between waypoints. */
-  private cachedNavResult: NavResult = null;
+  /** Cached A* path — sequence of graph nodes to follow. */
+  private cachedPath: NavNode[] | null = null;
+  private pathIndex = 0;
+
+  /** Navigation commitment — prevents frame-by-frame recalculation. */
   commitTimer = 0;
   private commitTargetPos: THREE.Vector3 | null = null;
 
-  /** Re-usable constants for detectPathSurface */
+  /** Threshold: if both NPC and target are below this Y and within LoS, skip graph. */
+  private static readonly GROUND_Y_THRESHOLD = 1.0;
+  /** Distance to a waypoint node before advancing to the next one. */
+  private static readonly WP_ARRIVE_DIST = 2.0;
+  /** Y-weighted distance for nearest-node lookups to prevent matching under arches. */
   private static readonly PATH_SURFACE_MAX_Y_GAP = 1.5;
   private static readonly PATH_SURFACE_MAX_XZ_DIST = 4;
 
@@ -39,35 +46,143 @@ export class NpcNavigation {
     npcPos: THREE.Vector3,
     targetPos: THREE.Vector3,
   ): NavResult {
+    const collision = this.collision();
+    const graph = collision.getNavigationGraph();
+
+    // If no graph, fall back to legacy navigation
+    if (!graph) return this.legacyResolveNavigation(npcPos, targetPos);
+
     const targetMoved = this.commitTargetPos &&
       this.commitTargetPos.distanceTo(targetPos) > 5;
-    const reachedWaypoint = this.cachedNavResult?.type === 'waypoint' &&
-      npcPos.distanceTo(this.cachedNavResult.target) < this.cachedNavResult.stopDistance + 0.5;
-    const needsRecalc = this.commitTimer <= 0 || targetMoved || reachedWaypoint;
+    const reachedWaypoint = this.cachedPath && this.pathIndex < this.cachedPath.length &&
+      this.nodeDistXZ(npcPos, this.cachedPath[this.pathIndex]) < NpcNavigation.WP_ARRIVE_DIST;
+    const needsRecalc = this.commitTimer <= 0 || targetMoved || !this.cachedPath;
 
-    if (needsRecalc) {
-      this.cachedNavResult = this.getNavigationTarget(npcPos, targetPos);
-      // Wait states (elevator) re-evaluate faster since platform Y changes continuously
-      this.commitTimer = this.cachedNavResult?.type === 'wait' ? 0.3 : 1.0;
-      this.commitTargetPos = targetPos.clone();
+    // Advance through reached waypoints without requiring full recalc
+    if (this.cachedPath && reachedWaypoint) {
+      this.pathIndex++;
+      // If we've reached the end, trigger recalc
+      if (this.pathIndex >= this.cachedPath.length) {
+        this.cachedPath = null;
+      }
     }
 
-    return this.cachedNavResult;
+    if (needsRecalc) {
+      const result = this.computeGraphPath(npcPos, targetPos, graph, collision);
+      this.commitTimer = result?.type === 'wait' ? 0.3 : 1.0;
+      this.commitTargetPos = targetPos.clone();
+      if (!result) return null;
+      if (result.type === 'wait') return result;
+    }
+
+    // Return current waypoint from cached path
+    if (this.cachedPath && this.pathIndex < this.cachedPath.length) {
+      const node = this.cachedPath[this.pathIndex];
+
+      // Platform wait: if next node is a platform node and we're close in XZ
+      // but not at the right Y, wait for the elevator
+      if (node.type === 'platform' && node.y > 1.5) {
+        const xzDist = this.nodeDistXZ(npcPos, node);
+        if (xzDist < 3 && Math.abs(npcPos.y - node.y) > 2) {
+          return { type: 'wait' };
+        }
+      }
+
+      return {
+        type: 'waypoint',
+        target: new THREE.Vector3(node.x, node.y, node.z),
+        stopDistance: 0.8,
+      };
+    }
+
+    return null;
   }
 
   /**
-   * Determines the next navigation waypoint for the NPC, or signals it should
-   * wait (e.g. target on elevator at different level).
-   *
-   * Returns null when no special navigation is needed (normal behavior applies).
+   * Compute a new path using the navigation graph.
+   * Returns a NavResult for immediate use and populates cachedPath for follow-up frames.
    */
-  private getNavigationTarget(
+  private computeGraphPath(
     npcPos: THREE.Vector3,
     targetPos: THREE.Vector3,
+    graph: NavigationGraph,
+    collision: CollisionSystem,
   ): NavResult {
-    const collision = this.collision();
+    this.cachedPath = null;
+    this.pathIndex = 0;
 
-    // ── Elevator / moving-platform navigation ─────────────────────────
+    // ── Quick exit: both on ground with line-of-sight ──
+    const bothOnGround = npcPos.y < NpcNavigation.GROUND_Y_THRESHOLD &&
+                         targetPos.y < NpcNavigation.GROUND_Y_THRESHOLD;
+    if (bothOnGround) {
+      const hasLoS = collision.hasLineOfSight(
+        npcPos.x, npcPos.z, targetPos.x, targetPos.z,
+        npcPos.y, targetPos.y,
+      );
+      if (hasLoS) return null; // Direct movement, no routing needed
+    }
+
+    // ── Check moving platforms first (elevator/pillar special cases) ──
+    const platformResult = this.checkPlatforms(npcPos, targetPos, collision);
+    if (platformResult) return platformResult;
+
+    // ── A* pathfinding on graph ──
+    const path = graph.findPath(
+      npcPos.x, npcPos.y, npcPos.z,
+      targetPos.x, targetPos.y, targetPos.z,
+    );
+
+    if (!path || path.length === 0) {
+      // No graph path — check if NPC is slightly elevated (on a ramp) and
+      // needs help getting off. Use legacy archway exit logic.
+      if (npcPos.y > 0.5) {
+        return this.findNearbyArchwayExit(npcPos, targetPos, collision);
+      }
+      return null;
+    }
+
+    // Trim leading nodes the NPC has already passed (within arrive distance)
+    let startIdx = 0;
+    while (startIdx < path.length - 1 && this.nodeDistWeighted(npcPos, path[startIdx]) < NpcNavigation.WP_ARRIVE_DIST) {
+      startIdx++;
+    }
+
+    // If the path is all ground-level nodes and NPC has LoS to target, skip it.
+    // This prevents unnecessary waypoint routing when direct movement works.
+    const allGround = path.every(n => n.y < 1.5);
+    if (allGround && bothOnGround) return null;
+
+    this.cachedPath = path.slice(startIdx);
+    this.pathIndex = 0;
+
+    if (this.cachedPath.length === 0) return null;
+
+    const firstNode = this.cachedPath[0];
+
+    // Platform wait state
+    if (firstNode.type === 'platform' && firstNode.y > 1.5) {
+      const xzDist = this.nodeDistXZ(npcPos, firstNode);
+      if (xzDist < 3 && Math.abs(npcPos.y - firstNode.y) > 2) {
+        return { type: 'wait' };
+      }
+    }
+
+    return {
+      type: 'waypoint',
+      target: new THREE.Vector3(firstNode.x, firstNode.y, firstNode.z),
+      stopDistance: 0.8,
+    };
+  }
+
+  /**
+   * Handle moving platform interactions directly — these need real-time Y checks
+   * that the static graph edges can't fully capture.
+   */
+  private checkPlatforms(
+    npcPos: THREE.Vector3,
+    targetPos: THREE.Vector3,
+    collision: CollisionSystem,
+  ): NavResult {
     const platforms = collision.getMovingPlatforms();
     const isMelee = getCharacterStats(this.characterId).autoAttackRange
                     <= MELEE_RANGE_THRESHOLD;
@@ -76,94 +191,74 @@ export class NpcNavigation {
       const surfaceY = platform.getY();
       const isCircular = platform.isCircular ?? false;
 
-      // XZ containment check (circular for pillars, box for elevators)
       const npcInXZ = isCircular
-        ? this.horizDist(npcPos, { x: platform.cx, z: platform.cz }) <= platform.halfW + 0.5
+        ? this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz) <= platform.halfW + 0.5
         : (Math.abs(npcPos.x - platform.cx) <= platform.halfW + 0.5 &&
            Math.abs(npcPos.z - platform.cz) <= platform.halfD + 0.5);
 
       const targetInXZ = isCircular
-        ? this.horizDist(targetPos, { x: platform.cx, z: platform.cz }) <= platform.halfW + 0.3
+        ? this.horizDist(targetPos.x, targetPos.z, platform.cx, platform.cz) <= platform.halfW + 0.3
         : (Math.abs(targetPos.x - platform.cx) <= platform.halfW &&
            Math.abs(targetPos.z - platform.cz) <= platform.halfD);
 
       const npcOnPlatform = npcInXZ && Math.abs(npcPos.y - surfaceY) < 1.5;
       const targetOnPlatform = targetInXZ && Math.abs(targetPos.y - surfaceY) < 0.8;
 
-      // ── Auto-cycling platform anticipation (pillars) ──
+      // ── Auto-cycling platform (pillars) ──
       const isCycling = platform.cyclesAutomatically === true
                         && platform.maxY !== undefined
                         && platform.minY !== undefined;
 
-      const isSubmerged = isCycling && surfaceY < (platform.minY! + 1.5);
-      const isRaised = isCycling && surfaceY > (platform.maxY! - 1.5);
+      if (isCycling) {
+        const isSubmerged = surfaceY < (platform.minY! + 1.5);
+        const isRaised = surfaceY > (platform.maxY! - 1.5);
 
-      // Target is on/near a submerged cycling platform — melee NPCs should
-      // move onto the footprint so they ride up together when it rises.
-      if (isCycling && targetInXZ && isSubmerged && isMelee) {
-        // Use a tight check: NPC must be well inside the actual collider radius
-        // (not just the generous npcInXZ tolerance) to guarantee it rides the
-        // pillar up. halfW IS the collider radius for circular platforms.
-        const npcDistToCenter = this.horizDist(npcPos, { x: platform.cx, z: platform.cz });
-        if (npcDistToCenter < platform.halfW - 0.3) {
-          // Firmly on the platform — fight normally.
-          // When the pillar rises, both entities ride up together.
-          return null;
-        }
-        // Not centered enough — walk to the platform center
-        return { type: 'waypoint',
-                 target: new THREE.Vector3(platform.cx, npcPos.y, platform.cz),
-                 stopDistance: 0.3 };
-      }
-
-      // Target is on a raised cycling platform the NPC isn't on —
-      // walk to base and wait for it to descend.
-      if (isCycling && targetOnPlatform && isRaised && !npcOnPlatform) {
-        const distToPlat = this.horizDist(npcPos, { x: platform.cx, z: platform.cz });
-        if (distToPlat > platform.halfW + 1) {
+        if (targetInXZ && isSubmerged && isMelee) {
+          const npcDistToCenter = this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz);
+          if (npcDistToCenter < platform.halfW - 0.3) return null;
           return { type: 'waypoint',
                    target: new THREE.Vector3(platform.cx, npcPos.y, platform.cz),
-                   stopDistance: 0.5 };
+                   stopDistance: 0.3 };
         }
-        return { type: 'wait' };
-      }
 
-      // Ranged NPC vs raised cycling platform: re-route if height diff
-      // makes attacks impractical.
-      if (isCycling && targetOnPlatform && isRaised && !npcOnPlatform && !isMelee) {
-        if (Math.abs(surfaceY - npcPos.y) > 4) {
-          const distToPlat = this.horizDist(npcPos, { x: platform.cx, z: platform.cz });
-          if (distToPlat > platform.halfW + 2) {
+        if (targetOnPlatform && isRaised && !npcOnPlatform) {
+          const distToPlat = this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz);
+          if (distToPlat > platform.halfW + 1) {
             return { type: 'waypoint',
                      target: new THREE.Vector3(platform.cx, npcPos.y, platform.cz),
-                     stopDistance: platform.halfW + 1 };
+                     stopDistance: 0.5 };
           }
           return { type: 'wait' };
         }
+
+        if (targetOnPlatform && isRaised && !npcOnPlatform && !isMelee) {
+          if (Math.abs(surfaceY - npcPos.y) > 4) {
+            const distToPlat = this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz);
+            if (distToPlat > platform.halfW + 2) {
+              return { type: 'waypoint',
+                       target: new THREE.Vector3(platform.cx, npcPos.y, platform.cz),
+                       stopDistance: platform.halfW + 1 };
+            }
+            return { type: 'wait' };
+          }
+        }
+        continue; // Don't fall through to standard platform logic for cycling platforms
       }
 
       // ── Standard elevator/platform logic ──
       if (npcOnPlatform) {
-        if (surfaceY < 2 && !targetOnPlatform) {
-          // Platform at ground level and target is elsewhere — step off
-          continue;
-        }
-        // Elevated — if target is here and reachable, fight normally
+        if (surfaceY < 2 && !targetOnPlatform) continue; // Step off at ground
         if (targetOnPlatform && Math.abs(npcPos.y - targetPos.y) < 3) return null;
-        // Otherwise ride the platform (wait for it to reach target or ground)
-        return { type: 'wait' };
+        return { type: 'wait' }; // Ride it
       }
 
       if (targetOnPlatform) {
-        // Target is on the platform, NPC is not
         if (Math.abs(surfaceY - npcPos.y) < 3) {
-          // Platform is at NPC's level — walk onto it
           return { type: 'waypoint',
                    target: new THREE.Vector3(platform.cx, surfaceY, platform.cz),
                    stopDistance: 1.0 };
         }
-        // Platform is at a different level — walk to its XZ position and wait
-        const distToPlat = this.horizDist(npcPos, { x: platform.cx, z: platform.cz });
+        const distToPlat = this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz);
         if (distToPlat > 2) {
           return { type: 'waypoint',
                    target: new THREE.Vector3(platform.cx, npcPos.y, platform.cz),
@@ -173,8 +268,7 @@ export class NpcNavigation {
       }
     }
 
-    // Target above all archway peaks — only reachable by elevator.
-    // Find the non-cycling platform (elevator) specifically.
+    // Target above archway peaks — route to elevator
     if (targetPos.y > 18) {
       const elevator = platforms.find(p => !p.cyclesAutomatically);
       if (elevator) {
@@ -184,7 +278,7 @@ export class NpcNavigation {
                    target: new THREE.Vector3(elevator.cx, surfaceY, elevator.cz),
                    stopDistance: 1.0 };
         }
-        const distToPlat = this.horizDist(npcPos, { x: elevator.cx, z: elevator.cz });
+        const distToPlat = this.horizDist(npcPos.x, npcPos.z, elevator.cx, elevator.cz);
         if (distToPlat > 2) {
           return { type: 'waypoint',
                    target: new THREE.Vector3(elevator.cx, npcPos.y, elevator.cz),
@@ -194,63 +288,54 @@ export class NpcNavigation {
       }
     }
 
-    // ── Archway path-following ──────────────────────────────────────────
-    // Uses Y-aligned surface detection instead of elevation thresholds.
-    // An entity is "on a path" when it's near a waypoint AND at the same
-    // elevation (within step height). This prevents an NPC underneath an
-    // arch tube from matching to waypoints on the surface above.
+    return null; // No platform interaction
+  }
+
+  /**
+   * When the NPC is slightly elevated (on a ramp) but not matched to a graph
+   * path node, find the nearest archway exit to guide it off the ramp.
+   */
+  private findNearbyArchwayExit(
+    npcPos: THREE.Vector3,
+    targetPos: THREE.Vector3,
+    collision: CollisionSystem,
+  ): NavResult {
     const paths = collision.getNavigationPaths();
-    if (paths.length === 0) return null;
-
-    let npcOnPath = this.detectPathSurface(paths, npcPos);
-    const targetOnPath = this.detectPathSurface(paths, targetPos);
-
-    // If the NPC is barely on a low ramp WP and the target is on the ground,
-    // the NPC is effectively at ground level — skip path navigation so it
-    // walks directly toward the target instead of being routed up the arch.
-    if (npcOnPath && !targetOnPath && npcPos.y < 1.0) {
-      const wp = npcOnPath.path.waypoints[npcOnPath.wpIdx];
-      if (wp.y < 2.0) npcOnPath = null;
-    }
-
-    // ── Both on the same archway — follow waypoints toward target ──
-    if (npcOnPath && targetOnPath && npcOnPath.path === targetOnPath.path) {
-      if (Math.abs(npcOnPath.wpIdx - targetOnPath.wpIdx) <= 1) return null;
-      const dir = targetOnPath.wpIdx > npcOnPath.wpIdx ? 1 : -1;
-      const wps = npcOnPath.path.waypoints;
-      const nextIdx = this.advanceAlongChain(wps, npcPos, npcOnPath.wpIdx + dir, dir, targetOnPath.wpIdx);
-      const wp = wps[nextIdx];
-      return { type: 'waypoint', target: new THREE.Vector3(wp.x, wp.y, wp.z), stopDistance: 0.8 };
-    }
-
-    // ── NPC on a path, target elsewhere — exit toward target ──
-    if (npcOnPath) {
-      return this.navigateExitPath(npcOnPath, npcPos, targetPos);
-    }
-
-    // ── NPC on ground, target on a path — enter via approach waypoint ──
-    if (targetOnPath) {
-      return this.navigateEnterPath(targetOnPath, npcPos);
-    }
-
-    // ── Both on the ground — check if NPC still needs to clear a ramp ──
-    if (npcPos.y > 0.5) {
-      return this.findNearbyArchwayExit(paths, npcPos, targetPos);
+    for (const path of paths) {
+      const wps = path.waypoints;
+      for (let i = 0; i < wps.length; i++) {
+        const wp = wps[i];
+        if (wp.y < 0.5) continue;
+        const dx = npcPos.x - wp.x;
+        const dy = npcPos.y - wp.y;
+        const dz = npcPos.z - wp.z;
+        if (dx * dx + dy * dy + dz * dz < 9) {
+          // Near an elevated waypoint — route to the chain end closest to target
+          const s = wps[0];
+          const e = wps[wps.length - 1];
+          const sDist = this.horizDist(npcPos.x, npcPos.z, s.x, s.z);
+          const eDist = this.horizDist(npcPos.x, npcPos.z, e.x, e.z);
+          const sToTarget = this.horizDist(s.x, s.z, targetPos.x, targetPos.z);
+          const eToTarget = this.horizDist(e.x, e.z, targetPos.x, targetPos.z);
+          const exitWp = (sDist + sToTarget) < (eDist + eToTarget) ? s : e;
+          return { type: 'waypoint', target: new THREE.Vector3(exitWp.x, 0, exitWp.z), stopDistance: 1.0 };
+        }
+      }
     }
     return null;
   }
 
-  /** Detect which archway path surface an entity is physically standing on.
-   *  Matches by Y-alignment (within step height) + horizontal proximity, so
-   *  an entity underneath a tube won't match to waypoints on the surface above. */
-  private detectPathSurface(
-    paths: readonly NavigationPath[],
+  // ── Legacy navigation (fallback when no graph is available) ──────────
+
+  /** Legacy path surface detection — used as fallback */
+  private legacyDetectPathSurface(
+    paths: readonly import('../../physics/CollisionSystem').NavigationPath[],
     pos: THREE.Vector3,
-  ): { path: NavigationPath; wpIdx: number } | null {
+  ): { path: import('../../physics/CollisionSystem').NavigationPath; wpIdx: number } | null {
     const MAX_Y = NpcNavigation.PATH_SURFACE_MAX_Y_GAP;
     const MAX_XZ = NpcNavigation.PATH_SURFACE_MAX_XZ_DIST;
 
-    let bestPath: NavigationPath | null = null;
+    let bestPath: import('../../physics/CollisionSystem').NavigationPath | null = null;
     let bestIdx = -1;
     let bestScore = Infinity;
 
@@ -264,7 +349,7 @@ export class NpcNavigation {
         const dz = pos.z - wp.z;
         const xzDist = Math.sqrt(dx * dx + dz * dz);
         if (xzDist > MAX_XZ) continue;
-        const score = xzDist + yGap * 2; // Weight Y alignment heavily
+        const score = xzDist + yGap * 2;
         if (score < bestScore) {
           bestScore = score;
           bestPath = path;
@@ -276,86 +361,107 @@ export class NpcNavigation {
     return bestPath && bestScore < 5 ? { path: bestPath, wpIdx: bestIdx } : null;
   }
 
-  /** NPC is on a path surface, target is elsewhere — route toward the best exit. */
-  private navigateExitPath(
-    npcOnPath: { path: NavigationPath; wpIdx: number },
+  /** Full legacy navigation — used when no NavigationGraph is available. */
+  private legacyResolveNavigation(
     npcPos: THREE.Vector3,
     targetPos: THREE.Vector3,
-  ): { type: 'waypoint'; target: THREE.Vector3; stopDistance: number } | null {
-    const wps = npcOnPath.path.waypoints;
-    const npcWpIdx = npcOnPath.wpIdx;
+  ): NavResult {
+    const collision = this.collision();
+    const platforms = collision.getMovingPlatforms();
+    const isMelee = getCharacterStats(this.characterId).autoAttackRange
+                    <= MELEE_RANGE_THRESHOLD;
 
-    // Pick exit (chain end) that minimises total travel:
-    // actual walk distance along chain to exit + horizontal distance from exit to target
-    const startWp = wps[0];
-    const endWp = wps[wps.length - 1];
-    const startCost = this.chainDistance(wps, npcWpIdx, 0) +
-      Math.sqrt((startWp.x - targetPos.x) ** 2 + (startWp.z - targetPos.z) ** 2);
-    const endCost = this.chainDistance(wps, npcWpIdx, wps.length - 1) +
-      Math.sqrt((endWp.x - targetPos.x) ** 2 + (endWp.z - targetPos.z) ** 2);
-    const exitIdx = startCost < endCost ? 0 : wps.length - 1;
+    // Platform handling (same as checkPlatforms)
+    for (const platform of platforms) {
+      const surfaceY = platform.getY();
+      const isCircular = platform.isCircular ?? false;
 
-    // Close to exit approach WP — safe to disengage
-    const exitWp = wps[exitIdx];
-    const dx = npcPos.x - exitWp.x;
-    const dy = npcPos.y - exitWp.y;
-    const dz = npcPos.z - exitWp.z;
-    if (dx * dx + dy * dy + dz * dz < 4) return null; // Within 2 units
+      const npcInXZ = isCircular
+        ? this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz) <= platform.halfW + 0.5
+        : (Math.abs(npcPos.x - platform.cx) <= platform.halfW + 0.5 &&
+           Math.abs(npcPos.z - platform.cz) <= platform.halfD + 0.5);
+      const targetInXZ = isCircular
+        ? this.horizDist(targetPos.x, targetPos.z, platform.cx, platform.cz) <= platform.halfW + 0.3
+        : (Math.abs(targetPos.x - platform.cx) <= platform.halfW &&
+           Math.abs(targetPos.z - platform.cz) <= platform.halfD);
+      const npcOnPlatform = npcInXZ && Math.abs(npcPos.y - surfaceY) < 1.5;
+      const targetOnPlatform = targetInXZ && Math.abs(targetPos.y - surfaceY) < 0.8;
 
-    // Follow chain toward exit, skipping nearby waypoints
-    if (Math.abs(npcWpIdx - exitIdx) <= 1) {
-      // 0-1 steps from exit but > 2 units away — route directly to exit WP
-      return { type: 'waypoint', target: new THREE.Vector3(exitWp.x, exitWp.y, exitWp.z), stopDistance: 0.8 };
+      const isCycling = platform.cyclesAutomatically === true
+                        && platform.maxY !== undefined && platform.minY !== undefined;
+      const isSubmerged = isCycling && surfaceY < (platform.minY! + 1.5);
+      const isRaised = isCycling && surfaceY > (platform.maxY! - 1.5);
+
+      if (isCycling && targetInXZ && isSubmerged && isMelee) {
+        const d = this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz);
+        if (d < platform.halfW - 0.3) return null;
+        return { type: 'waypoint', target: new THREE.Vector3(platform.cx, npcPos.y, platform.cz), stopDistance: 0.3 };
+      }
+      if (isCycling && targetOnPlatform && isRaised && !npcOnPlatform) {
+        const d = this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz);
+        if (d > platform.halfW + 1) return { type: 'waypoint', target: new THREE.Vector3(platform.cx, npcPos.y, platform.cz), stopDistance: 0.5 };
+        return { type: 'wait' };
+      }
+      if (npcOnPlatform) {
+        if (surfaceY < 2 && !targetOnPlatform) continue;
+        if (targetOnPlatform && Math.abs(npcPos.y - targetPos.y) < 3) return null;
+        return { type: 'wait' };
+      }
+      if (targetOnPlatform) {
+        if (Math.abs(surfaceY - npcPos.y) < 3) return { type: 'waypoint', target: new THREE.Vector3(platform.cx, surfaceY, platform.cz), stopDistance: 1.0 };
+        const d = this.horizDist(npcPos.x, npcPos.z, platform.cx, platform.cz);
+        if (d > 2) return { type: 'waypoint', target: new THREE.Vector3(platform.cx, npcPos.y, platform.cz), stopDistance: 1.0 };
+        return { type: 'wait' };
+      }
     }
-    const dir = exitIdx > npcWpIdx ? 1 : -1;
-    const nextIdx = this.advanceAlongChain(wps, npcPos, npcWpIdx + dir, dir, exitIdx);
-    const wp = wps[nextIdx];
-    return { type: 'waypoint', target: new THREE.Vector3(wp.x, wp.y, wp.z), stopDistance: 0.8 };
+
+    if (targetPos.y > 18) {
+      const elevator = platforms.find(p => !p.cyclesAutomatically);
+      if (elevator) {
+        const surfaceY = elevator.getY();
+        if (Math.abs(surfaceY - npcPos.y) < 3) return { type: 'waypoint', target: new THREE.Vector3(elevator.cx, surfaceY, elevator.cz), stopDistance: 1.0 };
+        const d = this.horizDist(npcPos.x, npcPos.z, elevator.cx, elevator.cz);
+        if (d > 2) return { type: 'waypoint', target: new THREE.Vector3(elevator.cx, npcPos.y, elevator.cz), stopDistance: 1.0 };
+        return { type: 'wait' };
+      }
+    }
+
+    // Legacy archway path-following
+    const paths = collision.getNavigationPaths();
+    if (paths.length === 0) return null;
+
+    let npcOnPath = this.legacyDetectPathSurface(paths, npcPos);
+    const targetOnPath = this.legacyDetectPathSurface(paths, targetPos);
+
+    if (npcOnPath && !targetOnPath && npcPos.y < 1.0) {
+      const wp = npcOnPath.path.waypoints[npcOnPath.wpIdx];
+      if (wp.y < 2.0) npcOnPath = null;
+    }
+
+    if (npcOnPath && targetOnPath && npcOnPath.path === targetOnPath.path) {
+      if (Math.abs(npcOnPath.wpIdx - targetOnPath.wpIdx) <= 1) return null;
+      const dir = targetOnPath.wpIdx > npcOnPath.wpIdx ? 1 : -1;
+      const wps = npcOnPath.path.waypoints;
+      const nextIdx = this.legacyAdvanceAlongChain(wps, npcPos, npcOnPath.wpIdx + dir, dir, targetOnPath.wpIdx);
+      const wp = wps[nextIdx];
+      return { type: 'waypoint', target: new THREE.Vector3(wp.x, wp.y, wp.z), stopDistance: 0.8 };
+    }
+    if (npcOnPath) return this.legacyNavigateExitPath(npcOnPath, npcPos, targetPos);
+    if (targetOnPath) return this.legacyNavigateEnterPath(targetOnPath, npcPos);
+
+    if (npcPos.y > 0.5) return this.findNearbyArchwayExit(npcPos, targetPos, collision);
+    return null;
   }
 
-  /** NPC is on the ground, target is on a path — route to the best approach WP. */
-  private navigateEnterPath(
-    targetOnPath: { path: NavigationPath; wpIdx: number },
-    npcPos: THREE.Vector3,
-  ): { type: 'waypoint'; target: THREE.Vector3; stopDistance: number } {
-    const wps = targetOnPath.path.waypoints;
-    const targetWpIdx = targetOnPath.wpIdx;
-
-    // Pick approach WP (chain end) that minimises total travel:
-    // horizontal distance NPC → approach + actual walk distance along chain to target
-    const startWp = wps[0];
-    const endWp = wps[wps.length - 1];
-    const startCost = this.horizDist(npcPos, startWp) + this.chainDistance(wps, 0, targetWpIdx);
-    const endCost = this.horizDist(npcPos, endWp) + this.chainDistance(wps, wps.length - 1, targetWpIdx);
-    const approachWp = startCost < endCost ? startWp : endWp;
-
-    return { type: 'waypoint', target: new THREE.Vector3(approachWp.x, 0, approachWp.z), stopDistance: 2.0 };
-  }
-
-  horizDist(a: THREE.Vector3, b: { x: number; z: number }): number {
-    const dx = a.x - b.x;
-    const dz = a.z - b.z;
-    return Math.sqrt(dx * dx + dz * dz);
-  }
-
-  /** Advance along a waypoint chain from startIdx toward destIdx, skipping
-   *  waypoints that are too close to the NPC (< 2 units). At archway peaks
-   *  the curve flattens and consecutive waypoints cluster tightly — without
-   *  this the NPC "arrives" instantly and stalls. */
-  private advanceAlongChain(
+  private legacyAdvanceAlongChain(
     wps: readonly { readonly x: number; readonly y: number; readonly z: number }[],
-    npcPos: THREE.Vector3,
-    startIdx: number,
-    dir: number,
-    destIdx: number,
+    npcPos: THREE.Vector3, startIdx: number, dir: number, destIdx: number,
   ): number {
     let idx = startIdx;
     while (idx !== destIdx) {
       const wp = wps[idx];
-      const dx = npcPos.x - wp.x;
-      const dy = npcPos.y - wp.y;
-      const dz = npcPos.z - wp.z;
-      if (dx * dx + dy * dy + dz * dz >= 4) break; // >= 2 units away
+      const dx = npcPos.x - wp.x, dy = npcPos.y - wp.y, dz = npcPos.z - wp.z;
+      if (dx * dx + dy * dy + dz * dz >= 4) break;
       const next = idx + dir;
       if (next < 0 || next >= wps.length) break;
       idx = next;
@@ -363,51 +469,76 @@ export class NpcNavigation {
     return idx;
   }
 
-  /** Compute the actual walk distance along the waypoint chain between two indices. */
-  private chainDistance(
+  private legacyNavigateExitPath(
+    npcOnPath: { path: import('../../physics/CollisionSystem').NavigationPath; wpIdx: number },
+    npcPos: THREE.Vector3, targetPos: THREE.Vector3,
+  ): NavResult {
+    const wps = npcOnPath.path.waypoints;
+    const npcWpIdx = npcOnPath.wpIdx;
+    const startWp = wps[0], endWp = wps[wps.length - 1];
+    const startCost = this.legacyChainDistance(wps, npcWpIdx, 0) +
+      this.horizDist(startWp.x, startWp.z, targetPos.x, targetPos.z);
+    const endCost = this.legacyChainDistance(wps, npcWpIdx, wps.length - 1) +
+      this.horizDist(endWp.x, endWp.z, targetPos.x, targetPos.z);
+    const exitIdx = startCost < endCost ? 0 : wps.length - 1;
+    const exitWp = wps[exitIdx];
+    const dx = npcPos.x - exitWp.x, dy = npcPos.y - exitWp.y, dz = npcPos.z - exitWp.z;
+    if (dx * dx + dy * dy + dz * dz < 4) return null;
+    if (Math.abs(npcWpIdx - exitIdx) <= 1) {
+      return { type: 'waypoint', target: new THREE.Vector3(exitWp.x, exitWp.y, exitWp.z), stopDistance: 0.8 };
+    }
+    const dir = exitIdx > npcWpIdx ? 1 : -1;
+    const nextIdx = this.legacyAdvanceAlongChain(wps, npcPos, npcWpIdx + dir, dir, exitIdx);
+    const wp = wps[nextIdx];
+    return { type: 'waypoint', target: new THREE.Vector3(wp.x, wp.y, wp.z), stopDistance: 0.8 };
+  }
+
+  private legacyNavigateEnterPath(
+    targetOnPath: { path: import('../../physics/CollisionSystem').NavigationPath; wpIdx: number },
+    npcPos: THREE.Vector3,
+  ): NavResult {
+    const wps = targetOnPath.path.waypoints;
+    const targetWpIdx = targetOnPath.wpIdx;
+    const startWp = wps[0], endWp = wps[wps.length - 1];
+    const startCost = this.horizDist(npcPos.x, npcPos.z, startWp.x, startWp.z) +
+      this.legacyChainDistance(wps, 0, targetWpIdx);
+    const endCost = this.horizDist(npcPos.x, npcPos.z, endWp.x, endWp.z) +
+      this.legacyChainDistance(wps, wps.length - 1, targetWpIdx);
+    const approachWp = startCost < endCost ? startWp : endWp;
+    return { type: 'waypoint', target: new THREE.Vector3(approachWp.x, 0, approachWp.z), stopDistance: 2.0 };
+  }
+
+  private legacyChainDistance(
     wps: readonly { readonly x: number; readonly y: number; readonly z: number }[],
-    fromIdx: number,
-    toIdx: number,
+    fromIdx: number, toIdx: number,
   ): number {
     let dist = 0;
     const step = toIdx > fromIdx ? 1 : -1;
     for (let i = fromIdx; i !== toIdx; i += step) {
-      const a = wps[i];
-      const b = wps[i + step];
+      const a = wps[i], b = wps[i + step];
       dist += Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2);
     }
     return dist;
   }
 
-  /** When the NPC is slightly elevated (below the archway threshold but still
-   *  on a ramp), find the nearest archway exit approach waypoint to guide it
-   *  off the ramp before allowing direct movement toward the target. */
-  private findNearbyArchwayExit(
-    paths: readonly NavigationPath[],
-    npcPos: THREE.Vector3,
-    targetPos: THREE.Vector3,
-  ): { type: 'waypoint'; target: THREE.Vector3; stopDistance: number } | null {
-    for (const path of paths) {
-      const wps = path.waypoints;
-      for (let i = 0; i < wps.length; i++) {
-        const wp = wps[i];
-        if (wp.y < 0.5) continue; // Skip ground-level approach WPs
-        const dx = npcPos.x - wp.x;
-        const dy = npcPos.y - wp.y;
-        const dz = npcPos.z - wp.z;
-        if (dx * dx + dy * dy + dz * dz < 9) { // Within 3 units of an elevated WP
-          // Route to the chain end that minimises total travel to the target
-          const s = wps[0];
-          const e = wps[wps.length - 1];
-          const sDist = this.horizDist(npcPos, s);
-          const eDist = this.horizDist(npcPos, e);
-          const sToTarget = Math.sqrt((s.x - targetPos.x) ** 2 + (s.z - targetPos.z) ** 2);
-          const eToTarget = Math.sqrt((e.x - targetPos.x) ** 2 + (e.z - targetPos.z) ** 2);
-          const exitWp = (sDist + sToTarget) < (eDist + eToTarget) ? s : e;
-          return { type: 'waypoint', target: new THREE.Vector3(exitWp.x, 0, exitWp.z), stopDistance: 1.0 };
-        }
-      }
-    }
-    return null;
+  // ── Utility ──────────────────────────────────────────────────────────
+
+  private horizDist(ax: number, az: number, bx: number, bz: number): number {
+    const dx = ax - bx;
+    const dz = az - bz;
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+
+  private nodeDistXZ(pos: THREE.Vector3, node: NavNode): number {
+    const dx = pos.x - node.x;
+    const dz = pos.z - node.z;
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+
+  private nodeDistWeighted(pos: THREE.Vector3, node: NavNode): number {
+    const dx = pos.x - node.x;
+    const dy = (pos.y - node.y) * 2;
+    const dz = pos.z - node.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 }

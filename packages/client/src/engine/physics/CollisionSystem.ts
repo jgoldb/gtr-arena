@@ -1,4 +1,5 @@
 import type { ObstacleConfig } from '@gtr/shared';
+import type { NavigationGraph } from '../npc/ai/NavigationGraph';
 
 export interface BoxCollider {
   type: 'box';
@@ -79,6 +80,7 @@ export class CollisionSystem {
   private elevationAccessPoints: ElevationAccessPoint[] = [];
   private navigationPaths: NavigationPath[] = [];
   private movingPlatforms: MovingPlatform[] = [];
+  private navGraph: NavigationGraph | null = null;
 
   buildFromObstacles(obstacles: ObstacleConfig[]): void {
     this.colliders = [];
@@ -86,6 +88,7 @@ export class CollisionSystem {
     this.elevationAccessPoints = [];
     this.navigationPaths = [];
     this.movingPlatforms = [];
+    this.navGraph = null;
 
     for (const obs of obstacles) {
       if (obs.type === 'water') {
@@ -496,6 +499,14 @@ export class CollisionSystem {
 
   getMovingPlatforms(): readonly MovingPlatform[] {
     return this.movingPlatforms;
+  }
+
+  setNavigationGraph(graph: NavigationGraph): void {
+    this.navGraph = graph;
+  }
+
+  getNavigationGraph(): NavigationGraph | null {
+    return this.navGraph;
   }
 
   /**
