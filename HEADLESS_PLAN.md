@@ -77,6 +77,29 @@ Train a neural network via self-play reinforcement learning to play GTR Arena, t
   - CLI: `python train.py --timesteps 1000000 --num-envs 16`
 - `packages/headless/train/requirements.txt` — Python dependencies
 
+### Phase 4 — Model Export & Client Integration (completed)
+- `packages/headless/train/export_onnx.py` — ONNX export script (SB3 → ONNX, 339 KB)
+- `packages/client/src/engine/npc/ai/behaviors/NeuralBehavior.ts` — ONNX inference behavior
+- `onnxruntime-web` for browser WASM inference (<1ms per forward pass)
+- Model at `packages/client/public/models/agent.onnx`
+- "Neural" difficulty option in SinglePlayerScreen UI
+
+### First training run results (1M steps, janitor vs random, 16 envs)
+- Win rate: 31% → 64% (upward trend, not plateaued — longer training will improve)
+- Episode time: 75s → 48s (agent learns to finish fights faster)
+- Explained variance: 0.32 → 0.74 (value function learning well)
+- ~1,500 total episodes, ~7k steps/sec throughput
+- **Issue:** Agent only auto-attacks, never uses abilities → reward shaping tuned in Phase 3c
+
+### Phase 3c — Reward shaping tuning (completed)
+- Added ability usage bonus (+0.004), failed attempt penalty (-0.001), CC bonus (+0.008), step penalty (-0.0003)
+- Tracks `abilityUsedCount`, `abilityFailedCount`, `ccAppliedCount` per step
+
+### Phase 3d — Self-play opponent pool (completed)
+- `PoolOpponent` class samples from saved policy snapshots
+- `SelfPlayCallback` activates after 300K steps, snapshots every 100K steps
+- Linear LR annealing, batch size 512, default 5M timesteps
+
 ### Remaining Simplifications
 - 1v1 only (multi-agent deferred to a future iteration)
 
@@ -119,90 +142,83 @@ Built `packages/headless/src/bridge.ts` — stdin/stdout JSON-lines bridge. Game
 - **Opponent:** pluggable — `RandomOpponent` (default), `DoNothingOpponent`, `PolicyOpponent` (from saved checkpoint)
 - **Training script:** `packages/headless/train/train.py` with CLI args, TensorBoard logging, checkpoint saving
 
-### 3c. Reward shaping
-Starting point (already in HeadlessArena):
+### 3c. Reward shaping ✓
+Tuned based on first training run (agent only auto-attacked, never used abilities).
+
+Reward signals per step:
 ```
-+1.0  win, -1.0 loss, -0.2 draw
 +0.00005 per damage dealt
 -0.00003 per damage taken
 +0.00003 per healing done
++0.004   per successful ability use (non-auto-attack)
+-0.001   per failed ability attempt (cooldown, range, mana, casting)
++0.008   per CC application (stun/sleep/blind debuff)
+-0.0003  step penalty (encourages aggression, discourages stalling)
++1.0 win, -1.0 loss, -0.2 draw (terminal)
 ```
 
-Likely additions during tuning:
-- Bonus for successful interrupt (opponent casting → stun/CC)
-- Penalty for wasted ability (on cooldown, out of range, no target)
-- Small penalty per step (encourages aggression, discourages stalling)
+Tracking: `abilityUsedCount`, `abilityFailedCount`, `ccAppliedCount` accumulators in `HeadlessArena`, reset per step. `useGroundTargetAbility` returns boolean for success tracking. `isDebuffCC()` helper checks debuff effects for stun/sleep/blind types.
 
-### 3d. Self-play training loop
-```
-1. Initialize policy P_0 randomly
-2. For each generation:
-   a. Run K matches: current policy vs opponent pool
-   b. Collect trajectories (obs, action, reward, done)
-   c. Update policy via PPO
-   d. Every M generations, add current policy to opponent pool
-   e. Periodically evaluate against fixed baselines (random, rule-based)
-3. Export best policy
-```
+### 3d. Self-play training loop ✓
+Implemented via `SelfPlayCallback` in `train.py` and `PoolOpponent` in `env.py`.
 
-Key parameters:
-- K = 2048-4096 steps per batch
-- Learning rate: 3e-4 (anneal to 1e-5)
+- Training starts against `RandomOpponent` (curriculum: learn basics first)
+- After `--self-play-start` steps (default 300K), activates self-play
+- Every `--self-play-freq` steps (default 100K), snapshots current policy to opponent pool
+- `PoolOpponent` randomly samples from saved checkpoints, with `--self-play-random-prob` (default 20%) chance of random fallback for diversity
+- Pool capped at `--self-play-pool-size` (default 20), oldest evicted first
+- Learning rate linearly anneals from `--lr` to 0 over training
+
+Key hyperparameters:
+- n_steps: 2048 per env per rollout (32K total with 16 envs)
+- batch_size: 512
+- Learning rate: 3e-4 → 0 (linear anneal)
 - Clip range: 0.2
-- Entropy coefficient: 0.01 (encourages exploration)
-- Opponent pool size: ~20 past policies
+- Entropy coefficient: 0.01
+- Opponent pool size: 20
 
-### 3e. Curriculum learning (optional)
-- Start against random opponent (easy to beat → learns basics)
-- Graduate to rule-based opponent (uses abilities semi-intelligently)
-- Then introduce self-play
-- This avoids the "random vs random learns nothing" bootstrap problem
+### 3e. Curriculum learning (built into 3d)
+The self-play start delay acts as automatic curriculum:
+1. Steps 0–300K: train against random (learn ability usage, damage dealing)
+2. Steps 300K+: self-play with opponent pool (learn tactical play against competent opponents)
+3. 20% random opponent probability maintained throughout for diversity
 
 ---
 
-## Phase 4: Model Export & Client Integration
+## Phase 4: Model Export & Client Integration ✓
 
-### 4a. Export trained model
-- Export PyTorch model to ONNX format: `torch.onnx.export(model, dummy_input, "agent.onnx")`
-- Model size: ~100KB-1MB for a small MLP
-- Place in `packages/client/public/models/`
+### 4a. Export trained model ✓
+- `packages/headless/train/export_onnx.py` — exports SB3 PPO policy to ONNX via `torch.onnx.export()`
+- Extracts only the policy MLP (no value network), outputs raw logits for `MultiDiscrete` action space
+- Validates export by comparing ONNX runtime output against SB3 predictions
+- Model size: ~339 KB ONNX (vs ~2MB SB3 zip)
+- Placed at `packages/client/public/models/agent.onnx`
 
-### 4b. NeuralBehavior class
-Create `packages/client/src/engine/npc/ai/behaviors/NeuralBehavior.ts`:
+### 4b. NeuralBehavior class ✓
+- `packages/client/src/engine/npc/ai/behaviors/NeuralBehavior.ts`
+- Implements `CharacterBehavior` interface (scoreActions, getMovementIntent, getDesiredRange)
+- Loads ONNX model via `onnxruntime-web` (WASM backend, <1ms inference for 2×256 MLP)
+- Async inference: fires off ONNX run each think cycle, uses previous result (1-tick delay, imperceptible at 100ms)
+- `buildObservation()` replicates `HeadlessArena.buildObservation()` + `flattenObservation()` exactly — same 57-float vector in identical order
+- Splits output logits by `MultiDiscrete` sub-space sizes and argmaxes each → [ability, moveDir, cancelCast]
+- Maps ability index to `ScoredAction` with proper `isCastTime` flag
+- Maps moveDir to world-space `MovementIntent` using bridge.ts compass angles
 
-```typescript
-class NeuralBehavior implements CharacterBehavior {
-  private session: ort.InferenceSession; // onnxruntime-web
+### 4c. Wire into NPC system ✓
+- Added `'neural'` to `DifficultyLevel` type and `DIFFICULTY_PRESETS` (master-like profile: 100ms think, no fuzz)
+- `PlaygroundNpcSystem.spawnAiNpc()` creates `NeuralBehavior` when difficulty is `'neural'`
+- `NeuralBehavior` constructor takes `NpcController` + `AiEngineInterface` for direct access to BuffSystem, CollisionSystem, arena bounds
+- Model loads asynchronously; NPC falls back to auto-attack until loaded
+- `SinglePlayerScreen` shows "Neural" as a difficulty option with cyan color
+- Dependency: `onnxruntime-web` added to client package (WASM loaded lazily, only when Neural is selected)
 
-  async loadModel(url: string): Promise<void> { ... }
-
-  scoreActions(world, cooldowns, difficulty, currentTarget): ScoredAction[] {
-    const obs = this.encodeObservation(world, cooldowns);
-    const output = this.session.run({ input: obs });
-    // Convert network output → single best ScoredAction
-    return [{ type: 'ability', score: 100, abilityId: ..., target: ... }];
-  }
-
-  getMovementIntent(world, currentTarget): MovementIntent {
-    // Network outputs movement angle + magnitude
-    return { type: 'moveToward', target: ..., stopDistance: 0 };
-  }
-}
-```
-
-### 4c. Wire into NPC system
-In `packages/client/src/engine/npc/ai/behaviors/index.ts`:
-```typescript
-export function createCharacterBehavior(id: CharacterId, useNeural?: boolean): CharacterBehavior {
-  if (useNeural) return new NeuralBehavior(id);
-  // ... existing hand-coded behaviors
-}
-```
-
-Dependencies to add: `onnxruntime-web` (WASM backend, no GPU needed, <1ms inference for small MLP).
-
-### 4d. Observation encoding bridge
-`NeuralBehavior.encodeObservation()` must produce the exact same observation vector as `HeadlessArena.buildObservation()`. Extract the encoding logic into a shared helper or carefully replicate it. This is a critical fidelity point — any mismatch means the model sees different inputs than what it trained on.
+### 4d. Observation encoding bridge ✓
+- `NeuralBehavior.buildObservation()` replicates HeadlessArena encoding directly using client-side systems:
+  - BuffSystem methods: isStunned, isSleeping, isBlinded, isDiscombobulated, isUntargetable, speed/damage multipliers
+  - CollisionSystem: raycastDistance (8-dir wall probes), hasLineOfSight
+  - NpcCooldownTracker: getCooldownRemaining/getCooldownTotal → normalized cooldown vector
+  - Arena bounds → normScale for position normalization
+- Same flatten order as `HeadlessArena.flattenObservation()` — verified by matching obs vector length (57)
 
 ---
 
@@ -228,8 +244,11 @@ Dependencies to add: `onnxruntime-web` (WASM backend, no GPU needed, <1ms infere
 4. ~~**Phase 2c** — Enrich observation vector (buffs, casting state, LoS, wall distances)~~ ✓
 5. ~~**Phase 3a** — Build subprocess bridge (`bridge.ts`)~~ ✓
 6. ~~**Phase 3b** — Build Python training harness (env.py + train.py)~~ ✓
-7. **First training run** — `cd packages/headless/train && pip install -r requirements.txt && python train.py`
-8. **Phase 3c** — Tune reward shaping based on initial training results
-9. **Phase 3d** — Self-play with opponent pool (save checkpoints → load as opponents)
-10. **Phase 4a** — Export trained model to ONNX
-11. **Phase 4b** — Build `NeuralBehavior` class in client
+7. ~~**First training run** — 1M steps, janitor vs random~~ ✓
+8. ~~**Phase 4a** — Export trained model to ONNX~~ ✓
+9. ~~**Phase 4b** — Build `NeuralBehavior` class in client~~ ✓
+10. ~~**Phase 3c** — Tune reward shaping based on initial training results~~ ✓
+11. ~~**Phase 3d** — Self-play with opponent pool (save checkpoints → load as opponents)~~ ✓
+12. **Longer training** — 5-10M+ steps with refined rewards and self-play
+    - `python train.py --timesteps 5000000` (default settings include self-play + LR annealing)
+    - Re-export ONNX after training: `python export_onnx.py --model models/ppo_gtr_final`

@@ -25,6 +25,7 @@ import {
   FullRetardAuraSystem,
   CastingSystem,
   CollisionSystem,
+  type CircleCollider,
   MISS_CHANCE,
   yardsToUnits,
   MAPS,
@@ -113,6 +114,10 @@ export interface EntityObservation {
   // Spatial awareness
   oppLoS: number;        // 1 = have line of sight to opponent
   wallDist: number[];    // distances in 8 directions, normalized 0–1
+
+  // Dynamic map features (Cage pillars)
+  ewPillarUp: number;    // 1 = E/W pillars fully raised, 0 = fully submerged
+  nsPillarUp: number;    // 1 = N/S pillars fully raised, 0 = fully submerged
 }
 
 export interface StepResult {
@@ -181,6 +186,24 @@ export class HeadlessArena {
   private fullRetardAura: FullRetardAuraSystem<HeadlessEntity>;
   private pendingAoeImpacts: PendingAoeImpact[] = [];
 
+  // Dynamic pillars (Cage map only)
+  private readonly PILLAR_Y_UP = 3;
+  private readonly PILLAR_Y_DOWN = -2.7;
+  private readonly PILLAR_DROP_ANIM = 2;
+  private readonly PILLAR_DOWN_TIME = 30;
+  private readonly PILLAR_RISE_ANIM = 2;
+  private readonly PILLAR_INITIAL_UP_TIME = 30;
+  private readonly PILLAR_UP_TIME = 30;
+  private hasPillars = false;
+  private ewPillarColliders: CircleCollider[] = [];
+  private nsPillarColliders: CircleCollider[] = [];
+  private pillarState: 'up' | 'dropping' | 'down' | 'rising' = 'up';
+  private pillarStateTimer = 0;
+  private currentPillarUpDuration = 30;
+  /** 0 = fully raised, 1 = fully submerged (matches CageArenaScript convention). */
+  private ewPillarProgress = 0;
+  private nsPillarProgress = 1;
+
   // State
   private elapsed = 0;
   private done = false;
@@ -190,6 +213,9 @@ export class HeadlessArena {
   private damageDealt: [number, number] = [0, 0];
   private damageTaken: [number, number] = [0, 0];
   private healingDone: [number, number] = [0, 0];
+  private abilityUsedCount: [number, number] = [0, 0];
+  private abilityFailedCount: [number, number] = [0, 0];
+  private ccAppliedCount: [number, number] = [0, 0];
 
   constructor(config: ArenaConfig) {
     this.mapId = config.mapId ?? 'cage';
@@ -214,6 +240,29 @@ export class HeadlessArena {
     // Build collision system from map obstacles
     this.collision = new CollisionSystem();
     this.collision.buildFromObstacles(mapInfo.obstacles);
+
+    // Add dynamic pillars for Cage map
+    if (this.mapId === 'cage') {
+      this.hasPillars = true;
+      // East/West pillars — start UP
+      for (const px of [-11, 11]) {
+        const collider: CircleCollider = {
+          type: 'circle', cx: px, cz: 0, radius: 1.8,
+          centerY: this.PILLAR_Y_UP, halfH: 3,
+        };
+        this.collision.addCollider(collider);
+        this.ewPillarColliders.push(collider);
+      }
+      // North/South pillars — start DOWN (opposite phase)
+      for (const pz of [-11, 11]) {
+        const collider: CircleCollider = {
+          type: 'circle', cx: 0, cz: pz, radius: 1.8,
+          centerY: this.PILLAR_Y_DOWN, halfH: 3,
+        };
+        this.collision.addCollider(collider);
+        this.nsPillarColliders.push(collider);
+      }
+    }
 
     // Create entities
     this.entities = [
@@ -401,6 +450,57 @@ export class HeadlessArena {
     return this.collision.hasLineOfSight(a.x, a.z, b.x, b.z, a.y, b.y);
   }
 
+  // ── Pillar state machine (Cage map) ─────────────────────────────────────
+
+  private tickPillars(dt: number): void {
+    this.pillarStateTimer += dt;
+
+    switch (this.pillarState) {
+      case 'up':
+        if (this.pillarStateTimer >= this.currentPillarUpDuration) {
+          this.pillarState = 'dropping';
+          this.pillarStateTimer = 0;
+        }
+        break;
+      case 'dropping': {
+        const t = Math.min(this.pillarStateTimer / this.PILLAR_DROP_ANIM, 1);
+        this.ewPillarProgress = t;       // E/W: up → down
+        this.nsPillarProgress = 1 - t;   // N/S: down → up
+        if (t >= 1) {
+          this.pillarState = 'down';
+          this.pillarStateTimer = 0;
+        }
+        break;
+      }
+      case 'down':
+        if (this.pillarStateTimer >= this.PILLAR_DOWN_TIME) {
+          this.pillarState = 'rising';
+          this.pillarStateTimer = 0;
+        }
+        break;
+      case 'rising': {
+        const t = Math.min(this.pillarStateTimer / this.PILLAR_RISE_ANIM, 1);
+        this.ewPillarProgress = 1 - t;   // E/W: down → up
+        this.nsPillarProgress = t;       // N/S: up → down
+        if (t >= 1) {
+          this.pillarState = 'up';
+          this.pillarStateTimer = 0;
+          this.currentPillarUpDuration = this.PILLAR_UP_TIME;
+        }
+        break;
+      }
+    }
+
+    this.updatePillarColliderY();
+  }
+
+  private updatePillarColliderY(): void {
+    const ewY = this.PILLAR_Y_UP + (this.PILLAR_Y_DOWN - this.PILLAR_Y_UP) * this.ewPillarProgress;
+    for (const c of this.ewPillarColliders) c.centerY = ewY;
+    const nsY = this.PILLAR_Y_UP + (this.PILLAR_Y_DOWN - this.PILLAR_Y_UP) * this.nsPillarProgress;
+    for (const c of this.nsPillarColliders) c.centerY = nsY;
+  }
+
   // ── Reset ──────────────────────────────────────────────────────────────
 
   reset(): [EntityObservation, EntityObservation] {
@@ -410,6 +510,9 @@ export class HeadlessArena {
     this.damageDealt = [0, 0];
     this.damageTaken = [0, 0];
     this.healingDone = [0, 0];
+    this.abilityUsedCount = [0, 0];
+    this.abilityFailedCount = [0, 0];
+    this.ccAppliedCount = [0, 0];
 
     // Reset entities to real map spawn points
     const sp0 = this.spawnPoints[0] ?? { x: 0, y: 0, z: 10 };
@@ -419,6 +522,16 @@ export class HeadlessArena {
     // Face each other
     this.entities[0].faceToward(this.entities[1]);
     this.entities[1].faceToward(this.entities[0]);
+
+    // Reset pillar state
+    if (this.hasPillars) {
+      this.pillarState = 'up';
+      this.pillarStateTimer = 0;
+      this.currentPillarUpDuration = this.PILLAR_INITIAL_UP_TIME;
+      this.ewPillarProgress = 0;
+      this.nsPillarProgress = 1;
+      this.updatePillarColliderY();
+    }
 
     // Clear all system state
     this.buffSystem.clearEntity(this.entities[0]);
@@ -461,10 +574,16 @@ export class HeadlessArena {
 
     const dt = this.tickRate;
 
+    // Tick pillar state machine
+    if (this.hasPillars) this.tickPillars(dt);
+
     // Reset per-step accumulators
     this.damageDealt = [0, 0];
     this.damageTaken = [0, 0];
     this.healingDone = [0, 0];
+    this.abilityUsedCount = [0, 0];
+    this.abilityFailedCount = [0, 0];
+    this.ccAppliedCount = [0, 0];
 
     // Process actions for each entity
     for (let i = 0; i < 2; i++) {
@@ -530,13 +649,24 @@ export class HeadlessArena {
         this.castingSystem.cancel(entity);
       }
 
-      // ── Ability usage ─────────────────────────────────────────
-      if (action.abilityIndex !== null && !this.castingSystem.isCasting(entity)) {
+      // ── Ability usage ─────────────────��───────────────────────
+      if (action.abilityIndex !== null) {
         const ability = entity.abilities[action.abilityIndex];
         if (ability && !ability.isAutoAttack) {
-          if (ability.groundTargeted && action.groundX !== undefined && action.groundZ !== undefined) {
+          if (this.castingSystem.isCasting(entity)) {
+            // Trying to use ability while casting — wasted action
+            this.abilityFailedCount[i]++;
+          } else if (ability.groundTargeted && action.groundX !== undefined && action.groundZ !== undefined) {
             // Ground-targeted AoE (e.g. Bottle Chuck)
-            this.useGroundTargetAbility(entity, ability, action.groundX, action.groundZ);
+            const ok = this.useGroundTargetAbility(entity, ability, action.groundX, action.groundZ);
+            if (ok) {
+              this.abilityUsedCount[i]++;
+              if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
+                this.ccAppliedCount[i]++;
+              }
+            } else {
+              this.abilityFailedCount[i]++;
+            }
           } else if (ability.castTime) {
             // Cast-time or channeled ability — route through CastingSystem
             let target: HeadlessEntity | null = null;
@@ -550,6 +680,12 @@ export class HeadlessArena {
             const validation = this.combat.validateAbility(ability, entity, target);
             if (validation.success) {
               this.castingSystem.start(entity, ability, target);
+              this.abilityUsedCount[i]++;
+              if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
+                this.ccAppliedCount[i]++;
+              }
+            } else {
+              this.abilityFailedCount[i]++;
             }
           } else {
             // Instant ability (existing path)
@@ -564,6 +700,12 @@ export class HeadlessArena {
             const result = this.combat.useAbility(ability, entity, target);
             if (result.success) {
               this.handleAbilityPostEffects(entity, ability, target, opponent);
+              this.abilityUsedCount[i]++;
+              if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
+                this.ccAppliedCount[i]++;
+              }
+            } else {
+              this.abilityFailedCount[i]++;
             }
           }
         }
@@ -627,10 +769,17 @@ export class HeadlessArena {
     // ── Compute rewards ────────────────────────────────────────────────
     const rewards: [number, number] = [0, 0];
     for (let i = 0; i < 2; i++) {
-      // Shaping rewards (small, scaled to ~0.01 per significant event)
+      // Damage / healing shaping
       rewards[i] += this.damageDealt[i] * 0.00005;
       rewards[i] -= this.damageTaken[i] * 0.00003;
       rewards[i] += this.healingDone[i] * 0.00003;
+      // Ability usage incentives
+      rewards[i] += this.abilityUsedCount[i] * 0.004;
+      rewards[i] -= this.abilityFailedCount[i] * 0.001;
+      // CC application bonus (stun/sleep/blind)
+      rewards[i] += this.ccAppliedCount[i] * 0.008;
+      // Small step penalty — encourages aggression, discourages stalling
+      rewards[i] -= 0.0003;
     }
     // Terminal rewards
     if (this.done) {
@@ -768,6 +917,14 @@ export class HeadlessArena {
     }
   }
 
+  // ── Reward Helpers ──────────────────────────────────────────────────────
+
+  private isDebuffCC(debuff: BuffDefinition): boolean {
+    return debuff.effects.some(e =>
+      e.type === 'stun' || e.type === 'sleep' || e.type === 'blind',
+    );
+  }
+
   // ── Ground-Targeted Abilities ───────────────────────────────────────────
 
   private useGroundTargetAbility(
@@ -775,19 +932,19 @@ export class HeadlessArena {
     ability: Ability,
     groundX: number,
     groundZ: number,
-  ): void {
-    if (entity.dead) return;
-    if (entity.stunned || this.buffSystem.isSleeping(entity)) return;
-    if (!entity.cooldowns.isReady(ability.id)) return;
+  ): boolean {
+    if (entity.dead) return false;
+    if (entity.stunned || this.buffSystem.isSleeping(entity)) return false;
+    if (!entity.cooldowns.isReady(ability.id)) return false;
 
     // Range check to ground position
     const dx = entity.x - groundX;
     const dz = entity.z - groundZ;
-    if (ability.range && Math.sqrt(dx * dx + dz * dz) > ability.range + yardsToUnits(2)) return;
+    if (ability.range && Math.sqrt(dx * dx + dz * dz) > ability.range + yardsToUnits(2)) return false;
 
     // Mana check + consume
     const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
-    if (entity.mana < effectiveCost) return;
+    if (entity.mana < effectiveCost) return false;
     entity.mana -= effectiveCost;
     if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
 
@@ -806,6 +963,7 @@ export class HeadlessArena {
     });
 
     this.combat.enterCombat(entity);
+    return true;
   }
 
   private updatePendingAoeImpacts(dt: number): void {
@@ -907,6 +1065,10 @@ export class HeadlessArena {
       // Spatial awareness
       oppLoS: this.collision.hasLineOfSight(self.x, self.z, opp.x, opp.z, self.y, opp.y) ? 1 : 0,
       wallDist,
+
+      // Dynamic map features (1 = fully raised, 0 = fully submerged)
+      ewPillarUp: 1 - this.ewPillarProgress,
+      nsPillarUp: 1 - this.nsPillarProgress,
     };
   }
 
@@ -942,6 +1104,8 @@ export class HeadlessArena {
       // Spatial
       obs.oppLoS,
       ...obs.wallDist,
+      // Dynamic map features
+      obs.ewPillarUp, obs.nsPillarUp,
     ];
   }
 }

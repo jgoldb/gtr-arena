@@ -1,13 +1,14 @@
 """
 PPO training for GTR Arena 1v1.
 
-First training run: agent (janitor) vs random opponent (janitor).
-Validates the pipeline by checking that win rate climbs above random (50%).
+Trains agent (janitor) with optional self-play opponent pool.
+Starts against random opponent, then switches to self-play after --self-play-start steps.
 
 Usage:
-    python train.py                           # defaults: 1M steps, janitor vs janitor
-    python train.py --timesteps 5000000       # longer run
-    python train.py --opponent-model models/ppo_gtr_checkpoint_200000  # self-play vs saved policy
+    python train.py                           # defaults: 5M steps, janitor vs janitor
+    python train.py --timesteps 10000000      # longer run
+    python train.py --no-self-play            # disable self-play (random opponent only)
+    python train.py --resume models/ppo_gtr_checkpoint_500000  # resume training
 
 Requirements:
     pip install -r requirements.txt
@@ -23,7 +24,20 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 
-from env import GtrVecEnv, PolicyOpponent
+from env import GtrVecEnv, PoolOpponent, PolicyOpponent
+
+
+# ── Learning rate schedule ──────────────────────────────────────────────
+
+
+def linear_schedule(initial_lr: float):
+    """Linear annealing from initial_lr to 0."""
+    def schedule(progress_remaining: float) -> float:
+        return progress_remaining * initial_lr
+    return schedule
+
+
+# ── Callbacks ───────────────────────────────────────────────────────────
 
 
 class WinRateCallback(BaseCallback):
@@ -56,29 +70,85 @@ class WinRateCallback(BaseCallback):
         return True
 
 
+class SelfPlayCallback(BaseCallback):
+    """Periodically snapshots the current policy into an opponent pool.
+
+    Before `start_timesteps`, the env uses its initial opponent (random).
+    After activation, each `update_freq` steps a new snapshot is added to the pool.
+    The pool opponent randomly samples from saved checkpoints (with random_prob
+    chance of falling back to random actions for diversity).
+    """
+
+    def __init__(
+        self,
+        env: GtrVecEnv,
+        save_dir: str,
+        start_timesteps: int = 200_000,
+        update_freq: int = 100_000,
+        pool_size: int = 20,
+        random_prob: float = 0.2,
+        verbose: int = 0,
+    ):
+        super().__init__(verbose)
+        self.env = env
+        self.save_dir = save_dir
+        self.start_timesteps = start_timesteps
+        self.update_freq = update_freq
+        self.pool_size = pool_size
+        self.pool_opponent = PoolOpponent(env.num_abilities, random_prob=random_prob)
+        self.next_update = start_timesteps
+        self.activated = False
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps >= self.next_update:
+            # Save current policy snapshot
+            path = os.path.join(self.save_dir, f"opponent_{self.num_timesteps}")
+            self.model.save(path)
+            self.pool_opponent.add(path, self.pool_size)
+
+            if not self.activated:
+                self.activated = True
+                self.env.opponent = self.pool_opponent
+                if self.verbose:
+                    print(f"\n[SelfPlay] Activated at {self.num_timesteps:,} steps")
+
+            self.next_update += self.update_freq
+            if self.verbose:
+                print(
+                    f"[SelfPlay] Pool size: {len(self.pool_opponent.pool)}, "
+                    f"timestep: {self.num_timesteps:,}"
+                )
+            self.logger.record("gtr/self_play_pool_size", len(self.pool_opponent.pool))
+
+        return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train PPO agent for GTR Arena 1v1")
-    parser.add_argument("--timesteps", type=int, default=1_000_000, help="Total training timesteps")
+    parser.add_argument("--timesteps", type=int, default=5_000_000, help="Total training timesteps")
     parser.add_argument("--characters", nargs=2, default=["janitor", "janitor"], help="Character matchup")
     parser.add_argument("--num-envs", type=int, default=16, help="Parallel environments")
     parser.add_argument("--map", default="cage", help="Map ID")
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Initial learning rate (anneals to 0)")
     parser.add_argument("--ent-coef", type=float, default=0.01, help="Entropy coefficient")
     parser.add_argument("--n-steps", type=int, default=2048, help="Steps per rollout per env")
-    parser.add_argument("--batch-size", type=int, default=256, help="Minibatch size")
+    parser.add_argument("--batch-size", type=int, default=512, help="Minibatch size")
     parser.add_argument("--save-dir", default="./models", help="Directory for model checkpoints")
-    parser.add_argument("--save-freq", type=int, default=50_000, help="Checkpoint save frequency (steps)")
-    parser.add_argument("--opponent-model", default=None, help="Path to saved SB3 model for opponent")
+    parser.add_argument("--save-freq", type=int, default=100_000, help="Checkpoint save frequency (steps)")
     parser.add_argument("--resume", default=None, help="Path to saved model to resume training")
+    # Self-play options
+    parser.add_argument("--no-self-play", action="store_true", help="Disable self-play (random opponent only)")
+    parser.add_argument("--self-play-start", type=int, default=300_000,
+                        help="Timestep to activate self-play opponent pool")
+    parser.add_argument("--self-play-freq", type=int, default=100_000,
+                        help="How often to snapshot policy into opponent pool")
+    parser.add_argument("--self-play-pool-size", type=int, default=20,
+                        help="Max opponents in the pool")
+    parser.add_argument("--self-play-random-prob", type=float, default=0.2,
+                        help="Probability of random opponent per episode (for diversity)")
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
-
-    # Set up opponent
-    opponent = None
-    if args.opponent_model:
-        print(f"Loading opponent policy from {args.opponent_model}")
-        opponent = PolicyOpponent(args.opponent_model)
 
     # Create vectorized environment
     print(f"Starting {args.num_envs} environments: {args.characters[0]} vs {args.characters[1]} on {args.map}")
@@ -86,7 +156,6 @@ def main():
         num_envs=args.num_envs,
         characters=tuple(args.characters),
         map_id=args.map,
-        opponent=opponent,
     )
     print(f"Observation size: {env.obs_size}, abilities: {env.num_abilities}")
 
@@ -101,7 +170,7 @@ def main():
             verbose=1,
             n_steps=args.n_steps,
             batch_size=args.batch_size,
-            learning_rate=args.lr,
+            learning_rate=linear_schedule(args.lr),
             ent_coef=args.ent_coef,
             clip_range=0.2,
             n_epochs=10,
@@ -124,15 +193,32 @@ def main():
         ),
     ]
 
+    if not args.no_self_play:
+        sp_cb = SelfPlayCallback(
+            env=env,
+            save_dir=args.save_dir,
+            start_timesteps=args.self_play_start,
+            update_freq=args.self_play_freq,
+            pool_size=args.self_play_pool_size,
+            random_prob=args.self_play_random_prob,
+            verbose=1,
+        )
+        callbacks.append(sp_cb)
+        print(f"Self-play: activates at {args.self_play_start:,} steps, "
+              f"snapshots every {args.self_play_freq:,} steps, "
+              f"pool size {args.self_play_pool_size}")
+    else:
+        print("Self-play: disabled (random opponent)")
+
     # Train
-    print(f"\nTraining for {args.timesteps:,} timesteps...")
+    print(f"\nTraining for {args.timesteps:,} timesteps (LR {args.lr} → 0)...")
     t0 = time.time()
 
     try:
         model.learn(
             total_timesteps=args.timesteps,
             callback=callbacks,
-            progress_bar=True,
+            progress_bar=False,
         )
     except KeyboardInterrupt:
         print("\nTraining interrupted by user.")

@@ -1,4 +1,4 @@
-export type DifficultyLevel = 'easy' | 'medium' | 'hard' | 'expert' | 'master';
+export type DifficultyLevel = 'easy' | 'medium' | 'hard' | 'expert' | 'master' | 'neural';
 
 export interface DifficultyProfile {
   readonly name: string;
@@ -91,6 +91,19 @@ export const DIFFICULTY_PRESETS: Record<DifficultyLevel, DifficultyProfile> = {
   },
   master: {
     name: 'Master',
+    thinkIntervalMs: 100,
+    reactionDelayMs: 0,
+    scoreFuzz: 0,
+    abilityUsageRate: 1.0,
+    interruptChance: 1.0,
+    kiteEfficiency: 1.0,
+    hazardAvoidance: 1.0,
+    targetSwitchFrequency: 1.0,
+    movementSpeedScale: 1.0,
+    wastefulness: 0,
+  },
+  neural: {
+    name: 'Neural',
     thinkIntervalMs: 100,
     reactionDelayMs: 0,
     scoreFuzz: 0,

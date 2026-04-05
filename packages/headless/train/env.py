@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import random
 import subprocess
 import sys
 import os
@@ -59,6 +60,33 @@ class PolicyOpponent:
     def predict(self, obs: np.ndarray) -> np.ndarray:
         actions, _ = self.model.predict(obs, deterministic=False)
         return actions
+
+
+class PoolOpponent:
+    """Samples from a pool of saved policies, with some probability of random fallback."""
+
+    def __init__(self, num_abilities: int, random_prob: float = 0.2):
+        self.num_abilities = num_abilities
+        self.random_prob = random_prob
+        self.pool: list[str] = []
+        self.current: PolicyOpponent | None = None
+        self._random = RandomOpponent(num_abilities)
+
+    def add(self, model_path: str, max_pool_size: int = 20) -> None:
+        self.pool.append(model_path)
+        if len(self.pool) > max_pool_size:
+            self.pool.pop(0)
+        self._resample()
+
+    def _resample(self) -> None:
+        if self.pool:
+            path = random.choice(self.pool)
+            self.current = PolicyOpponent(path)
+
+    def predict(self, obs: np.ndarray) -> np.ndarray:
+        if self.current is None or random.random() < self.random_prob:
+            return self._random.predict(obs)
+        return self.current.predict(obs)
 
 
 # ── VecEnv ────────────────────────────────────────────────────────────────
@@ -213,17 +241,22 @@ class GtrVecEnv(VecEnv):
         return [None] * self.num_envs
 
     def get_attr(self, attr_name: str, indices: Sequence[int] | None = None) -> list:
-        raise NotImplementedError
+        indices = indices or range(self.num_envs)
+        # SB3 queries render_mode during __init__; we don't support rendering
+        if attr_name == "render_mode":
+            return [None for _ in indices]
+        raise AttributeError(f"GtrVecEnv has no attribute {attr_name!r}")
 
     def set_attr(
         self, attr_name: str, value: Any, indices: Sequence[int] | None = None
     ) -> None:
-        raise NotImplementedError
+        pass  # no-op; we don't expose per-env attributes
 
     def env_method(
         self, method_name: str, *method_args, indices=None, **method_kwargs
     ) -> list:
-        raise NotImplementedError
+        indices = indices or range(self.num_envs)
+        return [None for _ in indices]
 
     def env_is_wrapped(self, wrapper_class, indices=None) -> list[bool]:
         return [False] * self.num_envs

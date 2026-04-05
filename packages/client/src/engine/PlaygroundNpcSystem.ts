@@ -18,6 +18,7 @@ import type { CastingSystem } from './combat/CastingSystem';
 import { NpcController } from './npc/NpcController';
 import { NpcAiBrain, type AiEngineInterface } from './npc/ai/NpcAiBrain';
 import { createCharacterBehavior } from './npc/ai/behaviors';
+import { NeuralBehavior } from './npc/ai/behaviors/NeuralBehavior';
 import { DIFFICULTY_PRESETS, type DifficultyLevel } from './npc/ai/DifficultyProfile';
 import type { HazardInfo } from './npc/ai/WorldState';
 import type { TargetingSystem } from './targeting/TargetingSystem';
@@ -146,9 +147,20 @@ export class PlaygroundNpcSystem {
   ): NpcController {
     const { host } = this;
     const npc = this.spawnNpc(characterId, position, team, name);
-    const behavior = createCharacterBehavior(characterId);
-    const profile = DIFFICULTY_PRESETS[difficulty];
     const aiEngine = this.getAiEngineInterface();
+    const profile = DIFFICULTY_PRESETS[difficulty];
+
+    let behavior;
+    if (difficulty === 'neural') {
+      const neuralBehavior = new NeuralBehavior(characterId, npc, aiEngine);
+      neuralBehavior.loadModel('models/agent.onnx').catch(err => {
+        console.warn('Failed to load neural model, falling back to rule-based AI:', err);
+      });
+      behavior = neuralBehavior;
+    } else {
+      behavior = createCharacterBehavior(characterId);
+    }
+
     npc.aiBrain = new NpcAiBrain(npc, aiEngine, behavior, profile);
 
     // Fall damage for AI NPCs (same formula as player)
@@ -181,6 +193,7 @@ export class PlaygroundNpcSystem {
         getArenaBounds: () => host.isArenaPreparationActive()
           ? host.mapManager.getNpcSpawnBounds()
           : host.mapManager.getBounds(),
+        getNpcSpawnBounds: () => host.mapManager.getNpcSpawnBounds(),
         getAllTargetables: () => [host.playerController as Targetable, ...this.npcs],
         getHazards: () => {
           const hazards: HazardInfo[] = [];

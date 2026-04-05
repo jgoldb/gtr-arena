@@ -92,3 +92,8 @@ dist/
 
 # SQLite database
 packages/server/data/
+
+# Training artifacts
+packages/headless/train/__pycache__/
+packages/headless/train/models/
+packages/client/public/models/

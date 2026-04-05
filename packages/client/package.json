@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@gtr/shared": "*",
+    "onnxruntime-web": "^1.24.3",
     "three": "^0.173.0"
   },
   "devDependencies": {

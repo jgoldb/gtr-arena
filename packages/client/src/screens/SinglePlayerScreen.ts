@@ -36,6 +36,7 @@ const DIFFICULTY_LABELS: Record<DifficultyLevel, { name: string; color: string; 
   hard:   { name: 'Hard',   color: '#f44336', desc: 'Fast reactions, smart ability combos' },
   expert: { name: 'Expert', color: '#e040fb', desc: 'Near-perfect play, punishes every mistake' },
   master: { name: 'Master', color: '#448aff', desc: 'Perfect play, instant reactions, zero mistakes' },
+  neural: { name: 'Neural', color: '#00e5ff', desc: 'Neural network AI trained via reinforcement learning' },
 };
 
 /** Only characters with full ability sets can be AI opponents */

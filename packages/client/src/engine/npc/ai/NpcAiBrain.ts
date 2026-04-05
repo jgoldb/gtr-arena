@@ -29,6 +29,7 @@ export interface AiEngineInterface {
   readonly combatSystem: CombatSystem;
   getCollisionSystem(): CollisionSystem;
   getArenaBounds(): { minX: number; maxX: number; minZ: number; maxZ: number };
+  getNpcSpawnBounds(): { minX: number; maxX: number; minZ: number; maxZ: number };
   getAllTargetables(): Targetable[];
   getHazards(): HazardInfo[];
   npcUseAbility(npc: NpcController, abilityId: string, target: Targetable | null, groundPos?: THREE.Vector3): boolean;
@@ -223,15 +224,15 @@ export class NpcAiBrain {
         }
       }
       // DEBUG: log navigation state once per second
-      this._navDebugTimer = (this._navDebugTimer ?? 0) + dt;
-      if (this._navDebugTimer > 1) {
-        this._navDebugTimer = 0;
-        const p = this.npc.mesh.position;
-        const tp = this.currentTargetEntity.mesh.position;
-        const nr = navResult;
-        const wp = nr && nr.type === 'waypoint' ? nr.target : null;
-        console.log(`[NAV] npc=(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}) target=(${tp.x.toFixed(1)},${tp.y.toFixed(1)},${tp.z.toFixed(1)}) nav=${nr ? nr.type : 'null'}${wp ? ` wp=(${wp.x.toFixed(1)},${wp.y.toFixed(1)},${wp.z.toFixed(1)}) stop=${(nr as any).stopDistance?.toFixed(1)}` : ''} intent=${this.movement.intent.type} isMoving=${this.npc.isMoving} stuck=${(this.movement as any).stuckDuration?.toFixed(1)}`);
-      }
+      // this._navDebugTimer = (this._navDebugTimer ?? 0) + dt;
+      // if (this._navDebugTimer > 1) {
+      //   this._navDebugTimer = 0;
+      //   const p = this.npc.mesh.position;
+      //   const tp = this.currentTargetEntity.mesh.position;
+      //   const nr = navResult;
+      //   const wp = nr && nr.type === 'waypoint' ? nr.target : null;
+      //   console.log(`[NAV] npc=(${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}) target=(${tp.x.toFixed(1)},${tp.y.toFixed(1)},${tp.z.toFixed(1)}) nav=${nr ? nr.type : 'null'}${wp ? ` wp=(${wp.x.toFixed(1)},${wp.y.toFixed(1)},${wp.z.toFixed(1)}) stop=${(nr as any).stopDistance?.toFixed(1)}` : ''} intent=${this.movement.intent.type} isMoving=${this.npc.isMoving} stuck=${(this.movement as any).stuckDuration?.toFixed(1)}`);
+      // }
     }
 
     // Movement runs every frame for smooth motion
@@ -242,6 +243,14 @@ export class NpcAiBrain {
   startCasting(ability: Ability, target: Targetable | null): boolean {
     if (this.casting) return false;
     if (!ability.castTime) return false;
+
+    // Check blockedByTargetDebuff (e.g. RecentlyBandaged prevents Bandage spam)
+    if (ability.blockedByTargetDebuff) {
+      const effectiveTarget = target ?? this.npc;
+      if (this.engine.buffSystem.hasDebuff(effectiveTarget, ability.blockedByTargetDebuff)) {
+        return false;
+      }
+    }
 
     const effectiveCost = Math.round(ability.manaCost * this.engine.buffSystem.getManaCostMultiplier(this.npc));
     if (this.npc.mana < effectiveCost) return false;
