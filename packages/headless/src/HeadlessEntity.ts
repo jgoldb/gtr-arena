@@ -133,7 +133,7 @@ export class HeadlessEntity implements Positionable {
   }
 
   /** Reset to full HP/mana, alive, clear state. */
-  respawn(x: number, z: number): void {
+  respawn(x: number, z: number, y = 0): void {
     const stats = getCharacterStats(this.characterId);
     this.hp = stats.baseMaxHp;
     this.maxHp = stats.baseMaxHp;
@@ -152,7 +152,7 @@ export class HeadlessEntity implements Positionable {
     this.autoAttackTarget = null;
     this.cooldowns.reset();
     this.x = x;
-    this.y = 0;
+    this.y = y;
     this.z = z;
     this.rotY = 0;
   }

@@ -4,12 +4,9 @@
  * No Three.js, no rendering, no sound. Runs combat at maximum speed.
  * Exposes reset() / step() API for training harnesses.
  *
- * V1 simplifications:
- * - Flat arena (no obstacles, always LoS, ground Y = 0)
+ * Remaining simplifications:
  * - 1v1 only
  * - No navigation / pathfinding
- * - No channeled abilities (bandage, chudmax) — instant-only for now
- * - No ground-targeted abilities (bottle chuck)
  */
 
 import {
@@ -26,7 +23,11 @@ import {
   ChemicalPoolSystem,
   ChargeSystem,
   FullRetardAuraSystem,
+  CastingSystem,
+  CollisionSystem,
+  MISS_CHANCE,
   yardsToUnits,
+  MAPS,
   FartBombDebuff,
   ChemicalSpillSpeedBuff,
   ChemicalSpillDot,
@@ -52,30 +53,66 @@ export interface AgentAction {
   moveAngle: number | null;
   /** Movement speed factor 0–1 (usually 1 = full speed, 0 = stand still). */
   moveSpeed: number;
+  /** If true, cancel any active cast/channel this tick. */
+  cancelCast?: boolean;
+  /** Ground-target X for ground-targeted abilities (e.g. Bottle Chuck). */
+  groundX?: number;
+  /** Ground-target Z for ground-targeted abilities. */
+  groundZ?: number;
 }
 
 export interface EntityObservation {
-  // Self
+  // Self — vitals & position
   hpPct: number;
   manaPct: number;
   x: number;
   z: number;
+  y: number;           // elevation (normalized)
   rotY: number;
-  isStunned: number;
+  // Self — CC & status
+  isStunned: number;   // pure stun (not sleep)
+  isSleeping: number;
   isBlinded: number;
+  isDiscombobulated: number;
+  isUntargetable: number;
   inCombat: number;
+  // Self — buff multipliers (1.0 = normal)
+  speedMult: number;
+  dmgDealtMult: number;
+  dmgTakenMult: number;
+  // Self — ability state
   cooldowns: number[];  // normalized 0–1 per ability slot
   gcdPct: number;
-  // Opponent (relative)
+  isCasting: number;
+  castPct: number;        // 0–1 progress of current cast/channel
+  isChanneling: number;
+
+  // Opponent — vitals & position (relative)
   oppHpPct: number;
   oppManaPct: number;
-  oppRelX: number;     // relative position
+  oppRelX: number;
   oppRelZ: number;
   oppDistance: number;
   oppRotY: number;
+  // Opponent — CC & status
   oppIsStunned: number;
+  oppIsSleeping: number;
   oppIsBlinded: number;
+  oppIsDiscombobulated: number;
+  oppIsUntargetable: number;
+  // Opponent — buff multipliers
+  oppSpeedMult: number;
+  oppDmgDealtMult: number;
+  oppDmgTakenMult: number;
+  // Opponent — ability & movement state
   oppIsCasting: number;
+  oppCastPct: number;
+  oppIsChanneling: number;
+  oppIsMoving: number;
+
+  // Spatial awareness
+  oppLoS: number;        // 1 = have line of sight to opponent
+  wallDist: number[];    // distances in 8 directions, normalized 0–1
 }
 
 export interface StepResult {
@@ -91,25 +128,41 @@ export interface StepResult {
 export interface ArenaConfig {
   /** Characters for team 1 and team 2. */
   characters: [CharacterId, CharacterId];
-  /** Arena half-size in world units (default 18, ~30 yards). */
-  arenaSize?: number;
+  /** Map to simulate in (default 'cage'). Loads real obstacles, spawn points, and LoS. */
+  mapId?: string;
   /** Fixed simulation timestep in seconds (default 0.1 = 10 Hz). */
   tickRate?: number;
   /** Max match duration in seconds before draw (default 120). */
   maxDuration?: number;
 }
 
-// ── Arena ────────────────────────────────────────────────────────────────
+// ── Pending AoE ──────��──────────────────────────────────────────────────
 
-const DEFAULT_ARENA_SIZE = yardsToUnits(30);
+interface PendingAoeImpact {
+  ability: Ability;
+  groundX: number;
+  groundZ: number;
+  delay: number;
+  elapsed: number;
+  owner: HeadlessEntity;
+}
+
+const BOTTLE_CHUCK_IMPACT_DELAY = 0.825;
+
+// ── Arena ─────────────���────────────────────────────────��─────────────────
+
+const ENTITY_COLLISION_RADIUS = 0.4;
 const DEFAULT_TICK_RATE = 0.1;
 const DEFAULT_MAX_DURATION = 120;
 
 export class HeadlessArena {
   // Config
-  private arenaSize: number;
+  private mapId: string;
   private tickRate: number;
   private maxDuration: number;
+  private spawnPoints: { x: number; y: number; z: number }[];
+  /** Normalization scale for position observations (derived from map bounds). */
+  private normScale: number;
 
   // Entities
   readonly entities: [HeadlessEntity, HeadlessEntity];
@@ -118,12 +171,15 @@ export class HeadlessArena {
   private buffSystem: BuffSystem<HeadlessEntity>;
   private regenSystem: RegenSystem<HeadlessEntity>;
   private combat: HeadlessCombat;
+  private collision: CollisionSystem;
+  private castingSystem: CastingSystem<HeadlessEntity>;
   private autoAttack: AutoAttackSystem<HeadlessEntity>;
   private gasCloudSystem: GasCloudSystem<HeadlessEntity>;
   private dotSystem: DotSystem<HeadlessEntity>;
   private chemPoolSystem: ChemicalPoolSystem<HeadlessEntity>;
   private chargeSystem: ChargeSystem<HeadlessEntity>;
   private fullRetardAura: FullRetardAuraSystem<HeadlessEntity>;
+  private pendingAoeImpacts: PendingAoeImpact[] = [];
 
   // State
   private elapsed = 0;
@@ -136,9 +192,28 @@ export class HeadlessArena {
   private healingDone: [number, number] = [0, 0];
 
   constructor(config: ArenaConfig) {
-    this.arenaSize = config.arenaSize ?? DEFAULT_ARENA_SIZE;
+    this.mapId = config.mapId ?? 'cage';
     this.tickRate = config.tickRate ?? DEFAULT_TICK_RATE;
     this.maxDuration = config.maxDuration ?? DEFAULT_MAX_DURATION;
+
+    // Load map data
+    const mapInfo = MAPS[this.mapId];
+    if (!mapInfo) throw new Error(`Unknown map: ${this.mapId}`);
+    // Use npcSpawnBounds for combat spawn positions (map spawnPoints are pre-match pens)
+    const bounds = mapInfo.npcSpawnBounds;
+    this.spawnPoints = [
+      { x: (bounds.minX + bounds.maxX) / 2, y: 0, z: bounds.maxZ * 0.7 },
+      { x: (bounds.minX + bounds.maxX) / 2, y: 0, z: bounds.minZ * 0.7 },
+    ];
+    // Normalization scale: largest axis extent of the playable area
+    this.normScale = Math.max(
+      Math.abs(bounds.maxX), Math.abs(bounds.minX),
+      Math.abs(bounds.maxZ), Math.abs(bounds.minZ),
+    ) || 30;
+
+    // Build collision system from map obstacles
+    this.collision = new CollisionSystem();
+    this.collision.buildFromObstacles(mapInfo.obstacles);
 
     // Create entities
     this.entities = [
@@ -172,6 +247,44 @@ export class HeadlessArena {
         this.winner = victim.team === 1 ? 2 : 1;
       }
     };
+    this.combat.hasLineOfSight = (a, b) => this.collision.hasLineOfSight(a.x, a.z, b.x, b.z, a.y, b.y);
+
+    // Casting system
+    this.castingSystem = new CastingSystem<HeadlessEntity>({
+      isGodMode: () => false,
+      shouldCancel: (entity) =>
+        entity.dead || entity.stunned || this.buffSystem.isSleeping(entity) || entity.isMoving,
+      getPosition: (entity) => ({ x: entity.x, z: entity.z }),
+      getManaCostMultiplier: (entity) => this.buffSystem.getManaCostMultiplier(entity),
+      getDamageDealtMultiplier: (entity) => this.buffSystem.getDamageDealtMultiplier(entity),
+      applyBuff: (target, def) => this.buffSystem.apply(target, def),
+      removeBuff: (target, id, silent) => this.buffSystem.remove(target, id, silent),
+      setBuffRemaining: (target, id, remaining) => this.buffSystem.setRemaining(target, id, remaining),
+      consumeMana: (entity, amount) => { entity.mana -= amount; },
+      notifyManaUsed: (entity) => this.regenSystem.notifyManaUsed(entity),
+      triggerGcd: (entity) => entity.cooldowns.triggerGcd(),
+      setCooldown: (entity, abilityId, duration) => entity.cooldowns.setCooldown(abilityId, duration),
+      clearCooldown: (entity, abilityId) => entity.cooldowns.clearCooldown(abilityId),
+      rollMiss: () => Math.random() < MISS_CHANCE,
+      enterCombat: (entity) => this.combat.enterCombat(entity),
+      applyHeal: (healer, target, amount) => this.combat.applyHeal(target, amount, healer),
+      applyChannelTickDamage: (attacker, target, damage, multiplier) =>
+        this.combat.applyChannelTickDamage(attacker, target, damage, multiplier),
+      useAbility: (entity, ability, target) => {
+        // Called when a non-channel cast completes — route to combat + post-effects
+        const opponent = this.entities[0] === entity ? this.entities[1] : this.entities[0];
+        const result = this.combat.useAbility(ability, entity, target);
+        if (result.success) {
+          this.handleAbilityPostEffects(entity, ability, target, opponent);
+        }
+        return result;
+      },
+    });
+
+    // Cast pushback on direct damage
+    this.combat.onDirectDamageDealt = (target) => {
+      this.castingSystem.applyPushback(target);
+    };
 
     // Auto-attack system
     this.autoAttack = new AutoAttackSystem<HeadlessEntity>({
@@ -189,7 +302,7 @@ export class HeadlessArena {
           Math.random() * (stats.autoAttackDamageMax - stats.autoAttackDamageMin + 1),
         );
       },
-      hasLineOfSight: () => true, // flat arena, always LoS
+      hasLineOfSight: (a, b) => this.collision.hasLineOfSight(a.x, a.z, b.x, b.z, a.y, b.y),
       applyMeleeDamage: (a, t, dmg) => this.combat.applyAutoAttackDamage(a, t, dmg),
       applyProjectileDamage: (a, t, dmg) => { this.combat.applyAutoAttackDamage(a, t, dmg, false); },
     });
@@ -229,8 +342,10 @@ export class HeadlessArena {
     this.chargeSystem = new ChargeSystem<HeadlessEntity>({
       getPosition: (e) => ({ x: e.x, z: e.z }),
       moveEntity: (e, dx, dz) => {
-        e.x = this.clampX(e.x + dx);
-        e.z = this.clampZ(e.z + dz);
+        const resolved = this.collision.resolve(e.x + dx, e.z + dz, e.y, ENTITY_COLLISION_RADIUS);
+        e.x = resolved.x;
+        e.z = resolved.z;
+        e.y = resolved.groundY;
       },
       getHostileEntities: (e) => this.entities.filter(o => o.isHostileTo(e) && !o.dead),
       isUntargetable: (e) => this.buffSystem.isUntargetable(e),
@@ -251,8 +366,13 @@ export class HeadlessArena {
         if (savedTarget && !savedTarget.dead) entity.autoAttackTarget = savedTarget;
       },
       moveKnockbackTarget: (target, dirX, dirZ, speed, dt, _t) => {
-        target.x = this.clampX(target.x + dirX * speed * dt);
-        target.z = this.clampZ(target.z + dirZ * speed * dt);
+        const resolved = this.collision.resolve(
+          target.x + dirX * speed * dt, target.z + dirZ * speed * dt,
+          target.y, ENTITY_COLLISION_RADIUS,
+        );
+        target.x = resolved.x;
+        target.z = resolved.z;
+        target.y = resolved.groundY;
       },
     });
 
@@ -269,14 +389,16 @@ export class HeadlessArena {
     });
   }
 
-  // ── Bounds ─────────────────────────────────────────────────────────────
+  // ── Collision helper ────────────────────────────────────────────────────
 
-  private clampX(x: number): number {
-    return Math.max(-this.arenaSize, Math.min(this.arenaSize, x));
+  private resolvePosition(x: number, z: number, y: number): { x: number; z: number; y: number } {
+    const resolved = this.collision.resolve(x, z, y, ENTITY_COLLISION_RADIUS);
+    return { x: resolved.x, z: resolved.z, y: resolved.groundY };
   }
 
-  private clampZ(z: number): number {
-    return Math.max(-this.arenaSize, Math.min(this.arenaSize, z));
+  /** Check LoS between two entities using the collision system. */
+  hasLineOfSight(a: HeadlessEntity, b: HeadlessEntity): boolean {
+    return this.collision.hasLineOfSight(a.x, a.z, b.x, b.z, a.y, b.y);
   }
 
   // ── Reset ──────────────────────────────────────────────────────────────
@@ -289,23 +411,27 @@ export class HeadlessArena {
     this.damageTaken = [0, 0];
     this.healingDone = [0, 0];
 
-    // Reset entities to spawn positions
-    const spawnDist = this.arenaSize * 0.4;
-    this.entities[0].respawn(-spawnDist, 0);
-    this.entities[0].rotY = Math.PI / 2; // face right
-    this.entities[1].respawn(spawnDist, 0);
-    this.entities[1].rotY = -Math.PI / 2; // face left
+    // Reset entities to real map spawn points
+    const sp0 = this.spawnPoints[0] ?? { x: 0, y: 0, z: 10 };
+    const sp1 = this.spawnPoints[1] ?? { x: 0, y: 0, z: -10 };
+    this.entities[0].respawn(sp0.x, sp0.z, sp0.y);
+    this.entities[1].respawn(sp1.x, sp1.z, sp1.y);
+    // Face each other
+    this.entities[0].faceToward(this.entities[1]);
+    this.entities[1].faceToward(this.entities[0]);
 
     // Clear all system state
     this.buffSystem.clearEntity(this.entities[0]);
     this.buffSystem.clearEntity(this.entities[1]);
     this.combat.clearEntity(this.entities[0]);
     this.combat.clearEntity(this.entities[1]);
+    this.castingSystem.clear();
     this.autoAttack.stop(this.entities[0]);
     this.autoAttack.stop(this.entities[1]);
     this.gasCloudSystem.clouds.length = 0;
     this.dotSystem.dots.length = 0;
     this.chemPoolSystem.pools.length = 0;
+    this.pendingAoeImpacts.length = 0;
 
     // Apply starting buffs
     for (const entity of this.entities) {
@@ -363,14 +489,15 @@ export class HeadlessArena {
 
       // ── Movement ───────────────────────────────────────────────
       if (action.moveAngle !== null && action.moveSpeed > 0 && !entity.blinded) {
-        const stats = getCharacterStats(entity.characterId);
         const baseSpeed = yardsToUnits(8); // ~8 yd/s base run speed
         const speedMult = this.buffSystem.getMovementSpeedMultiplier(entity);
         const speed = baseSpeed * speedMult * action.moveSpeed;
         const dx = Math.sin(action.moveAngle) * speed * dt;
         const dz = Math.cos(action.moveAngle) * speed * dt;
-        entity.x = this.clampX(entity.x + dx);
-        entity.z = this.clampZ(entity.z + dz);
+        const resolved = this.resolvePosition(entity.x + dx, entity.z + dz, entity.y);
+        entity.x = resolved.x;
+        entity.z = resolved.z;
+        entity.y = resolved.y;
         entity.isMoving = true;
       } else {
         entity.isMoving = false;
@@ -380,8 +507,14 @@ export class HeadlessArena {
       if (entity.blinded) {
         const wanderAngle = Math.random() * Math.PI * 2;
         const speed = yardsToUnits(3) * dt;
-        entity.x = this.clampX(entity.x + Math.sin(wanderAngle) * speed);
-        entity.z = this.clampZ(entity.z + Math.cos(wanderAngle) * speed);
+        const resolved = this.resolvePosition(
+          entity.x + Math.sin(wanderAngle) * speed,
+          entity.z + Math.cos(wanderAngle) * speed,
+          entity.y,
+        );
+        entity.x = resolved.x;
+        entity.z = resolved.z;
+        entity.y = resolved.y;
         entity.isMoving = true;
         entity.autoAttackTarget = null;
         continue;
@@ -392,23 +525,46 @@ export class HeadlessArena {
         entity.faceToward(opponent);
       }
 
+      // ── Cancel cast ─────────────────────────────────────────
+      if (action.cancelCast) {
+        this.castingSystem.cancel(entity);
+      }
+
       // ── Ability usage ─────────────────────────────────────────
-      if (action.abilityIndex !== null) {
+      if (action.abilityIndex !== null && !this.castingSystem.isCasting(entity)) {
         const ability = entity.abilities[action.abilityIndex];
         if (ability && !ability.isAutoAttack) {
-          // Determine target
-          let target: HeadlessEntity | null = null;
-          if (ability.requiresHostileTarget) {
-            target = opponent;
-          } else if (ability.requiresTarget && !ability.requiresFriendlyTarget) {
-            target = entity; // self-target
-          } else if (ability.requiresFriendlyTarget) {
-            target = entity; // self-heal
-          }
-
-          const result = this.combat.useAbility(ability, entity, target);
-          if (result.success) {
-            this.handleAbilityPostEffects(entity, ability, target, opponent);
+          if (ability.groundTargeted && action.groundX !== undefined && action.groundZ !== undefined) {
+            // Ground-targeted AoE (e.g. Bottle Chuck)
+            this.useGroundTargetAbility(entity, ability, action.groundX, action.groundZ);
+          } else if (ability.castTime) {
+            // Cast-time or channeled ability — route through CastingSystem
+            let target: HeadlessEntity | null = null;
+            if (ability.requiresHostileTarget) {
+              target = opponent;
+            } else if (ability.requiresTarget && !ability.requiresFriendlyTarget) {
+              target = entity;
+            } else if (ability.requiresFriendlyTarget) {
+              target = entity; // 1v1: only self
+            }
+            const validation = this.combat.validateAbility(ability, entity, target);
+            if (validation.success) {
+              this.castingSystem.start(entity, ability, target);
+            }
+          } else {
+            // Instant ability (existing path)
+            let target: HeadlessEntity | null = null;
+            if (ability.requiresHostileTarget) {
+              target = opponent;
+            } else if (ability.requiresTarget && !ability.requiresFriendlyTarget) {
+              target = entity;
+            } else if (ability.requiresFriendlyTarget) {
+              target = entity;
+            }
+            const result = this.combat.useAbility(ability, entity, target);
+            if (result.success) {
+              this.handleAbilityPostEffects(entity, ability, target, opponent);
+            }
           }
         }
       }
@@ -425,6 +581,22 @@ export class HeadlessArena {
     // ── Tick all systems ───────────────────────────────────────────────
     for (const e of this.entities) {
       e.cooldowns.update(dt);
+      this.castingSystem.update(e, dt);
+      // Sync casting state to entity fields (for observations + isCasting checks)
+      const casting = this.castingSystem.getState(e);
+      if (casting) {
+        e.castingAbilityName = casting.ability.name;
+        e.castingAbilityId = casting.ability.id;
+        e.castingElapsed = casting.elapsed;
+        e.castingTotalTime = casting.totalTime;
+        e.castingIsChannel = casting.isChannel;
+      } else {
+        e.castingAbilityName = null;
+        e.castingAbilityId = null;
+        e.castingElapsed = 0;
+        e.castingTotalTime = 0;
+        e.castingIsChannel = false;
+      }
       this.autoAttack.update(e, dt);
     }
     this.autoAttack.updateProjectiles(dt);
@@ -432,6 +604,7 @@ export class HeadlessArena {
     this.gasCloudSystem.update(dt);
     this.chemPoolSystem.update(dt);
     this.dotSystem.update(dt);
+    this.updatePendingAoeImpacts(dt);
     this.fullRetardAura.update(dt);
     this.combat.update(dt);
     this.buffSystem.update(dt);
@@ -595,6 +768,66 @@ export class HeadlessArena {
     }
   }
 
+  // ── Ground-Targeted Abilities ───────────────────────────────────────────
+
+  private useGroundTargetAbility(
+    entity: HeadlessEntity,
+    ability: Ability,
+    groundX: number,
+    groundZ: number,
+  ): void {
+    if (entity.dead) return;
+    if (entity.stunned || this.buffSystem.isSleeping(entity)) return;
+    if (!entity.cooldowns.isReady(ability.id)) return;
+
+    // Range check to ground position
+    const dx = entity.x - groundX;
+    const dz = entity.z - groundZ;
+    if (ability.range && Math.sqrt(dx * dx + dz * dz) > ability.range + yardsToUnits(2)) return;
+
+    // Mana check + consume
+    const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
+    if (entity.mana < effectiveCost) return;
+    entity.mana -= effectiveCost;
+    if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
+
+    // Cooldown + GCD
+    entity.cooldowns.setCooldown(ability.id, ability.cooldown);
+    entity.cooldowns.triggerGcd();
+
+    // Schedule delayed impact
+    this.pendingAoeImpacts.push({
+      ability,
+      groundX,
+      groundZ,
+      delay: BOTTLE_CHUCK_IMPACT_DELAY,
+      elapsed: 0,
+      owner: entity,
+    });
+
+    this.combat.enterCombat(entity);
+  }
+
+  private updatePendingAoeImpacts(dt: number): void {
+    for (let i = this.pendingAoeImpacts.length - 1; i >= 0; i--) {
+      const impact = this.pendingAoeImpacts[i];
+      impact.elapsed += dt;
+      if (impact.elapsed < impact.delay) continue;
+
+      const radius = impact.ability.aoeRadius ?? 0;
+      for (const target of this.entities) {
+        if (target === impact.owner || target.dead || !target.isHostileTo(impact.owner)) continue;
+        if (this.buffSystem.isUntargetable(target)) continue;
+        const dx = target.x - impact.groundX;
+        const dz = target.z - impact.groundZ;
+        if (dx * dx + dz * dz > radius * radius) continue;
+        this.combat.applyAoeDamage(impact.owner, target, impact.ability);
+      }
+
+      this.pendingAoeImpacts.splice(i, 1);
+    }
+  }
+
   // ── Observations ───────────────────────────────────────────────────────
 
   private buildObservations(): [EntityObservation, EntityObservation] {
@@ -604,32 +837,76 @@ export class HeadlessArena {
     ];
   }
 
+  // 8 raycast directions for wall distance: N, NE, E, SE, S, SW, W, NW
+  private static readonly WALL_RAY_DIRS: [number, number][] = [
+    [0, 1], [0.707, 0.707], [1, 0], [0.707, -0.707],
+    [0, -1], [-0.707, -0.707], [-1, 0], [-0.707, 0.707],
+  ];
+  private static readonly WALL_RAY_MAX = yardsToUnits(30);
+
   private buildObservation(entityIndex: number): EntityObservation {
     const self = this.entities[entityIndex];
     const opp = this.entities[1 - entityIndex];
     const stats = getCharacterStats(self.characterId);
+    const maxRay = HeadlessArena.WALL_RAY_MAX;
+
+    // Wall distances: 8-direction raycasts from self position
+    const wallDist = HeadlessArena.WALL_RAY_DIRS.map(
+      ([dx, dz]) => this.collision.raycastDistance(self.x, self.z, dx, dz, maxRay, self.y) / maxRay,
+    );
 
     return {
+      // Self — vitals & position
       hpPct: self.maxHp > 0 ? self.hp / self.maxHp : 0,
       manaPct: self.maxMana > 0 ? self.mana / self.maxMana : 0,
-      x: self.x / this.arenaSize,  // normalized to [-1, 1]
-      z: self.z / this.arenaSize,
-      rotY: self.rotY / Math.PI,   // normalized to [-1, 1]
-      isStunned: self.stunned ? 1 : 0,
-      isBlinded: self.blinded ? 1 : 0,
+      x: self.x / this.normScale,
+      z: self.z / this.normScale,
+      y: self.y / 10, // normalized: 10 world units is a tall structure
+      rotY: self.rotY / Math.PI,
+      // Self — CC & status
+      isStunned: this.buffSystem.isStunned(self) ? 1 : 0,
+      isSleeping: this.buffSystem.isSleeping(self) ? 1 : 0,
+      isBlinded: this.buffSystem.isBlinded(self) ? 1 : 0,
+      isDiscombobulated: this.buffSystem.isDiscombobulated(self) ? 1 : 0,
+      isUntargetable: this.buffSystem.isUntargetable(self) ? 1 : 0,
       inCombat: self.inCombat ? 1 : 0,
+      // Self — buff multipliers (centered at 1.0)
+      speedMult: this.buffSystem.getMovementSpeedMultiplier(self),
+      dmgDealtMult: this.buffSystem.getDamageDealtMultiplier(self),
+      dmgTakenMult: this.buffSystem.getDamageTakenMultiplier(self),
+      // Self — ability state
       cooldowns: self.cooldowns.getCooldownVector(stats.abilities),
       gcdPct: self.cooldowns.getGcdRemaining() / 0.75,
+      isCasting: self.castingAbilityName !== null ? 1 : 0,
+      castPct: self.castingTotalTime > 0 ? self.castingElapsed / self.castingTotalTime : 0,
+      isChanneling: self.castingIsChannel ? 1 : 0,
 
+      // Opponent — vitals & position
       oppHpPct: opp.maxHp > 0 ? opp.hp / opp.maxHp : 0,
       oppManaPct: opp.maxMana > 0 ? opp.mana / opp.maxMana : 0,
-      oppRelX: (opp.x - self.x) / this.arenaSize,
-      oppRelZ: (opp.z - self.z) / this.arenaSize,
-      oppDistance: self.distanceTo(opp) / (this.arenaSize * 2),
+      oppRelX: (opp.x - self.x) / this.normScale,
+      oppRelZ: (opp.z - self.z) / this.normScale,
+      oppDistance: self.distanceTo(opp) / (this.normScale * 2),
       oppRotY: opp.rotY / Math.PI,
-      oppIsStunned: opp.stunned ? 1 : 0,
-      oppIsBlinded: opp.blinded ? 1 : 0,
+      // Opponent — CC & status
+      oppIsStunned: this.buffSystem.isStunned(opp) ? 1 : 0,
+      oppIsSleeping: this.buffSystem.isSleeping(opp) ? 1 : 0,
+      oppIsBlinded: this.buffSystem.isBlinded(opp) ? 1 : 0,
+      oppIsDiscombobulated: this.buffSystem.isDiscombobulated(opp) ? 1 : 0,
+      oppIsUntargetable: this.buffSystem.isUntargetable(opp) ? 1 : 0,
+      // Opponent — buff multipliers
+      oppSpeedMult: this.buffSystem.getMovementSpeedMultiplier(opp),
+      oppDmgDealtMult: this.buffSystem.getDamageDealtMultiplier(opp),
+      oppDmgTakenMult: this.buffSystem.getDamageTakenMultiplier(opp),
+      // Opponent — ability & movement state
       oppIsCasting: opp.castingAbilityName !== null ? 1 : 0,
+      oppCastPct: opp.castingTotalTime > 0 ? opp.castingElapsed / opp.castingTotalTime : 0,
+      oppIsChanneling: opp.castingIsChannel ? 1 : 0,
+      oppIsMoving: opp.isMoving ? 1 : 0,
+
+      // Spatial awareness
+      oppLoS: this.collision.hasLineOfSight(self.x, self.z, opp.x, opp.z, self.y, opp.y) ? 1 : 0,
+      wallDist,
     };
   }
 
@@ -642,12 +919,29 @@ export class HeadlessArena {
   /** Flatten an observation into a float array for neural network input. */
   static flattenObservation(obs: EntityObservation): number[] {
     return [
-      obs.hpPct, obs.manaPct, obs.x, obs.z, obs.rotY,
-      obs.isStunned, obs.isBlinded, obs.inCombat,
+      // Self — vitals & position
+      obs.hpPct, obs.manaPct, obs.x, obs.z, obs.y, obs.rotY,
+      // Self — CC & status
+      obs.isStunned, obs.isSleeping, obs.isBlinded,
+      obs.isDiscombobulated, obs.isUntargetable, obs.inCombat,
+      // Self — buff multipliers
+      obs.speedMult, obs.dmgDealtMult, obs.dmgTakenMult,
+      // Self — ability state
       ...obs.cooldowns,
       obs.gcdPct,
-      obs.oppHpPct, obs.oppManaPct, obs.oppRelX, obs.oppRelZ, obs.oppDistance,
-      obs.oppRotY, obs.oppIsStunned, obs.oppIsBlinded, obs.oppIsCasting,
+      obs.isCasting, obs.castPct, obs.isChanneling,
+      // Opponent — vitals & position
+      obs.oppHpPct, obs.oppManaPct, obs.oppRelX, obs.oppRelZ, obs.oppDistance, obs.oppRotY,
+      // Opponent — CC & status
+      obs.oppIsStunned, obs.oppIsSleeping, obs.oppIsBlinded,
+      obs.oppIsDiscombobulated, obs.oppIsUntargetable,
+      // Opponent — buff multipliers
+      obs.oppSpeedMult, obs.oppDmgDealtMult, obs.oppDmgTakenMult,
+      // Opponent — ability & movement
+      obs.oppIsCasting, obs.oppCastPct, obs.oppIsChanneling, obs.oppIsMoving,
+      // Spatial
+      obs.oppLoS,
+      ...obs.wallDist,
     ];
   }
 }

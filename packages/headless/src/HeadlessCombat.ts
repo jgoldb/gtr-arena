@@ -25,6 +25,10 @@ export class HeadlessCombat {
   onDeath?: (victim: HeadlessEntity, killer: HeadlessEntity | null) => void;
   onDamageDealt?: (attacker: HeadlessEntity, target: HeadlessEntity, amount: number) => void;
   onHealDone?: (healer: HeadlessEntity, target: HeadlessEntity, amount: number) => void;
+  /** Fires on any direct damage (abilities, auto-attacks, channels, AoE) — used for cast pushback. */
+  onDirectDamageDealt?: (target: HeadlessEntity) => void;
+  /** LoS check between two entities (provided by arena collision system). */
+  hasLineOfSight?: (a: HeadlessEntity, b: HeadlessEntity) => boolean;
 
   constructor(buffSystem: BuffSystem<HeadlessEntity>) {
     this.buffSystem = buffSystem;
@@ -156,6 +160,9 @@ export class HeadlessCombat {
       if (ability.requiresFacing !== false && !this.isFacing(attacker, target)) {
         return { success: false, error: 'not-facing' };
       }
+      if (this.hasLineOfSight && !this.hasLineOfSight(attacker, target)) {
+        return { success: false, error: 'not-in-los' };
+      }
     }
     if (ability.requiresTarget && !ability.requiresHostileTarget) {
       if (!target) return { success: false, error: 'no-target' };
@@ -209,6 +216,7 @@ export class HeadlessCombat {
 
         if (actualDamage > 0) {
           this.onDamageDealt?.(attacker, target, actualDamage);
+          this.onDirectDamageDealt?.(target);
         }
 
         // Wake sleeping targets
@@ -272,6 +280,7 @@ export class HeadlessCombat {
 
     if (actualDamage > 0) {
       this.onDamageDealt?.(attacker, target, actualDamage);
+      this.onDirectDamageDealt?.(target);
     }
 
     // Wake sleeping targets
@@ -303,6 +312,7 @@ export class HeadlessCombat {
 
     if (actualDamage > 0) {
       this.onDamageDealt?.(attacker, target, actualDamage);
+      this.onDirectDamageDealt?.(target);
     }
 
     if (target.hp <= 0 && !target.dead) {
@@ -335,6 +345,7 @@ export class HeadlessCombat {
 
     if (actualDamage > 0) {
       this.onDamageDealt?.(attacker, target, actualDamage);
+      this.onDirectDamageDealt?.(target);
     }
 
     this.enterCombat(attacker);
@@ -368,6 +379,7 @@ export class HeadlessCombat {
 
     if (actualDamage > 0) {
       this.onDamageDealt?.(attacker, target, actualDamage);
+      this.onDirectDamageDealt?.(target);
     }
 
     if (ability.appliesDebuff) {

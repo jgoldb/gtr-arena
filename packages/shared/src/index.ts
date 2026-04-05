@@ -15,3 +15,4 @@ export { FullRetardAuraSystem, type ActiveAura, type FullRetardAuraCallbacks } f
 export { CastingSystem, type CastingState, type CastingCallbacks, CAST_PUSHBACK_SECONDS, INTERRUPT_COOLDOWN_SECONDS } from './CastingSystem.js';
 export { AutoAttackSystem, type AutoAttackState, type AutoAttackCallbacks, type PendingProjectile } from './AutoAttackSystem.js';
 export { ChargeSystem, type ActiveSweepCharge, type ActiveTweakerSprintCharge, type ActiveKnockback, type ChargeCallbacks, KABOOM_CONE_RANGE, KABOOM_CONE_HALF_ANGLE, KABOOM_KNOCKBACK_DISTANCE, KABOOM_KNOCKBACK_DURATION } from './systems/ChargeSystem.js';
+export { CollisionSystem, type BoxCollider, type CircleCollider, type Collider, type WaterZone, type ResolveResult, PLAYER_HEIGHT, STEP_HEIGHT } from './CollisionSystem.js';

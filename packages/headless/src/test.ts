@@ -24,6 +24,10 @@ function randomAction(characterId: CharacterId): AgentAction {
     abilityIndex,
     moveAngle,
     moveSpeed: moveAngle !== null ? 1 : 0,
+    cancelCast: Math.random() < 0.05,
+    // Random ground target within reasonable range of origin
+    groundX: (Math.random() - 0.5) * 30,
+    groundZ: (Math.random() - 0.5) * 30,
   };
 }
 
@@ -35,6 +39,7 @@ const matchups: [CharacterId, CharacterId][] = [
   ['janitor', 'crackhead'],
   ['dr-retardo', 'crackhead'],
   ['janitor', 'dr-retardo'],
+  ['dr-retardo', 'dr-retardo'],
 ];
 const characters = matchups[Math.floor(Math.random() * matchups.length)];
 const results = { team1: 0, team2: 0, draw: 0 };
@@ -43,7 +48,7 @@ let totalSteps = 0;
 const startTime = performance.now();
 
 for (let i = 0; i < MATCH_COUNT; i++) {
-  const arena = new HeadlessArena({ characters });
+  const arena = new HeadlessArena({ characters, mapId: 'cage' });
   arena.reset();
 
   let steps = 0;
@@ -66,6 +71,7 @@ const elapsed = performance.now() - startTime;
 
 console.log(`\n=== Headless Arena Test ===`);
 console.log(`Matchup: ${characters[0]} vs ${characters[1]}`);
+console.log(`Map: cage (with collision + LoS)`);
 console.log(`Matches: ${MATCH_COUNT}`);
 console.log(`Results: Team1=${results.team1} Team2=${results.team2} Draw=${results.draw}`);
 console.log(`Total steps: ${totalSteps} (avg ${(totalSteps / MATCH_COUNT).toFixed(0)} per match)`);
@@ -73,7 +79,7 @@ console.log(`Wall time: ${elapsed.toFixed(0)}ms (${(totalSteps / elapsed * 1000)
 console.log(`Matches/sec: ${(MATCH_COUNT / elapsed * 1000).toFixed(1)}`);
 
 // Quick observation shape check
-const arena = new HeadlessArena({ characters });
+const arena = new HeadlessArena({ characters, mapId: 'cage' });
 const obs = arena.reset();
 const flat = HeadlessArena.flattenObservation(obs[0]);
 console.log(`\nObservation vector size: ${flat.length}`);

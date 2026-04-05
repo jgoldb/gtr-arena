@@ -10,75 +10,114 @@ Train a neural network via self-play reinforcement learning to play GTR Arena, t
 - `HeadlessEntity` — implements `Positionable` with plain `x/y/z/rotY` (no Three.js)
 - `HeadlessCombat` — full port of client CombatSystem using plain math
 - `HeadlessArena` — gym-style `reset()`/`step()` simulation environment
-  - Wires all shared systems: BuffSystem, RegenSystem, AutoAttackSystem, GasCloudSystem, DotSystem, ChemicalPoolSystem, ChargeSystem, FullRetardAuraSystem
+  - Wires all shared systems: BuffSystem, RegenSystem, AutoAttackSystem, GasCloudSystem, DotSystem, ChemicalPoolSystem, ChargeSystem, FullRetardAuraSystem, **CastingSystem**
   - Handles all ability post-effects (charges, gas clouds, DOTs, tweaking stacks, buff steal, etc.)
-  - Builds normalized observation vectors (29 floats per agent)
+  - Builds normalized observation vectors (**57 floats** per agent)
   - Computes shaped rewards (damage dealt/taken/healed + terminal win/loss)
-  - Performance: ~600k steps/sec, ~800 matches/sec single-threaded
+  - Performance: ~175-200k steps/sec single-threaded (with collision + raycasts)
 
-### V1 Simplifications
-- Flat arena, no obstacles, always line-of-sight
-- 1v1 only
-- Instant abilities only (no channeled casts like bandage/chudmax)
-- No ground-targeted abilities (bottle chuck)
+### Phase 2a — Channeled/cast-time abilities (completed)
+- Integrated shared `CastingSystem<HeadlessEntity>` with full callback wiring
+- Cast-time abilities (Discombobulate, Full Retard, Crotch Rot, Janitor's Helper) route through the casting system — cast completes after `castTime` seconds, then the ability effect fires
+- Channeled abilities (Bandage, Chudmax) consume mana at channel start, deliver tick damage/healing at intervals
+- Movement cancels casts (via `shouldCancel`); stun/sleep also cancel
+- Direct damage applies cast pushback (extends cast time / shortens channel duration)
+- `AgentAction` extended with `cancelCast` for explicit cast cancellation
+- Observation vector extended with `isCasting`, `castPct`, `isChanneling`
+
+### Phase 2b — Ground-targeted abilities (completed)
+- Bottle Chuck uses `groundX`/`groundZ` in `AgentAction` for AoE placement
+- Pending AoE impact system with 0.825s delay (matching server/client)
+- On impact, applies AoE damage + debuff to all hostiles within radius
+
+### Phase 2e — Map geometry, obstacles, and line-of-sight (completed)
+- Extracted `CollisionSystem` into `packages/shared/src/CollisionSystem.ts` — single implementation used by client, server, and headless
+- Client extends shared `CollisionSystem` with navigation/elevation/platform features
+- Server re-exports shared `CollisionSystem` (removed duplicated ~320-line implementation)
+- `ArenaConfig` accepts `mapId` (default `'cage'`), loads real map obstacles
+- Collision `resolve()` replaces flat `clampX`/`clampZ` boundary — entities pushed out of walls, ground Y tracked
+- Real 3D-aware `hasLineOfSight()` raycasting replaces `() => true` stub
+- LoS checks added to ability validation in `HeadlessCombat.validateAbility()`
+- Auto-attack system uses real LoS between entities
+- Charge/knockback movement uses collision resolution
+- Spawn points derived from `npcSpawnBounds` (map `spawnPoints` are pre-match pens)
+- Position normalization uses map bounds (`normScale`) instead of hardcoded arena size
+- Performance: ~450-560k steps/sec (minimal overhead from collision checks on cage map)
+
+### Phase 2c — Richer observation vector (completed)
+- Observation vector expanded from **32 floats** to **57 floats** per agent
+- Self CC states split: `isStunned` (pure stun), `isSleeping`, `isBlinded`, `isDiscombobulated`, `isUntargetable`
+- Buff multipliers exposed: `speedMult`, `dmgDealtMult`, `dmgTakenMult` (and opponent equivalents)
+- Opponent casting detail: `oppCastPct` (progress), `oppIsChanneling`, `oppIsMoving`
+- Spatial awareness: `oppLoS` (binary LoS check), `wallDist` (8-direction raycasts normalized to 0–1)
+- Elevation: self `y` position normalized
+- `raycastDistance()` method added to shared `CollisionSystem` for wall distance probes
+- Performance: ~175-200k steps/sec (down from ~450k due to raycasts, still fast for training)
+
+### Phase 3a — Training pipeline bridge (completed)
+- `packages/headless/src/bridge.ts` — stdin/stdout JSON-lines bridge for Python RL training
+- Manages N parallel arenas in a single Node.js process (vectorized environment)
+- Protocol: `init` → `step` → `reset` → `close` commands via JSON lines
+- Action encoding: `[ability (0=none, 1-11=slot), moveDir (0=stop, 1-8=compass), cancelCast (0/1)]` per agent
+- Done arenas auto-reset; terminal observations stored in `infos` for value estimation
+- Ground-targeted abilities default to opponent position
+- Performance: ~17k env-steps/sec through IPC (2 envs), ~8.5k steps/sec per env
+- Integration test: `bridge_test.ts` validates init/step/reset/close and observation shapes
+
+### Phase 3b — Python training harness (completed)
+- `packages/headless/train/env.py` — SB3-compatible `VecEnv` wrapping the bridge subprocess
+  - Spawns bridge process, handles JSON-lines IPC
+  - Agent 0 controlled by RL policy, Agent 1 by configurable opponent (random/saved policy)
+  - `RandomOpponent`, `DoNothingOpponent`, `PolicyOpponent` implementations
+  - Proper `terminal_observation` handling for value bootstrapping
+- `packages/headless/train/train.py` — PPO training script
+  - stable-baselines3 PPO with 2×256 MLP, `MultiDiscrete` action space
+  - Win rate tracking via custom callback + TensorBoard logging
+  - Checkpoint saving, resume support, configurable hyperparameters
+  - CLI: `python train.py --timesteps 1000000 --num-envs 16`
+- `packages/headless/train/requirements.txt` — Python dependencies
+
+### Remaining Simplifications
+- 1v1 only (multi-agent deferred to a future iteration)
 
 ---
 
-## Phase 2: Simulation Improvements
+## Phase 2: Simulation Improvements ✓
 
-### 2a. Channeled abilities
-Add casting/channeling state machine to `HeadlessArena.step()`:
-- Track `castingState` per entity (ability, elapsed, totalTime, isChannel, ticksDelivered)
-- While casting: movement cancels cast, stun cancels cast, channel ticks deliver damage at intervals
-- Abilities affected: Bandage (self-heal channel), Chudmax (damage channel)
-- Need a new action type: `{ abilityIndex, ... }` should distinguish "start cast" from "cancel cast"
+### 2a. Channeled abilities ✓
+Integrated shared `CastingSystem<HeadlessEntity>` into the arena. Cast-time abilities validate then enter the casting system; channels consume resources at start and tick damage/healing at intervals. Movement/stun/sleep cancel casts. Direct damage applies pushback. `cancelCast` action added for explicit cancellation.
 
-### 2b. Ground-targeted abilities
-- Bottle Chuck (Dr. Retardo's AoE): needs ground position in action space
-- Add `groundX/groundZ` to `AgentAction`
-- Handle pending AoE impacts with delay timer (like client's `BOTTLE_CHUCK_IMPACT_DELAY`)
+### 2b. Ground-targeted abilities ✓
+Added `groundX`/`groundZ` to `AgentAction`. Bottle Chuck validates range + resources, then schedules a `PendingAoeImpact` with 0.825s delay. On impact, AoE damage + debuff applied to all hostiles in radius via `HeadlessCombat.applyAoeDamage()`.
 
-### 2c. Richer observation vector
-- Per-buff/debuff presence (one-hot or embedding for active buffs)
-- Casting state of opponent (which ability, progress)
-- Movement velocity of opponent
-- Arena boundary distances
+### 2c. Richer observation vector ✓
+Observation vector expanded from 32 to 57 floats. Added per-entity CC state breakdown (stun/sleep/blind/discombobulate/untargetable), buff multipliers (speed/damage dealt/damage taken), opponent casting progress + channel status + movement, spatial awareness (LoS binary + 8-direction wall distances via `CollisionSystem.raycastDistance()`), and elevation.
 
-### 2d. Multi-agent (2v2, 3v3)
+### 2d. Multi-agent (2v2, 3v3) — *deferred to future iteration*
 - Extend `HeadlessArena` to support N entities per team
 - Observation vector grows: need ally info + multiple enemy info
 - Action space adds target selection (which enemy to attack)
+- Training harness will focus on 1v1 initially
+
+### 2e. Map geometry, obstacles, and line-of-sight ✓
+Extracted `CollisionSystem` into `packages/shared/src/CollisionSystem.ts` — single implementation shared by client, server, and headless. Client extends it with navigation/elevation features. Server re-exports it (removed ~320 lines of duplicated code). Arena loads real map obstacles, uses `resolve()` for collision, real 3D `hasLineOfSight()` raycasting, and LoS checks in ability validation.
 
 ---
 
-## Phase 3: Training Pipeline
+## Phase 3: Training Pipeline ✓
 
-### 3a. Python training harness
-Two approaches (pick one):
+### 3a. Subprocess bridge ✓ (Option A chosen)
+Built `packages/headless/src/bridge.ts` — stdin/stdout JSON-lines bridge. Game logic stays in TypeScript, Python only does RL. Manages N parallel arenas in a single process for vectorized env efficiency. Actions encoded as `MultiDiscrete([12, 9, 2])` per agent. Auto-resets done arenas with terminal observation preservation.
 
-**Option A — subprocess bridge (recommended):**
-- Node.js process runs the headless sim
-- Python process runs the RL algorithm (PPO via stable-baselines3 or cleanrl)
-- Communicate via stdin/stdout JSON-lines: Python sends actions, Node sends observations/rewards
-- Advantage: game logic stays in TypeScript, no duplication
-- Build: `packages/headless/src/bridge.ts` — reads actions from stdin, writes observations to stdout
-
-**Option B — Python port:**
-- Rewrite HeadlessArena in Python (numpy)
-- Advantage: native integration with PyTorch, no IPC overhead
-- Disadvantage: logic duplication, divergence risk
-
-### 3b. RL algorithm setup
-- **Algorithm:** PPO (Proximal Policy Optimization) — stable, sample-efficient enough
-- **Framework:** stable-baselines3 or cleanrl
-- **Network architecture:**
-  - Input: observation vector (~30-60 floats depending on phase 2c)
-  - Hidden: 2-3 layers of 256 units (MLP), or small LSTM for temporal reasoning
-  - Output heads:
-    - Ability selection: softmax over ability slots + "no ability"
-    - Movement angle: Gaussian (continuous) or 8-direction discrete softmax
-    - Movement speed: sigmoid (0-1)
-  - Separate value head for advantage estimation
+### 3b. RL algorithm setup ✓
+- **Algorithm:** PPO (Proximal Policy Optimization) via stable-baselines3
+- **Env wrapper:** `packages/headless/train/env.py` — custom `VecEnv` subclass spawning bridge subprocess
+- **Network:** 2×256 MLP (separate pi/vf branches), `MultiDiscrete` action space
+  - Ability: 12 choices (0=none, 1-11=ability slots)
+  - Movement: 9 choices (0=stop, 1-8=compass directions)
+  - Cancel cast: 2 choices (0/1)
+- **Opponent:** pluggable — `RandomOpponent` (default), `DoNothingOpponent`, `PolicyOpponent` (from saved checkpoint)
+- **Training script:** `packages/headless/train/train.py` with CLI args, TensorBoard logging, checkpoint saving
 
 ### 3c. Reward shaping
 Starting point (already in HeadlessArena):
@@ -171,19 +210,26 @@ Dependencies to add: `onnxruntime-web` (WASM backend, no GPU needed, <1ms infere
 
 | Risk | Mitigation |
 |------|-----------|
-| Headless sim diverges from real game | Both use `@gtr/shared` systems. HeadlessCombat is a port of client CombatSystem — keep in sync. |
+| Headless sim diverges from real game | Both use `@gtr/shared` systems. HeadlessCombat is a port of client CombatSystem — keep in sync. Phase 2e unifies CollisionSystem into shared. |
+| Model doesn't understand LoS/terrain | Phase 2e adds real map geometry, obstacle collision, and LoS raycasting before training at scale. Without this, trained bots are trivially exploitable. |
 | Reward shaping produces degenerate behavior | Start simple, add shaping incrementally, evaluate against baselines. |
 | Sim too slow for training | Already ~600k steps/sec. Can parallelize with worker threads if needed. |
 | Observation encoding mismatch (train vs deploy) | Extract encoding into shared module, add assertion tests. |
-| Model doesn't generalize to full game (obstacles, channels) | Phase 2 adds these before training at scale. Train on simplified game first to validate pipeline. |
+| Model doesn't generalize to full game (obstacles, channels) | Phases 2a–2e add these before training at scale. Train on simplified game first to validate pipeline. |
 | New abilities / balance changes invalidate trained model | Retrain is cheap (~hours). Keep training pipeline automated. |
 
 ---
 
-## Immediate Next Steps (for next session)
+## Immediate Next Steps
 
-1. **Pick training approach:** Option A (subprocess bridge) or Option B (Python port)
-2. **Build the bridge/harness** — the IPC layer between sim and trainer
-3. **Implement PPO training loop** with a single character (janitor vs janitor 1v1)
-4. **Add channeled abilities** to the headless sim (Phase 2a)
-5. **First training run** — validate that the agent learns to beat a random opponent
+1. ~~**Phase 2a** — Add channeled/cast-time abilities to the headless sim~~ ✓
+2. ~~**Phase 2b** — Add ground-targeted abilities (Bottle Chuck)~~ ✓
+3. ~~**Phase 2e** — Move CollisionSystem to shared, wire map geometry + LoS into arena~~ ✓
+4. ~~**Phase 2c** — Enrich observation vector (buffs, casting state, LoS, wall distances)~~ ✓
+5. ~~**Phase 3a** — Build subprocess bridge (`bridge.ts`)~~ ✓
+6. ~~**Phase 3b** — Build Python training harness (env.py + train.py)~~ ✓
+7. **First training run** — `cd packages/headless/train && pip install -r requirements.txt && python train.py`
+8. **Phase 3c** — Tune reward shaping based on initial training results
+9. **Phase 3d** — Self-play with opponent pool (save checkpoints → load as opponents)
+10. **Phase 4a** — Export trained model to ONNX
+11. **Phase 4b** — Build `NeuralBehavior` class in client
