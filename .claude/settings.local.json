@@ -58,7 +58,8 @@
       "Bash(sed -n '789p' \"C:/Users/Joey/Repos/gtr/packages/client/src/engine/map/CageArenaScript.ts\")",
       "Bash(find /c/Users/Joey/Repos/gtr/packages -name \"*.ts\" -exec wc -l {} +)",
       "Read(//tmp/**)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(git -C /c/Users/Joey/Repos/gtr log --all --decorate --oneline --graph)"
     ]
   }
 }

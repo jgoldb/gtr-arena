@@ -1,262 +1,102 @@
-# GTR Arena — Development Guide
+# CLAUDE.md
 
-## Project Overview
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A multiplayer arena combat game inspired by WoW arena (3D, Third-person, real-time combat). Built with Three.js + TypeScript + WebSocket.
+## Build & Dev Commands
 
-### Monorepo Structure
+```bash
+npm install                  # Install all workspace dependencies
+npm run dev                  # Start Vite client dev server (auto-opens browser)
+npm run dev:server           # Start server with hot-reload (tsx watch)
+npm run build                # Full build: shared → server → client
+npm run preview              # Build then run dev:server
+```
+
+Individual packages can be built with `npm run build -w packages/shared` (or `-w packages/server`, `-w packages/client`, `-w packages/headless`).
+
+The headless package has a test script: `npm run test -w packages/headless` (runs `npx tsx src/test.ts`).
+
+There is no linter or test runner configured.
+
+## Architecture
+
+GTR Arena is a multiplayer 3D arena fighting game. TypeScript monorepo with 4 npm workspace packages:
 
 ```
 packages/
-  shared/     # Types, protocol, game data (abilities, characters, maps)
-  client/     # Three.js client (Playground + Multiplayer modes)
-  server/     # Node.js WebSocket server, SQLite database, auth & lobby management
+  shared/   - Game logic, types, combat systems, ability/character/map definitions
+  server/   - Node.js game server (WebSocket + WebRTC, SQLite via better-sqlite3)
+  client/   - Browser client (Three.js 3D rendering, UI screens)
+  headless/ - Renderless combat simulation for RL training (no Three.js)
 ```
 
-### Running
-
-- **Dev (playground only):** `npm run dev` — Vite dev server, no network
-- **Dev (multiplayer):** `npm run dev:mp` — Starts both Vite + game server
-- **Server only:** `npm run dev:server`
-
-### Environment Variables
-
-- `PORT` — Server port (default `3001`, Docker overrides to `8080`)
-- `ADMIN_USERNAME` — (Optional) Username to auto-promote to admin on login/register (case-insensitive)
-
-## Two Game Modes
-
-### Playground (Single-Player)
-- Entry: `packages/client/src/engine/Engine.ts`
-- Full game loop in one class — physics, combat, AI, rendering
-- Client-authoritative (player controls everything)
-- Used for rapid development and testing
-
-### Multiplayer (Client-Server)
-- Server: `packages/server/src/game/ServerEngine.ts` — 20 Hz authoritative tick loop
-- Client: `packages/client/src/network/ClientEngine.ts` — renders + interpolates
-- Split authority: server owns combat/HP/buffs, client owns local movement
-- Message wiring: `packages/client/src/main.ts`
-
-## Database & Authentication
-
-### SQLite Database
-
-- **Driver:** `better-sqlite3` with WAL mode
-- **File:** `packages/server/data/gtr.db` (created at runtime, not checked into git)
-- **Schema & migrations:** `packages/server/src/db/Database.ts` — migrations run inline in `init()`
-
-**Tables:**
-- `users` — accounts (username, password_hash via bcrypt, is_admin, banned_until, last_played)
-- `user_stats` — aggregate games played / wins / losses per user
-- `user_character_stats` — per-character win/loss tracking
-
-### Auth Flow
-
-1. Client sends `auth` message (register or login) over WebSocket
-2. `AuthManager` (`packages/server/src/auth/AuthManager.ts`) validates credentials via `Database`
-3. If `ADMIN_USERNAME` env var is set and matches the username, the user is auto-promoted to admin
-4. Server responds with `S2C_AuthResult` including `isAdmin` flag
-5. `LobbyManager` tracks active sessions; auth is required before joining lobbies
-
-### Admin System
-
-**Server:** `LobbyManager` (`packages/server/src/lobby/LobbyManager.ts`) handles admin messages — all operations verify `is_admin` in the database before executing.
-
-**Client:** `AdminScreen` (`packages/client/src/screens/AdminScreen.ts`) — a user management table gated behind `isAdmin` status.
-
-**Admin capabilities:** view all users with stats, ban/unban (with duration presets), reset passwords, reset stats, delete users.
-
-**Protocol:** Admin messages (`admin_get_users`, `admin_delete_user`, `admin_ban_user`, etc.) are defined in `packages/shared/src/protocol.ts`. Server broadcasts updated user lists to all online admins after mutations.
-
-## Development Workflow: Playground First
-
-**IMPORTANT: Always implement new features in the Playground first, then adapt for multiplayer.**
-
-The Playground is the fastest feedback loop — no network, no server, instant iteration. Once a feature works in single-player, convert it for the client-server architecture.
-
-### Step 1: Implement in Playground (`Engine.ts`)
-
-Build the feature end-to-end in `Engine.ts`. This includes:
-- Game logic (damage, effects, timing, cooldowns)
-- Visual effects (Three.js meshes, particles, animations)
-- UI updates (action bar, unit frames, combat text)
-- Input handling (targeting, ability activation)
-
-Everything runs locally, so you can iterate quickly without network concerns.
-
-### Step 2: Convert for Multiplayer
-
-The conversion follows a consistent pattern. Here's what needs to happen for each aspect of a feature:
-
-#### 2a. Define the Protocol (`packages/shared/src/protocol.ts`)
-
-Identify what data the server needs to send to clients. Ask:
-- Does the client need to know when this happens? → Add an event message (like `S2C_AbilityEffect`)
-- Does this change entity state that clients render? → Include in `EntitySnapshot` or `EntityStateDelta`
-- Does this create a world object clients need to see? → Add a spawn message (like `S2C_GasCloudSpawn`)
-
-Add new message types to `protocol.ts` and include them in the `ServerMessage` union type.
-
-#### 2b. Move Game Logic to the Server (`ServerEngine.ts`)
-
-The server is the **authority** for all combat mechanics. Move the core logic from `Engine.ts` to `ServerEngine.ts`:
-
-| Playground (Engine.ts) | Server (ServerEngine.ts) |
-|---|---|
-| `this.playerController` | `ServerEntity` |
-| `this.combatSystem.useAbility(...)` | `this.combatSystem.useAbility(...)` (same pattern) |
-| `this.buffSystem.apply(...)` | `this.buffSystem.apply(...)` |
-| Direct HP/mana modification | Same, but on `ServerEntity` |
-| `this.targetingSystem.currentTarget` | `this.targets.get(entityId)` |
-| Timer-based effects (setInterval/dt) | Update in the server tick loop |
-
-Key rules:
-- **Damage, healing, cooldowns, buffs** — always server-authoritative
-- **Position/movement** — client-authoritative (server trusts client position)
-- **Area effects** (gas clouds, pools) — server tracks logic, client renders visuals
-- Use `this.pendingEvents.push(...)` to queue messages for broadcast
-- Use `this.onSendToPlayer?.(entityId, msg)` for player-specific messages
-- Use `this.onBroadcast?.(msg)` for messages that go to all players
-
-#### 2c. Handle Server Messages on the Client (`ClientEngine.ts`)
-
-Add handler methods on `ClientEngine` for each new message type:
-
-```typescript
-// Pattern: handleXxx(msg: S2C_Xxx): void
-handleMyNewEffect(msg: S2C_MyNewEffect): void {
-  if (msg.entityId === this.localEntityId) {
-    // Drive local player visuals (animations, effects)
-    this.playerController.triggerSomeAnimation(...);
-  } else {
-    // Drive remote entity visuals
-    const entity = this.remoteEntities.get(msg.entityId);
-    if (entity) entity.model.triggerSomeAnimation(...);
-  }
-}
-```
-
-For state that changes over time (casting progress, buff timers):
-- The server sends updates via `EntityStateDelta` (only changed fields, every tick)
-- Or via `EntitySnapshot` in keyframe messages (full state, every 5 seconds)
-- The client applies these to its local entity state
-
-#### 2d. Wire the Handler in `main.ts`
-
-Add a case to the message handler switch in `main.ts`:
-
-```typescript
-case 'my_new_effect':
-  clientEngine?.handleMyNewEffect(msg);
-  break;
-```
-
-#### 2e. Visual Effects — Client Only
-
-Visual effects (particles, beams, auras) live only on the client. The server tells the client WHAT happened; the client decides HOW it looks.
-
-- Reuse the same visual effect code from `Engine.ts` in `ClientEngine.ts`
-- Import shared helpers from `packages/client/src/engine/effects/VisualEffects.ts`
-- The `CharacterModel` class is used in both modes — animation methods work the same way
-
-### Step 3: Update Shared Types
-
-If the feature adds new entity state:
-1. Add fields to `EntitySnapshot` in `packages/shared/src/types.ts`
-2. Add fields to `EntityStateDelta` in `packages/shared/src/protocol.ts`
-3. Update `ServerEntity.toSnapshot()` to include the new fields
-4. Update `ClientEngine.applyEntityStateDeltas()` to handle the new fields
-5. Update `ClientEngine.applyRemoteEntityState()` for keyframe handling
-
-If the feature adds new abilities/buffs:
-1. Define in `packages/shared/src/abilities.ts`
-2. Add to character ability lists in `packages/shared/src/characters.ts`
-
-## Architecture Reference
-
-### Server Layers
-
-The server has three concerns:
-- **Auth & Database** — `AuthManager` + `Database` handle registration, login, sessions, and admin operations
-- **Lobby** — `LobbyManager` manages connected users, chat, game creation/joining, and admin commands
-- **Game** — `ServerEngine` runs the authoritative 20 Hz game loop for active matches
-
-All communication uses a single WebSocket endpoint (`/ws`). The server also serves the static client build via HTTP.
-
-### Network Protocol (WoW-style Delta Compression)
-
-The server uses a split update strategy to minimize bandwidth:
-
-- **`game_state_update`** (every tick, 20 Hz): Always includes entity positions. Only includes combat state (`EntityStateDelta`) and buff data for entities that changed since the last broadcast.
-- **`game_state_snapshot`** (every 100 ticks / 5 sec): Full keyframe with all entity state, buffs, and world effects. Clients use this to resync.
-- **Event messages** (`ability_effect`, `combat_event`, `auto_attack_swing`, etc.): Discrete one-shot events broadcast when they happen.
-
-### Client Interpolation (Snapshot Buffer)
-
-Remote entity positions are rendered using **snapshot interpolation**, not direct lerp:
-- `SnapshotBuffer` stores timestamped position snapshots from the server
-- The client renders ~100ms behind real-time
-- Positions are linearly interpolated between two known server states
-- This gives perfectly smooth movement between 20 Hz server updates
-
-The local player uses client-authoritative movement (same `PlayerController` as Playground) — no interpolation delay for your own character.
-
-### Entity Lookup
-
-- Server: `ServerEntity` found via `this.getEntity(entityId)` or iterate `this.entities`
-- Client local player: `this.playerController` (same class as Playground)
-- Client remote: `this.remoteEntities.get(entityId)` → `RemoteEntity`
-- Both: `this.getEntityMesh(entityId)` for Three.js mesh access
-
-### Server Delta Tracking
-
-The server tracks the last-broadcast state per entity (`lastBroadcastState` map). On each tick:
-1. Positions are always sent (they change every frame for moving players)
-2. State fields (HP, mana, casting, etc.) are compared to last broadcast — only changed fields are included in `EntityStateDelta`
-3. Buffs are JSON-compared — only entities with changed buff lists are included
-4. Full keyframe every 100 ticks resets tracking
-
-### Distance Units
-
-1 yard = 0.6 world units. Use `yardsToUnits()` from shared package. Melee range ~5 yards, most abilities 10-20 yards.
-
-### Character Model Coordinate System (IMPORTANT)
-
-**CharacterModel `group` has `rotation.y = Math.PI` baked in.** This means:
-
-- **`getWorldDirection()` returns the OPPOSITE of the character's visual facing direction.** Do NOT use it to determine forward. Instead, get the forward direction from the **parent mesh** (PlayerController.mesh / RemoteEntity.mesh) using: `new THREE.Vector3(Math.sin(mesh.rotation.y), 0, Math.cos(mesh.rotation.y))` — this is the same convention used throughout Engine.ts.
-- **Arm `rotation.x`:** Positive = forward (toward the target), Negative = backward/upward (behind the character). Reference: Shank animation uses `+0.5` for forward stab thrust.
-- **Arm `rotation.z`:** On the right arm, negative = outward (away from body), positive = inward (across body). Mirrored for left arm.
-- **Body `rotation.x`:** Positive = lean forward (hunch/lunge), Negative = lean backward.
-- **Body `rotation.y`:** Positive = rotate torso to the right, Negative = rotate left.
-
-When spawning particles/projectiles from a character (e.g., sand, projectiles), always derive the forward vector from `parent.rotation.y`, never from `getWorldDirection()` or the model group.
-
-## Common Patterns
-
-### Adding a New Ability
-
-1. Define ability data in `shared/src/abilities.ts`
-2. Add to character's ability list in `shared/src/characters.ts`
-3. **Playground:** Add activation logic in `Engine.ts` (damage, effects, cooldown)
-4. **Playground:** Add animation in `CharacterModel.ts` / character subclass
-5. **Server:** Move activation logic to `ServerEngine.requestAbility()` or `ServerCombatSystem`
-6. **Server:** Queue `ability_effect` event in `onAbilitySuccess()`
-7. **Client:** Handle animation trigger in `ClientEngine.handleAbilityEffect()`
-
-### Adding a New Buff/Debuff
-
-1. Define `BuffDefinition` in `shared/src/abilities.ts`
-2. **Playground:** Apply via `this.buffSystem.apply(target, buffDef)`
-3. **Server:** Apply via `this.buffSystem.apply(entity, buffDef)` — server tracks duration/effects
-4. **Client:** Buff state arrives via `EntityBuffSnapshot` in delta/keyframe updates
-5. **Client:** Drive visuals with `entity.model.setAbilityBuffActive(buffId, active)`
-
-### Adding a New Area Effect
-
-1. Define spawn message in `shared/src/protocol.ts`
-2. **Playground:** Full logic in `Engine.ts` (spawn, tick damage, cleanup)
-3. **Server:** Logic in `ServerEngine` (spawn, tick, damage calc, broadcast spawn message)
-4. **Client:** Visual-only in `ClientEngine` (create mesh on spawn, animate, cleanup)
-5. Share visual helpers via `engine/effects/VisualEffects.ts`
+**Dependency flow:** `server`, `client`, and `headless` all depend on `shared`. Path alias `@gtr/shared` maps to `packages/shared/src/`.
+
+### Networking
+
+- **WebSocket (TCP):** Auth, lobby, chat, game management — reliable messages
+- **WebRTC DataChannels (UDP-like):** Player position updates, ability usage — tolerates packet loss
+- **Serialization:** MessagePack binary encoding (`@msgpack/msgpack`), defined in `shared/src/codec.ts`
+- **Protocol:** Message types prefixed `C2S_` (client→server) and `S2C_` (server→client) in `shared/src/protocol.ts`
+
+### Server (`packages/server/src/`)
+
+- `index.ts` — HTTP server, WebSocket/WebRTC setup
+- `game/ServerEngine.ts` — Main game tick loop
+- `game/GameSession.ts` — Per-match session management
+- `game/ServerEntity.ts` — Server-side entity representation
+- `game/ServerCombatSystem.ts` — Server-authoritative combat
+- `game/ServerLagCompensation.ts` — Retroactive ability validation using client timestamps
+- `game/ServerBroadcast.ts` — State snapshot broadcasting
+- `auth/AuthManager.ts` — Login/register with bcrypt
+- `db/Database.ts` — SQLite persistence (accounts, XP, leaderboards)
+- `lobby/LobbyManager.ts` / `lobby/GameLobby.ts` — Lobby and pre-game state
+
+### Client (`packages/client/src/`)
+
+- `main.ts` — Entry point, state machine (auth → lobby → game)
+- `MessageRouter.ts` — Incoming server message dispatcher
+- `screens/` — Top-level UI states (AuthScreen, LobbyScreen, GameLobbyScreen, SinglePlayerScreen)
+- `engine/Engine.ts` — Main render loop
+- `engine/map/` — Map loading, per-map scripts (TheCageMap, CelestialBallroomMap, UISetupMap)
+- `engine/player/PlayerController.ts` — Local player input/animation
+- `engine/combat/` — Client-side combat prediction and rendering
+- `engine/npc/` — Single-player NPC AI with behavior trees (`ai/NpcAiBrain.ts`, `ai/behaviors/`)
+- `engine/physics/CollisionSystem.ts` — Collision detection
+- `network/NetworkManager.ts` — WebSocket/WebRTC connection
+- `network/ClientEngine.ts` — Client-side tick (prediction, interpolation)
+- `ui/` — HUD components (chat, portraits, keybinds, audio, game over overlay)
+
+### Shared (`packages/shared/src/`)
+
+- `characters.ts` — 6 playable characters with base stats
+- `abilities.ts` — All ability definitions, damage, cooldowns, buff/debuff effects
+- `maps.ts` — Map definitions (geometry, spawn points, obstacle configs)
+- `types.ts` — Entity interfaces, XP/leveling, snapshot types
+- `protocol.ts` — Network message type definitions
+- Combat systems: `CombatLogic.ts`, `BuffSystem.ts`, `CastingSystem.ts`, `AutoAttackSystem.ts`, `RegenSystem.ts`
+- Subsystems in `systems/`: ChargeSystem, DotSystem, GasCloudSystem, ChemicalPoolSystem
+
+### Headless (`packages/headless/src/`)
+
+Renderless combat simulation for training neural network agents via reinforcement learning. No Three.js — uses plain `{x, y, z, rotY}` positions. Reuses all shared combat systems (`BuffSystem`, `RegenSystem`, `AutoAttackSystem`, `GasCloudSystem`, `DotSystem`, `ChemicalPoolSystem`, `ChargeSystem`, `FullRetardAuraSystem`).
+
+- `HeadlessEntity.ts` — Implements `Positionable` with plain position fields, includes `CooldownTracker`
+- `HeadlessCombat.ts` — Port of client `CombatSystem` using plain math (no THREE.Vector3)
+- `HeadlessArena.ts` — Main simulation environment. Gym-style `reset()` / `step(actions)` API. Wires all shared systems, handles ability post-effects, computes observations and shaped rewards
+- `test.ts` — Validation script: `npx tsx src/test.ts`
+
+**Current V1 simplifications:** Flat arena (no obstacles, always LoS), 1v1 only, instant abilities only (no channels), no ground-targeted abilities. See `HEADLESS_PLAN.md` for the roadmap.
+
+## Key Technical Details
+
+- **Distance units:** 1 yard = 0.6 world units (WoW-style). 10 yards is close range.
+- **Combat is server-authoritative** with client-side prediction. The server validates all ability casts and damage.
+- **Dead reckoning:** Clients send movement flags + velocity, not final positions. Remote clients reconstruct direction from flags + rotation.
+- **Diminishing returns on CC:** 4 tiers (100% → 50% → 25% → immune) with 20s reset timer.
+- **XP formula:** `xpForLevel(n) = 100 × (n-1)^2.2`
+- **TypeScript strict mode** across all packages, target ES2020.
+
+## Deployment
+
+Deployed to Fly.io (IAD region). Dockerfile does multi-stage build (Node 20 Alpine). SQLite DB persisted at `/data/gtr.db` via Fly volume. Server listens on port from `PORT` env var (default 3001).

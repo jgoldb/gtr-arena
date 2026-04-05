@@ -6,7 +6,8 @@
   "workspaces": [
     "packages/shared",
     "packages/server",
-    "packages/client"
+    "packages/client",
+    "packages/headless"
   ],
   "scripts": {
     "dev": "npm run dev:client",
