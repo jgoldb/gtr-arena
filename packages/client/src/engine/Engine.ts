@@ -393,8 +393,8 @@ export class Engine {
           );
           e.mesh.position.x = resolved.x;
           e.mesh.position.z = resolved.z;
-          // Clamp to arena bounds
-          const bounds = this.mapManager.getNpcSpawnBounds();
+          // Clamp to arena bounds (must match MovementController's bounds)
+          const bounds = this.mapManager.getBounds();
           const margin = 0.4;
           e.mesh.position.x = Math.max(bounds.minX + margin, Math.min(bounds.maxX - margin, e.mesh.position.x));
           e.mesh.position.z = Math.max(bounds.minZ + margin, Math.min(bounds.maxZ - margin, e.mesh.position.z));
