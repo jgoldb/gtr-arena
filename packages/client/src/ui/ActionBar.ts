@@ -548,6 +548,7 @@ export class ActionBar {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
+    if (e.repeat) return;
     const disabled = this.callbacks.isDisabled?.() ?? false;
     for (let i = 0; i < this.slots.length; i++) {
       const slot = this.slots[i];

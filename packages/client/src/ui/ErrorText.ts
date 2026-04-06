@@ -1,6 +1,8 @@
 interface FloatingMessage {
   element: HTMLElement;
-  expiresAt: number;
+  text: string;
+  fadeTimer: ReturnType<typeof setTimeout>;
+  removeTimer: ReturnType<typeof setTimeout>;
 }
 
 export class ErrorText {
@@ -24,6 +26,23 @@ export class ErrorText {
   }
 
   show(text: string, duration = 2000): void {
+    // If the same message is already showing, refresh it instead of duplicating
+    const existing = this.messages.find(m => m.text === text);
+    if (existing) {
+      clearTimeout(existing.fadeTimer);
+      clearTimeout(existing.removeTimer);
+      existing.element.style.opacity = '1';
+      existing.fadeTimer = setTimeout(() => {
+        existing.element.style.opacity = '0';
+      }, duration - 500);
+      existing.removeTimer = setTimeout(() => {
+        existing.element.remove();
+        const idx = this.messages.indexOf(existing);
+        if (idx !== -1) this.messages.splice(idx, 1);
+      }, duration);
+      return;
+    }
+
     const el = document.createElement('div');
     el.textContent = text;
     el.style.cssText = `
@@ -40,19 +59,16 @@ export class ErrorText {
 
     const msg: FloatingMessage = {
       element: el,
-      expiresAt: performance.now() + duration,
+      text,
+      fadeTimer: setTimeout(() => {
+        el.style.opacity = '0';
+      }, duration - 500),
+      removeTimer: setTimeout(() => {
+        el.remove();
+        const idx = this.messages.indexOf(msg);
+        if (idx !== -1) this.messages.splice(idx, 1);
+      }, duration),
     };
     this.messages.push(msg);
-
-    // Start fade-out near end
-    setTimeout(() => {
-      el.style.opacity = '0';
-    }, duration - 500);
-
-    setTimeout(() => {
-      el.remove();
-      const idx = this.messages.indexOf(msg);
-      if (idx !== -1) this.messages.splice(idx, 1);
-    }, duration);
   }
 }
