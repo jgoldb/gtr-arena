@@ -20,6 +20,7 @@ const SERVE_STATIC = fs.existsSync(CLIENT_DIR);
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
   '.js':   'application/javascript',
+  '.mjs':  'application/javascript',
   '.css':  'text/css',
   '.json': 'application/json',
   '.png':  'image/png',

@@ -59,7 +59,8 @@
       "Bash(find /c/Users/Joey/Repos/gtr/packages -name \"*.ts\" -exec wc -l {} +)",
       "Read(//tmp/**)",
       "Bash(git log:*)",
-      "Bash(git -C /c/Users/Joey/Repos/gtr log --all --decorate --oneline --graph)"
+      "Bash(git -C /c/Users/Joey/Repos/gtr log --all --decorate --oneline --graph)",
+      "Bash(xargs cat:*)"
     ]
   }
 }

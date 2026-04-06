@@ -33,6 +33,14 @@ function ortWasmPlugin(): Plugin {
         next();
       });
     },
+    writeBundle(options) {
+      // Copy ort-wasm files to build output so they're available in production
+      const outDir = options.dir || path.resolve(process.cwd(), 'dist');
+      const files = fs.readdirSync(ortDistDir).filter(f => f.startsWith('ort-wasm-'));
+      for (const file of files) {
+        fs.copyFileSync(path.join(ortDistDir, file), path.join(outDir, file));
+      }
+    },
   };
 }
 
