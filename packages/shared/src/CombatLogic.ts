@@ -14,7 +14,7 @@ export type CombatTextType = 'damage' | 'heal' | 'crit' | 'miss' | 'dodge' | 'im
 
 // ── Shared constants ─────────────────────────────────────────────────────
 
-export const COMBAT_DURATION = 5; // seconds before leaving combat
+export const COMBAT_DURATION = 6; // seconds before leaving combat
 export const MISS_CHANCE = 0.03; // 3% flat miss chance
 export const GOD_MODE_DAMAGE_MULT = 11; // +1000% damage
 

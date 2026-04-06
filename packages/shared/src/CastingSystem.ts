@@ -289,8 +289,8 @@ export class CastingSystem<T extends Positionable> {
     if (isFriendly && ability.healAmount) {
       const healPerTick = Math.round(ability.healAmount / ability.channelTicks! * casting.damageMultiplier);
       this.cb.applyHeal(entity, target, healPerTick);
-      // Healing someone in combat puts the healer in combat
-      if (target.inCombat) {
+      // Healing someone in combat puts the healer in combat (but not self-heals)
+      if (target !== entity && target.inCombat) {
         this.cb.enterCombat(entity);
       }
     } else if (!isFriendly && ability.damage > 0) {
