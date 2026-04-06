@@ -59,7 +59,7 @@ export interface ChargeCallbacks<T> {
   /** Apply knockback landing stun. */
   applyKnockbackStun(target: T): void;
   /** Called when a sweep charge finishes. Platform handles animation, SFX, auto-attack re-engage. */
-  onSweepChargeEnd(entity: T, savedAutoAttackTarget: T | null): void;
+  onSweepChargeEnd(entity: T, savedAutoAttackTarget: T | null, hitCount: number): void;
   /** Called when a tweaker sprint charge finishes. Platform handles auto-attack re-engage. */
   onTweakerSprintChargeEnd(entity: T, savedAutoAttackTarget: T | null): void;
   /** Called when a knockback is created (e.g. server broadcasts knockback event). */
@@ -152,7 +152,7 @@ export class ChargeSystem<T> {
         }
       }
 
-      this.callbacks.onSweepChargeEnd(entity, charge.savedAutoAttackTarget);
+      this.callbacks.onSweepChargeEnd(entity, charge.savedAutoAttackTarget, charge.hitTargets.size);
       this.sweepCharges.delete(entity);
     }
   }

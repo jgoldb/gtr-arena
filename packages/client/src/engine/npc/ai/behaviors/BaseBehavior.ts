@@ -35,6 +35,9 @@ export interface CharacterBehavior {
 
   /** What movement does this character want given the world state? */
   getMovementIntent(world: WorldState, currentTarget: EntityInfo | null, cooldowns: NpcCooldownTracker, difficulty: DifficultyProfile): MovementIntent;
+
+  /** Whether this behavior wants to rest (sit down for mana regen). Default: false. */
+  wantsRest?(): boolean;
 }
 
 /**

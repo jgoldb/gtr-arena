@@ -39,7 +39,8 @@ class RandomOpponent:
         abilities = np.random.randint(0, self.num_abilities + 1, size=n)
         move_dirs = np.random.randint(0, 9, size=n)
         cancel = np.zeros(n, dtype=int)
-        return np.stack([abilities, move_dirs, cancel], axis=1)
+        rest = np.zeros(n, dtype=int)
+        return np.stack([abilities, move_dirs, cancel, rest], axis=1)
 
 
 class DoNothingOpponent:
@@ -47,7 +48,7 @@ class DoNothingOpponent:
 
     def predict(self, obs: np.ndarray) -> np.ndarray:
         n = obs.shape[0]
-        return np.zeros((n, 3), dtype=int)
+        return np.zeros((n, 4), dtype=int)
 
 
 class PolicyOpponent:
@@ -172,7 +173,7 @@ class GtrVecEnv(VecEnv):
             dtype=np.float32,
         )
         action_space = spaces.MultiDiscrete(
-            [self.num_abilities + 1, 9, 2]  # ability, moveDir, cancelCast
+            [self.num_abilities + 1, 9, 2, 2]  # ability, moveDir, cancelCast, rest
         )
 
         super().__init__(num_envs, observation_space, action_space)

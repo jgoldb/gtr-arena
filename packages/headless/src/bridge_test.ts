@@ -56,12 +56,12 @@ async function run() {
   });
   console.log(`   obsSize=${initResp.obsSize}, numAbilities=${initResp.numAbilities}, numEnvs=${initResp.numEnvs}`);
   console.log(`   obs shape: [${initResp.obs.length}][${initResp.obs[0].length}][${initResp.obs[0][0].length}]`);
-  assert(initResp.obsSize === 57, `Expected obsSize=57, got ${initResp.obsSize}`);
+  assert(initResp.obsSize === 63, `Expected obsSize=63, got ${initResp.obsSize}`);
   assert(initResp.numAbilities === 11, `Expected numAbilities=11, got ${initResp.numAbilities}`);
   assert(initResp.numEnvs === 2, `Expected numEnvs=2, got ${initResp.numEnvs}`);
   assert(initResp.obs.length === 2, 'Expected 2 env observations');
   assert(initResp.obs[0].length === 2, 'Expected 2 agent observations per env');
-  assert(initResp.obs[0][0].length === 57, 'Expected 57-float observation vector');
+  assert(initResp.obs[0][0].length === 63, 'Expected 63-float observation vector');
   console.log('   PASS\n');
 
   // 2. Step with random actions
@@ -69,8 +69,8 @@ async function run() {
   const stepResp = await sendCmd({
     cmd: 'step',
     actions: [
-      [[3, 1, 0], [0, 5, 0]],  // env 0: agent0 uses ability 2, moves N; agent1 stands still, moves S
-      [[0, 0, 0], [0, 0, 0]],  // env 1: both do nothing
+      [[3, 1, 0, 0], [0, 5, 0, 0]],  // env 0: agent0 uses ability 2, moves N; agent1 stands still, moves S
+      [[0, 0, 0, 0], [0, 0, 0, 0]],  // env 1: both do nothing
     ],
   });
   console.log(`   obs shape: [${stepResp.obs.length}][${stepResp.obs[0].length}][${stepResp.obs[0][0].length}]`);
@@ -99,7 +99,7 @@ async function run() {
       console.log(`   Info: ${JSON.stringify(resp.infos[doneIdx])}`);
       // After auto-reset, obs should be valid initial state
       const postResetObs = resp.obs[doneIdx][0];
-      assert(postResetObs.length === 57, 'Post-reset obs should be 57 floats');
+      assert(postResetObs.length === 63, 'Post-reset obs should be 63 floats');
       // HP should be full (1.0) after reset
       assert(postResetObs[0] === 1, `Post-reset HP should be 1.0, got ${postResetObs[0]}`);
     }
@@ -142,6 +142,7 @@ function randomAction(): number[] {
     Math.floor(Math.random() * 12),  // ability 0-11
     Math.floor(Math.random() * 9),   // moveDir 0-8
     Math.random() < 0.05 ? 1 : 0,   // cancelCast
+    0,                               // rest
   ];
 }
 

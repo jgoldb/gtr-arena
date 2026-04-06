@@ -92,6 +92,10 @@ export class NpcController implements Targetable {
     return this.characterModel.autoAttackRange;
   }
 
+  setResting(active: boolean): void {
+    this.characterModel.setResting(active);
+  }
+
   setStunned(active: boolean): void {
     this.stunned = active;
     this.characterModel.setStunned(active);

@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { getCharacterStats, getCharacterSfx, getSharedSfx, KABOOM_CONE_RANGE } from '@gtr/shared';
 import type { Ability, GasCloudSystem, DotSystem, ChemicalPoolSystem, ChargeSystem } from '@gtr/shared';
-import { yardsToUnits, Sweep, TweakerSprint, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff } from './combat/Ability';
+import { yardsToUnits, Sweep, TweakerSprint, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff, RestingBuff } from './combat/Ability';
 import type { BuffDefinition, BuffSystem } from './combat/BuffSystem';
 import type { CombatSystem } from './combat/CombatSystem';
 import type { AutoAttackSystem } from './combat/AutoAttackSystem';
@@ -234,6 +234,21 @@ export class PlaygroundNpcSystem {
           return script?.getPillarState?.() ?? { ewPillarUp: 0, nsPillarUp: 0, pillarPhasePct: 0 };
         },
         getMatchTimePct: () => Math.min((performance.now() - this.matchStartTime) / 120_000, 1),
+        npcSetResting: (npc, resting) => {
+          if (resting) {
+            if (npc.dead || npc.inCombat || npc.isMoving) return;
+            if (host.buffSystem.isStunned(npc) || host.buffSystem.isSleeping(npc)) return;
+            if (host.buffSystem.hasBuff(npc, 'resting')) return;
+            host.autoAttackSystem.stop(npc);
+            npc.autoAttackTarget = null;
+            host.buffSystem.apply(npc, RestingBuff);
+            npc.setResting(true);
+          } else {
+            if (!host.buffSystem.hasBuff(npc, 'resting')) return;
+            host.buffSystem.remove(npc, RestingBuff.id, true);
+            npc.setResting(false);
+          }
+        },
       };
     }
     return this.aiEngineInterface;

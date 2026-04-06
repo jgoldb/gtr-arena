@@ -6,10 +6,11 @@
  * MovementIntents consumed by NpcAiBrain.
  *
  * The model was trained via PPO in the headless arena (Phase 3).
- * Action space: MultiDiscrete([numAbilities+1, 9, 2])
+ * Action space: MultiDiscrete([numAbilities+1, 9, 2, 2])
  *   - ability: 0=none, 1..N = ability slot index
  *   - moveDir: 0=stop, 1-8 = N/NE/E/SE/S/SW/W/NW
  *   - cancelCast: 0/1 (unused in client — brain manages casting)
+ *   - rest: 0/1 (sit down for accelerated mana regen)
  */
 
 import * as ort from 'onnxruntime-web';
@@ -52,7 +53,7 @@ export class NeuralBehavior implements CharacterBehavior {
   private readonly engine: AiEngineInterface;
   private readonly abilities: readonly (Ability | null)[];
   private readonly numAbilities: number;
-  private readonly actionSplits: number[]; // [numAbilities+1, 9, 2]
+  private readonly actionSplits: number[]; // [numAbilities+1, 9, 2, 2]
 
   // Normalization scale (computed from arena bounds)
   private normScale = 30;
@@ -62,6 +63,7 @@ export class NeuralBehavior implements CharacterBehavior {
   private inferring = false;
   private cachedAbilityIdx = 0;   // 0 = no ability
   private cachedMoveDir = 0;      // 0 = stand still
+  private cachedRest = false;     // true = wants to rest
 
   constructor(characterId: CharacterId, npc: NpcController, engine: AiEngineInterface) {
     this.characterId = characterId;
@@ -70,7 +72,7 @@ export class NeuralBehavior implements CharacterBehavior {
     const stats = getCharacterStats(characterId);
     this.abilities = stats.abilities;
     this.numAbilities = stats.abilities.length;
-    this.actionSplits = [this.numAbilities + 1, 9, 2];
+    this.actionSplits = [this.numAbilities + 1, 9, 2, 2];
   }
 
   async loadModel(url: string): Promise<void> {
@@ -129,6 +131,10 @@ export class NeuralBehavior implements CharacterBehavior {
     return actions;
   }
 
+  wantsRest(): boolean {
+    return this.cachedRest;
+  }
+
   getMovementIntent(
     _world: WorldState,
     currentTarget: EntityInfo | null,
@@ -183,6 +189,7 @@ export class NeuralBehavior implements CharacterBehavior {
 
       this.cachedAbilityIdx = actions[0];
       this.cachedMoveDir = actions[1];
+      this.cachedRest = actions[3] === 1;
     }).catch(err => {
       console.warn('[NeuralBehavior] Inference failed:', err);
     }).finally(() => {
@@ -251,6 +258,7 @@ export class NeuralBehavior implements CharacterBehavior {
       buffSystem.isDiscombobulated(npc) ? 1 : 0,
       buffSystem.isUntargetable(npc) ? 1 : 0,
       npc.inCombat ? 1 : 0,
+      buffSystem.hasBuff(npc, 'resting') ? 1 : 0,
       // Self — buff multipliers
       buffSystem.getMovementSpeedMultiplier(npc),
       buffSystem.getDamageDealtMultiplier(npc),
@@ -274,6 +282,7 @@ export class NeuralBehavior implements CharacterBehavior {
       currentTarget.isBlinded ? 1 : 0,
       buffSystem.isDiscombobulated(oppEntity) ? 1 : 0,
       buffSystem.isUntargetable(oppEntity) ? 1 : 0,
+      buffSystem.hasBuff(oppEntity, 'resting') ? 1 : 0,
       // Opponent — buff multipliers
       buffSystem.getMovementSpeedMultiplier(oppEntity),
       buffSystem.getDamageDealtMultiplier(oppEntity),

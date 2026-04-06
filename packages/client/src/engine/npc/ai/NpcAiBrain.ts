@@ -46,6 +46,7 @@ export interface AiEngineInterface {
   isArenaPreparationActive(): boolean;
   getPillarState(): { ewPillarUp: number; nsPillarUp: number; pillarPhasePct: number };
   getMatchTimePct(): number;
+  npcSetResting(npc: NpcController, resting: boolean): void;
 }
 
 export class NpcAiBrain {
@@ -438,6 +439,19 @@ export class NpcAiBrain {
       this.movement.intent = { type: 'idle' };
       return;
     }
+
+    // Neural rest: if the behavior wants to rest, stop fighting and sit down
+    const wantsRest = this.behavior.wantsRest?.() ?? false;
+    if (wantsRest) {
+      this.npc.autoAttackTarget = null;
+      this.currentTargetEntity = this.currentTarget.entity;
+      this.movement.intent = { type: 'idle' };
+      this.movement.faceTarget = this.currentTarget.position;
+      this.engine.npcSetResting(this.npc, true);
+      return;
+    }
+    // Cancel resting if we were resting but no longer want to
+    this.engine.npcSetResting(this.npc, false);
 
     // Set auto-attack target
     this.npc.autoAttackTarget = this.currentTarget.entity;

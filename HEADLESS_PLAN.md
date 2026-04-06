@@ -12,7 +12,7 @@ Train a neural network via self-play reinforcement learning to play GTR Arena, t
 - `HeadlessArena` — gym-style `reset()`/`step()` simulation environment
   - Wires all shared systems: BuffSystem, RegenSystem, AutoAttackSystem, GasCloudSystem, DotSystem, ChemicalPoolSystem, ChargeSystem, FullRetardAuraSystem, **CastingSystem**
   - Handles all ability post-effects (charges, gas clouds, DOTs, tweaking stacks, buff steal, etc.)
-  - Builds normalized observation vectors (**57 floats** per agent)
+  - Builds normalized observation vectors (**52 + numAbilities floats** per agent, e.g. 63 for janitor)
   - Computes shaped rewards (damage dealt/taken/healed + terminal win/loss)
   - Performance: ~175-200k steps/sec single-threaded (with collision + raycasts)
 
@@ -45,7 +45,7 @@ Train a neural network via self-play reinforcement learning to play GTR Arena, t
 - Performance: ~450-560k steps/sec (minimal overhead from collision checks on cage map)
 
 ### Phase 2c — Richer observation vector (completed)
-- Observation vector expanded from **32 floats** to **57 floats** per agent
+- Observation vector expanded from **32 floats** to **52 + numAbilities floats** per agent
 - Self CC states split: `isStunned` (pure stun), `isSleeping`, `isBlinded`, `isDiscombobulated`, `isUntargetable`
 - Buff multipliers exposed: `speedMult`, `dmgDealtMult`, `dmgTakenMult` (and opponent equivalents)
 - Opponent casting detail: `oppCastPct` (progress), `oppIsChanneling`, `oppIsMoving`
@@ -114,7 +114,7 @@ Integrated shared `CastingSystem<HeadlessEntity>` into the arena. Cast-time abil
 Added `groundX`/`groundZ` to `AgentAction`. Bottle Chuck validates range + resources, then schedules a `PendingAoeImpact` with 0.825s delay. On impact, AoE damage + debuff applied to all hostiles in radius via `HeadlessCombat.applyAoeDamage()`.
 
 ### 2c. Richer observation vector ✓
-Observation vector expanded from 32 to 57 floats. Added per-entity CC state breakdown (stun/sleep/blind/discombobulate/untargetable), buff multipliers (speed/damage dealt/damage taken), opponent casting progress + channel status + movement, spatial awareness (LoS binary + 8-direction wall distances via `CollisionSystem.raycastDistance()`), and elevation.
+Observation vector expanded from 32 to 52 + numAbilities floats. Added per-entity CC state breakdown (stun/sleep/blind/discombobulate/untargetable), buff multipliers (speed/damage dealt/damage taken), opponent casting progress + channel status + movement, spatial awareness (LoS binary + 8-direction wall distances via `CollisionSystem.raycastDistance()`), elevation, and resting state (self + opponent).
 
 ### 2d. Multi-agent (2v2, 3v3) — *deferred to future iteration*
 - Extend `HeadlessArena` to support N entities per team
@@ -130,15 +130,16 @@ Extracted `CollisionSystem` into `packages/shared/src/CollisionSystem.ts` — si
 ## Phase 3: Training Pipeline ✓
 
 ### 3a. Subprocess bridge ✓ (Option A chosen)
-Built `packages/headless/src/bridge.ts` — stdin/stdout JSON-lines bridge. Game logic stays in TypeScript, Python only does RL. Manages N parallel arenas in a single process for vectorized env efficiency. Actions encoded as `MultiDiscrete([12, 9, 2])` per agent. Auto-resets done arenas with terminal observation preservation.
+Built `packages/headless/src/bridge.ts` — stdin/stdout JSON-lines bridge. Game logic stays in TypeScript, Python only does RL. Manages N parallel arenas in a single process for vectorized env efficiency. Actions encoded as `MultiDiscrete([numAbilities+1, 9, 2, 2])` per agent (ability, moveDir, cancelCast, rest). Auto-resets done arenas with terminal observation preservation.
 
 ### 3b. RL algorithm setup ✓
 - **Algorithm:** PPO (Proximal Policy Optimization) via stable-baselines3
 - **Env wrapper:** `packages/headless/train/env.py` — custom `VecEnv` subclass spawning bridge subprocess
 - **Network:** 2×256 MLP (separate pi/vf branches), `MultiDiscrete` action space
-  - Ability: 12 choices (0=none, 1-11=ability slots)
+  - Ability: numAbilities+1 choices (0=none, 1-N=ability slots)
   - Movement: 9 choices (0=stop, 1-8=compass directions)
   - Cancel cast: 2 choices (0/1)
+  - Rest: 2 choices (0/1, sit down for 5× mana regen while out of combat)
 - **Opponent:** pluggable — `RandomOpponent` (default), `DoNothingOpponent`, `PolicyOpponent` (from saved checkpoint)
 - **Training script:** `packages/headless/train/train.py` with CLI args, TensorBoard logging, checkpoint saving
 
@@ -199,8 +200,8 @@ The self-play start delay acts as automatic curriculum:
 - Implements `CharacterBehavior` interface (scoreActions, getMovementIntent, getDesiredRange)
 - Loads ONNX model via `onnxruntime-web` (WASM backend, <1ms inference for 2×256 MLP)
 - Async inference: fires off ONNX run each think cycle, uses previous result (1-tick delay, imperceptible at 100ms)
-- `buildObservation()` replicates `HeadlessArena.buildObservation()` + `flattenObservation()` exactly — same 57-float vector in identical order
-- Splits output logits by `MultiDiscrete` sub-space sizes and argmaxes each → [ability, moveDir, cancelCast]
+- `buildObservation()` replicates `HeadlessArena.buildObservation()` + `flattenObservation()` exactly — same observation vector in identical order
+- Splits output logits by `MultiDiscrete` sub-space sizes and argmaxes each → [ability, moveDir, cancelCast, rest]
 - Maps ability index to `ScoredAction` with proper `isCastTime` flag
 - Maps moveDir to world-space `MovementIntent` using bridge.ts compass angles
 
@@ -218,7 +219,7 @@ The self-play start delay acts as automatic curriculum:
   - CollisionSystem: raycastDistance (8-dir wall probes), hasLineOfSight
   - NpcCooldownTracker: getCooldownRemaining/getCooldownTotal → normalized cooldown vector
   - Arena bounds → normScale for position normalization
-- Same flatten order as `HeadlessArena.flattenObservation()` — verified by matching obs vector length (57)
+- Same flatten order as `HeadlessArena.flattenObservation()` — verified by matching obs vector length
 
 ---
 

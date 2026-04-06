@@ -46,9 +46,9 @@ class PolicyExporter(nn.Module):
         latent = self.mlp(features)
         logits = self.action_net(latent)
 
-        # MultiDiscrete: logits are concatenated [ability_logits, move_logits, cancel_logits]
+        # MultiDiscrete: logits are concatenated [ability_logits, move_logits, cancel_logits, rest_logits]
         # Split and argmax each sub-space
-        # For janitor: 12 ability choices + 9 move choices + 2 cancel choices = 23 logits
+        # For janitor: 12 ability choices + 9 move choices + 2 cancel choices + 2 rest choices = 25 logits
         # We can read the split sizes from the model's action space
         return logits
 

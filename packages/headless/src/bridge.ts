@@ -9,9 +9,9 @@
  * Protocol (one JSON object per line, each direction):
  *
  *   → {"cmd":"init","numEnvs":16,"characters":["janitor","janitor"],"mapId":"cage"}
- *   ← {"obsSize":57,"numAbilities":11,"numEnvs":16,"obs":[[[57 floats],[57 floats]], ...]}
+ *   ← {"obsSize":63,"numAbilities":11,"numEnvs":16,"obs":[[[63 floats],[63 floats]], ...]}
  *
- *   → {"cmd":"step","actions":[[[ability,dir,cancel],[ability,dir,cancel]], ...]}
+ *   → {"cmd":"step","actions":[[[ability,dir,cancel,rest],[ability,dir,cancel,rest]], ...]}
  *   ← {"obs":[...],"rewards":[[r0,r1],...],"dones":[...],"infos":[...]}
  *
  *   → {"cmd":"reset"}
@@ -24,6 +24,7 @@
  *   [0] ability:    0 = no ability, 1..N = ability slot index (0-based in arena)
  *   [1] moveDir:    0 = stand still, 1-8 = N/NE/E/SE/S/SW/W/NW
  *   [2] cancelCast: 0 = no, 1 = yes
+ *   [3] rest:       0 = no, 1 = yes (sit down for accelerated mana regen)
  *
  * Ground-targeted abilities (e.g. Bottle Chuck) default their target
  * to the opponent's current position.
@@ -68,11 +69,13 @@ function decodeAction(raw: number[], opponentPos: { x: number; z: number }): Age
   const abilityRaw = raw[0] ?? 0;
   const moveDirRaw = raw[1] ?? 0;
   const cancelCastRaw = raw[2] ?? 0;
+  const restRaw = raw[3] ?? 0;
   return {
     abilityIndex: abilityRaw > 0 ? abilityRaw - 1 : null,
     moveAngle: MOVE_ANGLES[moveDirRaw] ?? null,
     moveSpeed: moveDirRaw > 0 ? 1 : 0,
     cancelCast: cancelCastRaw === 1,
+    rest: restRaw === 1,
     groundX: opponentPos.x,
     groundZ: opponentPos.z,
   };

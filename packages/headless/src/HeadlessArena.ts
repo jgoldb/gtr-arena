@@ -41,6 +41,7 @@ import {
   RecentlyBandagedDebuff,
   KABOOM_CONE_RANGE,
   KABOOM_CONE_HALF_ANGLE,
+  RestingBuff,
 } from '@gtr/shared';
 import { HeadlessEntity } from './HeadlessEntity.js';
 import { HeadlessCombat } from './HeadlessCombat.js';
@@ -61,6 +62,8 @@ export interface AgentAction {
   groundX?: number;
   /** Ground-target Z for ground-targeted abilities. */
   groundZ?: number;
+  /** If true, attempt to start resting (sit down for accelerated mana regen). */
+  rest?: boolean;
 }
 
 export interface EntityObservation {
@@ -78,6 +81,7 @@ export interface EntityObservation {
   isDiscombobulated: number;
   isUntargetable: number;
   inCombat: number;
+  isResting: number;
   // Self — buff multipliers (1.0 = normal)
   speedMult: number;
   dmgDealtMult: number;
@@ -102,6 +106,7 @@ export interface EntityObservation {
   oppIsBlinded: number;
   oppIsDiscombobulated: number;
   oppIsUntargetable: number;
+  oppIsResting: number;
   // Opponent — buff multipliers
   oppSpeedMult: number;
   oppDmgDealtMult: number;
@@ -178,8 +183,8 @@ interface ActiveBuffWindow {
   ticksProductive: number;
 }
 
-const BUFF_WASTE_BASE_PENALTY = 0.04;
-const OFFENSIVE_BUFF_WASTE_MULTIPLIER = 2;
+const BUFF_WASTE_BASE_PENALTY = 0.015;
+const OFFENSIVE_BUFF_WASTE_MULTIPLIER = 1.3;
 
 const BOTTLE_CHUCK_IMPACT_DELAY = 0.825;
 
@@ -260,6 +265,8 @@ export class HeadlessArena {
   private prematureCooldownPenalty: [number, number] = [0, 0];
   /** Damage dealt by charge abilities (Sweep, etc.) — tracked separately for bonus reward. */
   private chargeDamageDealt: [number, number] = [0, 0];
+  /** Count of Sweep charges that finished without hitting anyone. */
+  private sweepWhiffCount: [number, number] = [0, 0];
   /** Tracks unique ability IDs used per step for diversity bonus. */
   private abilitiesUsedThisStep: [Set<string>, Set<string>] = [new Set(), new Set()];
   /** Running ability usage counts (EMA) for intrinsic curiosity reward. Persists across episodes. */
@@ -268,6 +275,8 @@ export class HeadlessArena {
   private curiosityBonus: [number, number] = [0, 0];
   /** Active self-buff windows being tracked for utilization. Persists across steps. */
   private activeBuffWindows: ActiveBuffWindow[] = [];
+  /** Mana snapshot at start of step, for tracking mana gained while resting. */
+  private manaAtStepStart: [number, number] = [0, 0];
 
   // Opponent config
   /** 0–1 fraction of episodes using scripted AI. 1.0 = pure scripted, 0 = pure external. */
@@ -393,9 +402,12 @@ export class HeadlessArena {
       },
     });
 
-    // Cast pushback on direct damage
+    // Cast pushback + cancel resting on direct damage
     this.combat.onDirectDamageDealt = (target) => {
       this.castingSystem.applyPushback(target);
+      if (this.buffSystem.hasBuff(target, 'resting')) {
+        this.buffSystem.remove(target, 'resting', true);
+      }
     };
 
     // Auto-attack system
@@ -481,8 +493,12 @@ export class HeadlessArena {
       applyKnockbackStun: (target) => {
         this.buffSystem.apply(target, KaboomStun);
       },
-      onSweepChargeEnd: (entity, savedTarget) => {
+      onSweepChargeEnd: (entity, savedTarget, hitCount) => {
         if (savedTarget && !savedTarget.dead) entity.autoAttackTarget = savedTarget;
+        if (hitCount === 0) {
+          const idx = this.entities.indexOf(entity);
+          if (idx >= 0) this.sweepWhiffCount[idx]++;
+        }
       },
       onTweakerSprintChargeEnd: (entity, savedTarget) => {
         if (savedTarget && !savedTarget.dead) entity.autoAttackTarget = savedTarget;
@@ -617,6 +633,7 @@ export class HeadlessArena {
     this.autoAttackHits = [0, 0];
     this.buffWastePenalty = [0, 0];
     this.trinketWastedCount = [0, 0];
+    this.sweepWhiffCount = [0, 0];
     this.activeBuffWindows = [];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
 
@@ -644,11 +661,12 @@ export class HeadlessArena {
           ];
           this.entities[1] = new HeadlessEntity(charId, 2, 'Agent2');
         }
-        // Randomize behavior mode: 45% aggressive, 22.5% passive, 22.5% kiting, 10% punching-bag
+        // Randomize behavior mode: 25% aggressive, 30% passive, 30% kiting, 15% punching-bag
+        // More passive/kiting opponents force the agent to learn to initiate and chase
         const modeRoll = Math.random();
-        const behaviorMode: NpcBehaviorMode = modeRoll < 0.45 ? 'aggressive'
-          : modeRoll < 0.675 ? 'passive'
-          : modeRoll < 0.9 ? 'kiting'
+        const behaviorMode: NpcBehaviorMode = modeRoll < 0.25 ? 'aggressive'
+          : modeRoll < 0.55 ? 'passive'
+          : modeRoll < 0.85 ? 'kiting'
           : 'punching-bag';
         this.opponentBrain = new HeadlessNpcBrain(
           this.entities[1], this.entities[0],
@@ -768,8 +786,10 @@ export class HeadlessArena {
     this.trinketWastedCount = [0, 0];
     this.prematureCooldownPenalty = [0, 0];
     this.chargeDamageDealt = [0, 0];
+    this.sweepWhiffCount = [0, 0];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
     this.curiosityBonus = [0, 0];
+    this.manaAtStepStart = [this.entities[0].mana, this.entities[1].mana];
 
     // Process actions for each entity
     for (let i = 0; i < 2; i++) {
@@ -825,6 +845,29 @@ export class HeadlessArena {
         continue;
       }
 
+      // ── Rest ────────────────────────────────────────────────
+      // Cancel resting on movement, combat, stun, or casting
+      if (this.buffSystem.hasBuff(entity, 'resting')) {
+        if (entity.isMoving || entity.inCombat || entity.stunned
+            || this.castingSystem.isCasting(entity)) {
+          this.buffSystem.remove(entity, 'resting', true);
+        }
+      }
+      // Start resting if requested and conditions are met
+      if (action.rest && !this.buffSystem.hasBuff(entity, 'resting')) {
+        if (!entity.inCombat && !entity.isMoving && !entity.stunned
+            && !this.buffSystem.isSleeping(entity)
+            && !this.castingSystem.isCasting(entity)) {
+          this.autoAttack.stop(entity);
+          entity.autoAttackTarget = null;
+          this.buffSystem.apply(entity, RestingBuff);
+        }
+      }
+      // Stop resting if agent is no longer requesting it
+      if (!action.rest && this.buffSystem.hasBuff(entity, 'resting')) {
+        this.buffSystem.remove(entity, 'resting', true);
+      }
+
       // ── Face opponent (auto) ──────────────────────────────────
       if (!opponent.dead) {
         entity.faceToward(opponent);
@@ -835,8 +878,12 @@ export class HeadlessArena {
         this.castingSystem.cancel(entity);
       }
 
-      // ── Ability usage ─────────────────��───────────────────────
+      // ── Ability usage ──────────────────────────────────────────
       if (action.abilityIndex !== null) {
+        // Cancel resting when using an ability
+        if (this.buffSystem.hasBuff(entity, 'resting')) {
+          this.buffSystem.remove(entity, 'resting', true);
+        }
         // Curriculum gate: silently ignore locked ability slots
         if (action.abilityIndex >= this.unlockedAbilities) {
           // Locked — treat as no-op (no fail penalty)
@@ -923,7 +970,7 @@ export class HeadlessArena {
                   const wastedFraction = Math.min(timeToClose / buffDuration, 0.9);
                   // Higher-CD abilities are more costly to waste (60s CD = 2x, 30s = 1x)
                   const cdImportance = ability.cooldown / 30;
-                  this.prematureCooldownPenalty[i] += wastedFraction * cdImportance * 0.06;
+                  this.prematureCooldownPenalty[i] += wastedFraction * cdImportance * 0.025;
                 }
               }
               this.handleAbilityPostEffects(entity, ability, target, opponent);
@@ -1041,10 +1088,18 @@ export class HeadlessArena {
       const entity = this.entities[i];
       const opponent = this.entities[1 - i];
 
-      // Damage / healing shaping
-      rewards[i] += this.damageDealt[i] * 0.00005;
-      rewards[i] -= this.damageTaken[i] * 0.00003;
+      // Damage / healing shaping — heavily reward dealing damage, low penalty for taking it
+      // (encourages aggressive trading rather than risk-averse kiting)
+      rewards[i] += this.damageDealt[i] * 0.00025;
+      rewards[i] -= this.damageTaken[i] * 0.00001;
       rewards[i] += this.healingDone[i] * 0.00003;
+
+      // HP differential bonus — reward for being ahead in HP %
+      if (!entity.dead && !opponent.dead && entity.maxHp > 0 && opponent.maxHp > 0) {
+        const myHpPct = entity.hp / entity.maxHp;
+        const oppHpPct = opponent.hp / opponent.maxHp;
+        rewards[i] += (myHpPct - oppHpPct) * 0.002;
+      }
 
       // Ability usage — small flat bonus; effective use rewarded via damage/CC
       rewards[i] += this.abilityUsedCount[i] * 0.001;
@@ -1070,35 +1125,55 @@ export class HeadlessArena {
 
       // Charge ability damage bonus — extra reward for landing Sweep/charge damage
       // (on top of general damage reward; encourages learning skill-shot positioning)
-      rewards[i] += this.chargeDamageDealt[i] * 0.0001;
+      rewards[i] += this.chargeDamageDealt[i] * 0.0002;
+
+      // Sweep whiff penalty — wasted cooldown + mana when charge hits nobody
+      rewards[i] -= this.sweepWhiffCount[i] * 0.03;
 
       // CC application bonus (stun/sleep/blind)
       rewards[i] += this.ccAppliedCount[i] * 0.008;
 
       // Auto-attack hit bonus — directly rewards melee engagement
-      rewards[i] += this.autoAttackHits[i] * 0.003;
+      rewards[i] += this.autoAttackHits[i] * 0.005;
+
+      // Resting — reward mana recovered while resting, penalize resting near enemies
+      if (this.buffSystem.hasBuff(entity, 'resting') && !entity.dead) {
+        const manaGained = entity.mana - this.manaAtStepStart[i];
+        if (manaGained > 0) {
+          // Reward proportional to mana recovered (normalized by max mana)
+          rewards[i] += (manaGained / entity.maxMana) * 0.05;
+        }
+        // Penalty for resting while opponent is close — guaranteed crits are dangerous
+        if (!opponent.dead) {
+          const dist = entity.distanceTo(opponent);
+          if (dist < yardsToUnits(15)) {
+            rewards[i] -= 0.01;
+          }
+        }
+      }
 
       // Proximity reward — encourages closing distance and melee engagement
       if (!entity.dead && !opponent.dead) {
         const dist = entity.distanceTo(opponent);
-        // Continuous gradient: closer = more reward (halved to reduce proximity dominance)
+        // Continuous gradient: closer = more reward
         const maxRewardDist = yardsToUnits(30);
-        rewards[i] += 0.0005 * Math.max(0, 1 - dist / maxRewardDist);
+        rewards[i] += 0.001 * Math.max(0, 1 - dist / maxRewardDist);
         // Melee engagement bonus for being in auto-attack range
         if (dist <= entity.autoAttackRange * 1.5) {
-          rewards[i] += 0.001;
+          rewards[i] += 0.004;
         }
       }
 
-      // Step penalty — encourages aggression, discourages stalling
-      rewards[i] -= 0.0008;
+      // Step penalty — increases over time to create urgency (fight faster, don't stall)
+      const timePressure = 1 + (this.elapsed / this.maxDuration) * 2; // 1x → 3x over match
+      rewards[i] -= 0.001 * timePressure;
     }
     // Terminal rewards
     if (this.done) {
       if (this.winner === 1) { rewards[0] += 1; rewards[1] -= 1; }
       else if (this.winner === 2) { rewards[0] -= 1; rewards[1] += 1; }
-      // Draw: small penalty for both
-      else { rewards[0] -= 0.2; rewards[1] -= 0.2; }
+      // Draw: significant penalty — fights should end decisively
+      else { rewards[0] -= 0.5; rewards[1] -= 0.5; }
     }
 
     return {
@@ -1371,6 +1446,7 @@ export class HeadlessArena {
       isDiscombobulated: this.buffSystem.isDiscombobulated(self) ? 1 : 0,
       isUntargetable: this.buffSystem.isUntargetable(self) ? 1 : 0,
       inCombat: self.inCombat ? 1 : 0,
+      isResting: this.buffSystem.hasBuff(self, 'resting') ? 1 : 0,
       // Self — buff multipliers (centered at 1.0)
       speedMult: this.buffSystem.getMovementSpeedMultiplier(self),
       dmgDealtMult: this.buffSystem.getDamageDealtMultiplier(self),
@@ -1397,6 +1473,7 @@ export class HeadlessArena {
       oppIsBlinded: this.buffSystem.isBlinded(opp) ? 1 : 0,
       oppIsDiscombobulated: this.buffSystem.isDiscombobulated(opp) ? 1 : 0,
       oppIsUntargetable: this.buffSystem.isUntargetable(opp) ? 1 : 0,
+      oppIsResting: this.buffSystem.hasBuff(opp, 'resting') ? 1 : 0,
       // Opponent — buff multipliers
       oppSpeedMult: this.buffSystem.getMovementSpeedMultiplier(opp),
       oppDmgDealtMult: this.buffSystem.getDamageDealtMultiplier(opp),
@@ -1437,7 +1514,7 @@ export class HeadlessArena {
       obs.hpPct, obs.manaPct, obs.x, obs.z, obs.y, obs.rotY,
       // Self — CC & status
       obs.isStunned, obs.isSleeping, obs.isBlinded,
-      obs.isDiscombobulated, obs.isUntargetable, obs.inCombat,
+      obs.isDiscombobulated, obs.isUntargetable, obs.inCombat, obs.isResting,
       // Self — buff multipliers
       obs.speedMult, obs.dmgDealtMult, obs.dmgTakenMult,
       // Self — ability state
@@ -1448,7 +1525,7 @@ export class HeadlessArena {
       obs.oppHpPct, obs.oppManaPct, obs.oppRelX, obs.oppRelZ, obs.oppDistance, obs.oppRotY,
       // Opponent — CC & status
       obs.oppIsStunned, obs.oppIsSleeping, obs.oppIsBlinded,
-      obs.oppIsDiscombobulated, obs.oppIsUntargetable,
+      obs.oppIsDiscombobulated, obs.oppIsUntargetable, obs.oppIsResting,
       // Opponent — buff multipliers
       obs.oppSpeedMult, obs.oppDmgDealtMult, obs.oppDmgTakenMult,
       // Opponent — ability & movement
