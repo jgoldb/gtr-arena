@@ -44,7 +44,7 @@ import {
 } from '@gtr/shared';
 import { HeadlessEntity } from './HeadlessEntity.js';
 import { HeadlessCombat } from './HeadlessCombat.js';
-import { HeadlessNpcBrain } from './HeadlessNpcBrain.js';
+import { HeadlessNpcBrain, type NpcBehaviorMode } from './HeadlessNpcBrain.js';
 
 // ── Action / Observation Types ───────────────────────────────────────────
 
@@ -120,6 +120,9 @@ export interface EntityObservation {
   ewPillarUp: number;    // 1 = E/W pillars fully raised, 0 = fully submerged
   nsPillarUp: number;    // 1 = N/S pillars fully raised, 0 = fully submerged
   pillarPhasePct: number; // 0–1 progress through current pillar phase (1 = transition imminent)
+
+  // Temporal context
+  matchTimePct: number;  // 0 at match start, 1 at max duration — helps learn CD timing
 }
 
 export interface StepResult {
@@ -148,6 +151,8 @@ export interface ArenaConfig {
   /** Fraction of episodes (0–1) that use a scripted opponent instead of external actions.
    *  Overrides scriptedOpponent when set. E.g. 0.3 = 30% scripted, 70% external (self-play). */
   scriptedMixRate?: number;
+  /** Number of ability slots unlocked (curriculum). null/undefined = all unlocked. */
+  unlockedAbilities?: number;
 }
 
 // ── Pending AoE ──────��──────────────────────────────────────────────────
@@ -173,7 +178,8 @@ interface ActiveBuffWindow {
   ticksProductive: number;
 }
 
-const BUFF_WASTE_BASE_PENALTY = 0.015;
+const BUFF_WASTE_BASE_PENALTY = 0.04;
+const OFFENSIVE_BUFF_WASTE_MULTIPLIER = 2;
 
 const BOTTLE_CHUCK_IMPACT_DELAY = 0.825;
 
@@ -188,7 +194,11 @@ export class HeadlessArena {
   private mapId: string;
   private tickRate: number;
   private maxDuration: number;
+  /** Number of ability slots unlocked (curriculum). Infinity = all. */
+  private unlockedAbilities: number;
   private spawnPoints: { x: number; y: number; z: number }[];
+  /** Arena bounds for NPC spawn area (used for wall-aware movement). */
+  private arenaBounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   /** Normalization scale for position observations (derived from map bounds). */
   private normScale: number;
 
@@ -246,6 +256,16 @@ export class HeadlessArena {
   private buffWastePenalty: [number, number] = [0, 0];
   /** Tracks trinket uses while not CC'd (wasted). */
   private trinketWastedCount: [number, number] = [0, 0];
+  /** Accumulated penalty for offensive self-buffs used far from opponent (distance-scaled). */
+  private prematureCooldownPenalty: [number, number] = [0, 0];
+  /** Damage dealt by charge abilities (Sweep, etc.) — tracked separately for bonus reward. */
+  private chargeDamageDealt: [number, number] = [0, 0];
+  /** Tracks unique ability IDs used per step for diversity bonus. */
+  private abilitiesUsedThisStep: [Set<string>, Set<string>] = [new Set(), new Set()];
+  /** Running ability usage counts (EMA) for intrinsic curiosity reward. Persists across episodes. */
+  private abilityUsageEma: [Float64Array, Float64Array] = [new Float64Array(0), new Float64Array(0)];
+  /** Accumulated intrinsic curiosity bonus per step (from underrepresented ability usage). */
+  private curiosityBonus: [number, number] = [0, 0];
   /** Active self-buff windows being tracked for utilization. Persists across steps. */
   private activeBuffWindows: ActiveBuffWindow[] = [];
 
@@ -262,12 +282,14 @@ export class HeadlessArena {
     this.mapId = config.mapId ?? 'cage';
     this.tickRate = config.tickRate ?? DEFAULT_TICK_RATE;
     this.maxDuration = config.maxDuration ?? DEFAULT_MAX_DURATION;
+    this.unlockedAbilities = config.unlockedAbilities ?? Infinity;
 
     // Load map data
     const mapInfo = MAPS[this.mapId];
     if (!mapInfo) throw new Error(`Unknown map: ${this.mapId}`);
     // Use npcSpawnBounds for combat spawn positions (map spawnPoints are pre-match pens)
     const bounds = mapInfo.npcSpawnBounds;
+    this.arenaBounds = bounds;
     this.spawnPoints = [
       { x: (bounds.minX + bounds.maxX) / 2, y: 0, z: bounds.maxZ * 0.7 },
       { x: (bounds.minX + bounds.maxX) / 2, y: 0, z: bounds.minZ * 0.7 },
@@ -446,7 +468,12 @@ export class HeadlessArena {
       isUntargetable: (e) => this.buffSystem.isUntargetable(e),
       isDead: (e) => e.dead,
       getAutoAttackRange: (e) => e.autoAttackRange,
-      applySweepDamage: (source, target, damage) => this.combat.applySweepDamage(source, target, damage),
+      applySweepDamage: (source, target, damage) => {
+        const result = this.combat.applySweepDamage(source, target, damage);
+        const idx = this.entities.indexOf(source);
+        if (idx >= 0) this.chargeDamageDealt[idx] += damage;
+        return result;
+      },
       applyTweakerSprintSlow: (target) => {
         this.buffSystem.apply(target, TweakerSprintSlow);
       },
@@ -488,9 +515,18 @@ export class HeadlessArena {
     if (this.scriptedMixRate >= 1.0) {
       this.opponentBrain = new HeadlessNpcBrain(
         this.entities[1], this.entities[0],
-        this.buffSystem, this.collision,
+        this.buffSystem, this.collision, this.arenaBounds,
       );
     }
+
+    // Init ability usage EMA (indexed by ability slot). Seeded uniform so no
+    // ability starts with an artificial rarity bonus.
+    const numSlots = this.entities[0].abilities.length;
+    const seed = 1 / Math.max(numSlots, 1);
+    this.abilityUsageEma = [
+      new Float64Array(numSlots).fill(seed),
+      new Float64Array(numSlots).fill(seed),
+    ];
   }
 
   // ── Collision helper ────────────────────────────────────────────────────
@@ -582,6 +618,7 @@ export class HeadlessArena {
     this.buffWastePenalty = [0, 0];
     this.trinketWastedCount = [0, 0];
     this.activeBuffWindows = [];
+    this.abilitiesUsedThisStep = [new Set(), new Set()];
 
     // Clear all system state (before potential entity swap)
     this.buffSystem.clearEntity(this.entities[0]);
@@ -607,9 +644,16 @@ export class HeadlessArena {
           ];
           this.entities[1] = new HeadlessEntity(charId, 2, 'Agent2');
         }
+        // Randomize behavior mode: 45% aggressive, 22.5% passive, 22.5% kiting, 10% punching-bag
+        const modeRoll = Math.random();
+        const behaviorMode: NpcBehaviorMode = modeRoll < 0.45 ? 'aggressive'
+          : modeRoll < 0.675 ? 'passive'
+          : modeRoll < 0.9 ? 'kiting'
+          : 'punching-bag';
         this.opponentBrain = new HeadlessNpcBrain(
           this.entities[1], this.entities[0],
-          this.buffSystem, this.collision,
+          this.buffSystem, this.collision, this.arenaBounds,
+          behaviorMode,
         );
       } else {
         // External episode (self-play / random) — restore default character if swapped
@@ -701,8 +745,10 @@ export class HeadlessArena {
       actions[1] = this.opponentBrain.decide(dt);
       // Scripted NPC enters combat immediately (matches client NpcAiBrain behavior)
       // so auto-attacks start as soon as a target is available.
+      // Exception: punching-bag never enters combat (no auto-attacks).
       const npc = this.entities[1];
-      if (!npc.dead && !npc.inCombat && !this.entities[0].dead) {
+      if (!npc.dead && !npc.inCombat && !this.entities[0].dead
+          && this.opponentBrain.behaviorMode !== 'punching-bag') {
         this.combat.enterCombat(npc);
       }
     }
@@ -720,6 +766,10 @@ export class HeadlessArena {
     this.autoAttackHits = [0, 0];
     this.buffWastePenalty = [0, 0];
     this.trinketWastedCount = [0, 0];
+    this.prematureCooldownPenalty = [0, 0];
+    this.chargeDamageDealt = [0, 0];
+    this.abilitiesUsedThisStep = [new Set(), new Set()];
+    this.curiosityBonus = [0, 0];
 
     // Process actions for each entity
     for (let i = 0; i < 2; i++) {
@@ -787,6 +837,10 @@ export class HeadlessArena {
 
       // ── Ability usage ─────────────────��───────────────────────
       if (action.abilityIndex !== null) {
+        // Curriculum gate: silently ignore locked ability slots
+        if (action.abilityIndex >= this.unlockedAbilities) {
+          // Locked — treat as no-op (no fail penalty)
+        } else {
         const ability = entity.abilities[action.abilityIndex];
         if (ability && !ability.isAutoAttack) {
           if (this.castingSystem.isCasting(entity)) {
@@ -797,6 +851,8 @@ export class HeadlessArena {
             const ok = this.useGroundTargetAbility(entity, ability, action.groundX, action.groundZ);
             if (ok) {
               this.abilityUsedCount[i]++;
+              this.abilitiesUsedThisStep[i].add(ability.id);
+              this.recordAbilityForCuriosity(i, action.abilityIndex!);
               if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
                 this.ccAppliedCount[i]++;
               }
@@ -815,17 +871,23 @@ export class HeadlessArena {
             }
             const validation = this.combat.validateAbility(ability, entity, target);
             if (validation.success) {
-              this.castingSystem.start(entity, ability, target);
-              this.abilityUsedCount[i]++;
-              if (ability.appliesSelfBuff) {
-                this.activeBuffWindows.push({
-                  entityIdx: i, abilityId: ability.id,
-                  buffId: ability.appliesSelfBuff.id,
-                  cooldown: ability.cooldown, ticksActive: 0, ticksProductive: 0,
-                });
-              }
-              if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
-                this.ccAppliedCount[i]++;
+              const castResult = this.castingSystem.start(entity, ability, target);
+              if (castResult.started) {
+                this.abilityUsedCount[i]++;
+                this.abilitiesUsedThisStep[i].add(ability.id);
+                this.recordAbilityForCuriosity(i, action.abilityIndex!);
+                if (ability.appliesSelfBuff) {
+                  this.activeBuffWindows.push({
+                    entityIdx: i, abilityId: ability.id,
+                    buffId: ability.appliesSelfBuff.id,
+                    cooldown: ability.cooldown, ticksActive: 0, ticksProductive: 0,
+                  });
+                }
+                if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
+                  this.ccAppliedCount[i]++;
+                }
+              } else {
+                this.abilityFailedCount[i]++;
               }
             } else {
               this.abilityFailedCount[i]++;
@@ -849,8 +911,25 @@ export class HeadlessArena {
                   !this.buffSystem.isBlinded(entity)) {
                 this.trinketWastedCount[i]++;
               }
+              // Track offensive self-buff used while far from opponent (distance-scaled penalty)
+              if (ability.appliesSelfBuff && !ability.healAmount &&
+                  ability.cooldown >= 15) {
+                const buffDist = entity.distanceTo(opponent);
+                const productiveRange = entity.autoAttackRange * 1.5;
+                if (buffDist > productiveRange) {
+                  // Estimate fraction of buff duration wasted running to opponent
+                  const buffDuration = ability.appliesSelfBuff.duration ?? 10;
+                  const timeToClose = (buffDist - productiveRange) / yardsToUnits(8);
+                  const wastedFraction = Math.min(timeToClose / buffDuration, 0.9);
+                  // Higher-CD abilities are more costly to waste (60s CD = 2x, 30s = 1x)
+                  const cdImportance = ability.cooldown / 30;
+                  this.prematureCooldownPenalty[i] += wastedFraction * cdImportance * 0.06;
+                }
+              }
               this.handleAbilityPostEffects(entity, ability, target, opponent);
               this.abilityUsedCount[i]++;
+              this.abilitiesUsedThisStep[i].add(ability.id);
+              this.recordAbilityForCuriosity(i, action.abilityIndex!);
               if (ability.appliesSelfBuff) {
                 this.activeBuffWindows.push({
                   entityIdx: i, abilityId: ability.id,
@@ -866,6 +945,7 @@ export class HeadlessArena {
             }
           }
         }
+        } // end curriculum else
       }
 
       // ── Auto-attack engage ────────────────────────────────────
@@ -932,9 +1012,16 @@ export class HeadlessArena {
         // Buff expired — evaluate utilization and apply penalty if wasted
         if (win.ticksActive > 0) {
           const utilization = win.ticksProductive / win.ticksActive;
-          // Scale penalty by cooldown: 60s CD with 0% util = full penalty
-          const cdScale = Math.min(win.cooldown / 30, 1);
-          this.buffWastePenalty[win.entityIdx] += (1 - utilization) * cdScale * BUFF_WASTE_BASE_PENALTY;
+          // Scale penalty by cooldown: 60s CD with 0% util = 2x penalty (cap at 2)
+          const cdScale = Math.min(win.cooldown / 30, 2);
+          // Offensive buffs (attack speed / damage boosts) penalized more heavily
+          const ent = this.entities[win.entityIdx];
+          const abil = ent.abilities.find(a => a?.id === win.abilityId);
+          const buffEffects = abil?.appliesSelfBuff?.effects ?? [];
+          const isOffensive = buffEffects.some(e =>
+            e.type === 'autoAttackSpeedPercent' || e.type === 'damageDealtPercent');
+          const offensiveMult = isOffensive ? OFFENSIVE_BUFF_WASTE_MULTIPLIER : 1;
+          this.buffWastePenalty[win.entityIdx] += (1 - utilization) * cdScale * BUFF_WASTE_BASE_PENALTY * offensiveMult;
         }
         this.activeBuffWindows.splice(w, 1);
       }
@@ -963,11 +1050,27 @@ export class HeadlessArena {
       rewards[i] += this.abilityUsedCount[i] * 0.001;
       rewards[i] -= this.abilityFailedCount[i] * 0.002;
 
+      // Ability diversity bonus — reward using multiple distinct abilities per step
+      const uniqueAbilities = this.abilitiesUsedThisStep[i].size;
+      if (uniqueAbilities >= 2) {
+        rewards[i] += (uniqueAbilities - 1) * 0.003;
+      }
+
+      // Intrinsic curiosity ��� bonus for using abilities underrepresented in recent history
+      rewards[i] += this.curiosityBonus[i];
+
       // Buff waste penalty — duration-aware, scaled by cooldown length
       rewards[i] -= this.buffWastePenalty[i];
 
       // Trinket wasted penalty — used while not CC'd
-      rewards[i] -= this.trinketWastedCount[i] * 0.02;
+      rewards[i] -= this.trinketWastedCount[i] * 0.04;
+
+      // Premature cooldown penalty — offensive buff used far from opponent (distance-scaled)
+      rewards[i] -= this.prematureCooldownPenalty[i];
+
+      // Charge ability damage bonus — extra reward for landing Sweep/charge damage
+      // (on top of general damage reward; encourages learning skill-shot positioning)
+      rewards[i] += this.chargeDamageDealt[i] * 0.0001;
 
       // CC application bonus (stun/sleep/blind)
       rewards[i] += this.ccAppliedCount[i] * 0.008;
@@ -978,17 +1081,17 @@ export class HeadlessArena {
       // Proximity reward — encourages closing distance and melee engagement
       if (!entity.dead && !opponent.dead) {
         const dist = entity.distanceTo(opponent);
-        // Continuous gradient: closer = more reward (up to +0.001/tick at point-blank)
+        // Continuous gradient: closer = more reward (halved to reduce proximity dominance)
         const maxRewardDist = yardsToUnits(30);
-        rewards[i] += 0.001 * Math.max(0, 1 - dist / maxRewardDist);
+        rewards[i] += 0.0005 * Math.max(0, 1 - dist / maxRewardDist);
         // Melee engagement bonus for being in auto-attack range
         if (dist <= entity.autoAttackRange * 1.5) {
-          rewards[i] += 0.002;
+          rewards[i] += 0.001;
         }
       }
 
       // Step penalty — encourages aggression, discourages stalling
-      rewards[i] -= 0.0005;
+      rewards[i] -= 0.0008;
     }
     // Terminal rewards
     if (this.done) {
@@ -1005,6 +1108,37 @@ export class HeadlessArena {
       winner: this.winner,
       time: this.elapsed,
     };
+  }
+
+  // ── Intrinsic Curiosity ────────────────────────────────────────────────
+
+  private static readonly EMA_ALPHA = 0.002;
+  private static readonly CURIOSITY_SCALE = 0.004;
+
+  /**
+   * Update running ability usage EMA and add intrinsic curiosity bonus.
+   * Rarely-used abilities get a larger bonus: scale * (1 - freq / maxFreq).
+   */
+  private recordAbilityForCuriosity(agentIdx: number, abilitySlot: number): void {
+    const ema = this.abilityUsageEma[agentIdx];
+    if (abilitySlot < 0 || abilitySlot >= ema.length) return;
+
+    // Decay all slots, bump the used one
+    const alpha = HeadlessArena.EMA_ALPHA;
+    for (let j = 0; j < ema.length; j++) {
+      ema[j] *= (1 - alpha);
+    }
+    ema[abilitySlot] += alpha;
+
+    // Curiosity bonus: inverse of normalized frequency
+    let maxFreq = 0;
+    for (let j = 0; j < ema.length; j++) {
+      if (ema[j] > maxFreq) maxFreq = ema[j];
+    }
+    if (maxFreq > 0) {
+      const rarity = 1 - ema[abilitySlot] / maxFreq;
+      this.curiosityBonus[agentIdx] += HeadlessArena.CURIOSITY_SCALE * rarity;
+    }
   }
 
   // ── Ability Post-Effects ───────────────────────────────────────────────
@@ -1241,8 +1375,10 @@ export class HeadlessArena {
       speedMult: this.buffSystem.getMovementSpeedMultiplier(self),
       dmgDealtMult: this.buffSystem.getDamageDealtMultiplier(self),
       dmgTakenMult: this.buffSystem.getDamageTakenMultiplier(self),
-      // Self — ability state
-      cooldowns: self.cooldowns.getCooldownVector(stats.abilities),
+      // Self — ability state (locked slots show as 1.0 = on cooldown)
+      cooldowns: self.cooldowns.getCooldownVector(stats.abilities).map(
+        (cd, idx) => idx >= this.unlockedAbilities ? 1 : cd,
+      ),
       gcdPct: self.cooldowns.getGcdRemaining() / 0.75,
       isCasting: self.castingAbilityName !== null ? 1 : 0,
       castPct: self.castingTotalTime > 0 ? self.castingElapsed / self.castingTotalTime : 0,
@@ -1279,6 +1415,9 @@ export class HeadlessArena {
       ewPillarUp: 1 - this.ewPillarProgress,
       nsPillarUp: 1 - this.nsPillarProgress,
       pillarPhasePct: this.getPillarPhasePct(),
+
+      // Temporal context
+      matchTimePct: this.elapsed / this.maxDuration,
     };
   }
 
@@ -1287,6 +1426,9 @@ export class HeadlessArena {
   get isDone(): boolean { return this.done; }
   get matchWinner(): number { return this.winner; }
   get matchTime(): number { return this.elapsed; }
+
+  /** Update the number of unlocked ability slots (curriculum learning). */
+  setUnlockedAbilities(n: number): void { this.unlockedAbilities = n; }
 
   /** Flatten an observation into a float array for neural network input. */
   static flattenObservation(obs: EntityObservation): number[] {
@@ -1316,6 +1458,8 @@ export class HeadlessArena {
       ...obs.wallDist,
       // Dynamic map features
       obs.ewPillarUp, obs.nsPillarUp, obs.pillarPhasePct,
+      // Temporal context
+      obs.matchTimePct,
     ];
   }
 }

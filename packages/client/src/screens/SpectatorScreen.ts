@@ -1,5 +1,6 @@
 import { CHARACTER_LIST, MAP_LIST, type CharacterId } from '@gtr/shared';
 import type { DifficultyLevel } from '../engine/npc/ai/DifficultyProfile';
+import type { NpcBehaviorMode } from '../engine/npc/ai/NpcAiBrain';
 
 const DIFFICULTY_LABELS: Record<DifficultyLevel, { name: string; color: string }> = {
   easy:   { name: 'Easy',   color: '#4caf50' },
@@ -12,14 +13,24 @@ const DIFFICULTY_LABELS: Record<DifficultyLevel, { name: string; color: string }
 
 const DIFFICULTY_ORDER: DifficultyLevel[] = ['easy', 'medium', 'hard', 'expert', 'master', 'neural'];
 
+const BEHAVIOR_MODE_LABELS: Record<NpcBehaviorMode, { name: string; color: string }> = {
+  aggressive: { name: 'Aggressive', color: '#f44336' },
+  passive:    { name: 'Passive',    color: '#4caf50' },
+  kiting:     { name: 'Kiting',     color: '#ff9800' },
+};
+
+const BEHAVIOR_MODE_ORDER: NpcBehaviorMode[] = ['aggressive', 'passive', 'kiting'];
+
 /** Only characters with full ability sets can be AI opponents. */
 const AI_CHARACTERS = CHARACTER_LIST.filter(c => !c.playgroundOnly);
 
 export interface SpectatorConfig {
   char1: CharacterId;
   diff1: DifficultyLevel;
+  mode1: NpcBehaviorMode;
   char2: CharacterId;
   diff2: DifficultyLevel;
+  mode2: NpcBehaviorMode;
   mapId: string;
 }
 
@@ -28,8 +39,10 @@ export class SpectatorScreen {
 
   private char1: CharacterId = AI_CHARACTERS[0]?.id as CharacterId ?? 'janitor';
   private diff1: DifficultyLevel = 'master';
+  private mode1: NpcBehaviorMode = 'aggressive';
   private char2: CharacterId = AI_CHARACTERS.length > 1 ? AI_CHARACTERS[1].id as CharacterId : AI_CHARACTERS[0].id as CharacterId;
   private diff2: DifficultyLevel = 'master';
+  private mode2: NpcBehaviorMode = 'aggressive';
   private mapId: string = MAP_LIST[0]?.id ?? 'cage';
 
   onWatch?: (config: SpectatorConfig) => void;
@@ -77,14 +90,16 @@ export class SpectatorScreen {
     const matchupRow = document.createElement('div');
     matchupRow.style.cssText = 'display: flex; align-items: center; gap: 24px; justify-content: center; margin-bottom: 28px;';
 
-    matchupRow.appendChild(this.buildFighterColumn('Fighter 1', this.char1, this.diff1, (c, d) => { this.char1 = c; this.diff1 = d; }));
+    matchupRow.appendChild(this.buildFighterColumn('Fighter 1', this.char1, this.diff1, this.mode1,
+      (c, d, m) => { this.char1 = c; this.diff1 = d; this.mode1 = m; }));
 
     const vs = document.createElement('div');
     vs.textContent = 'VS';
     vs.style.cssText = 'font-size: 18px; font-weight: 800; color: rgba(200,140,60,0.6); letter-spacing: 2px;';
     matchupRow.appendChild(vs);
 
-    matchupRow.appendChild(this.buildFighterColumn('Fighter 2', this.char2, this.diff2, (c, d) => { this.char2 = c; this.diff2 = d; }));
+    matchupRow.appendChild(this.buildFighterColumn('Fighter 2', this.char2, this.diff2, this.mode2,
+      (c, d, m) => { this.char2 = c; this.diff2 = d; this.mode2 = m; }));
 
     panel.appendChild(matchupRow);
 
@@ -153,8 +168,10 @@ export class SpectatorScreen {
       this.onWatch?.({
         char1: this.char1,
         diff1: this.diff1,
+        mode1: this.mode1,
         char2: this.char2,
         diff2: this.diff2,
+        mode2: this.mode2,
         mapId: this.mapId,
       });
     });
@@ -168,10 +185,12 @@ export class SpectatorScreen {
     label: string,
     initialChar: CharacterId,
     initialDiff: DifficultyLevel,
-    onChange: (char: CharacterId, diff: DifficultyLevel) => void,
+    initialMode: NpcBehaviorMode,
+    onChange: (char: CharacterId, diff: DifficultyLevel, mode: NpcBehaviorMode) => void,
   ): HTMLDivElement {
     let currentChar = initialChar;
     let currentDiff = initialDiff;
+    let currentMode = initialMode;
 
     const col = document.createElement('div');
     col.style.cssText = 'display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 180px;';
@@ -194,7 +213,7 @@ export class SpectatorScreen {
     }
     charSelect.addEventListener('change', () => {
       currentChar = charSelect.value as CharacterId;
-      onChange(currentChar, currentDiff);
+      onChange(currentChar, currentDiff, currentMode);
     });
     col.appendChild(charSelect);
 
@@ -213,9 +232,31 @@ export class SpectatorScreen {
     }
     diffSelect.addEventListener('change', () => {
       currentDiff = diffSelect.value as DifficultyLevel;
-      onChange(currentChar, currentDiff);
+      // Hide behavior mode for neural (it uses its own movement)
+      modeSelect.style.display = currentDiff === 'neural' ? 'none' : '';
+      onChange(currentChar, currentDiff, currentMode);
     });
     col.appendChild(diffSelect);
+
+    // Behavior mode select (hidden for neural difficulty)
+    const modeSelect = document.createElement('select');
+    modeSelect.className = 'spec-select';
+    modeSelect.style.width = '100%';
+    if (initialDiff === 'neural') modeSelect.style.display = 'none';
+    for (const m of BEHAVIOR_MODE_ORDER) {
+      const ml = BEHAVIOR_MODE_LABELS[m];
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = ml.name;
+      opt.style.color = ml.color;
+      if (m === initialMode) opt.selected = true;
+      modeSelect.appendChild(opt);
+    }
+    modeSelect.addEventListener('change', () => {
+      currentMode = modeSelect.value as NpcBehaviorMode;
+      onChange(currentChar, currentDiff, currentMode);
+    });
+    col.appendChild(modeSelect);
 
     return col;
   }

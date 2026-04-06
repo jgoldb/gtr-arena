@@ -288,6 +288,8 @@ export class NeuralBehavior implements CharacterBehavior {
       ...wallDist,
       // Dynamic map features
       pillarState.ewPillarUp, pillarState.nsPillarUp, pillarState.pillarPhasePct,
+      // Temporal context
+      this.engine.getMatchTimePct(),
     ];
   }
 }

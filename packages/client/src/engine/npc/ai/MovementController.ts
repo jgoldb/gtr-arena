@@ -549,67 +549,54 @@ export class MovementController {
     dir: THREE.Vector3,
     threat: THREE.Vector3
   ): THREE.Vector3 {
-    const PROBE_DIST = 2.5;
-    const BOUNDARY_MARGIN = 2.0;
+    // Raycast in the desired flee direction to detect walls/obstacles early
+    const RAY_MAX = 8; // ~13 yards lookahead
+    const WALL_DANGER_DIST = 5; // Start adjusting when wall is within ~8 yards
 
-    // Quick check: is the current direction clear?
-    const probeX = pos.x + dir.x * PROBE_DIST;
-    const probeZ = pos.z + dir.z * PROBE_DIST;
+    const wallDist = this.collision.raycastDistance(pos.x, pos.z, dir.x, dir.z, RAY_MAX, pos.y);
+    // Also check arena bounds in the flee direction
+    const boundaryDist = this.boundaryDistInDir(pos.x, pos.z, dir.x, dir.z);
+    const effectiveDist = Math.min(wallDist, boundaryDist);
 
-    const nearBoundary =
-      probeX < this.bounds.minX + BOUNDARY_MARGIN ||
-      probeX > this.bounds.maxX - BOUNDARY_MARGIN ||
-      probeZ < this.bounds.minZ + BOUNDARY_MARGIN ||
-      probeZ > this.bounds.maxZ - BOUNDARY_MARGIN;
+    if (effectiveDist > WALL_DANGER_DIST) return dir; // Plenty of room, no adjustment
 
-    const resolved = this.collision.resolve(probeX, probeZ, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT);
-    const clearance = Math.sqrt((resolved.x - pos.x) ** 2 + (resolved.z - pos.z) ** 2);
-    const blocked = clearance < PROBE_DIST * 0.7;
+    // Wall is close — evaluate candidate directions using raycasts
+    // Ideal flee vector (from threat)
+    const fleeX = pos.x - threat.x;
+    const fleeZ = pos.z - threat.z;
+    const fleeMag = Math.sqrt(fleeX * fleeX + fleeZ * fleeZ) || 1;
+    const idealFleeX = fleeX / fleeMag;
+    const idealFleeZ = fleeZ / fleeMag;
 
-    if (!nearBoundary && !blocked) return dir; // Path is clear, no adjustment needed
-
-    // Path is obstructed — sample alternative directions and pick the best
     const baseAngle = Math.atan2(dir.x, dir.z);
     let bestDir = dir.clone();
     let bestScore = -Infinity;
 
-    // Score the original direction as baseline
-    const origBoundaryDist = Math.min(
-      probeX - this.bounds.minX, this.bounds.maxX - probeX,
-      probeZ - this.bounds.minZ, this.bounds.maxZ - probeZ
-    );
-    const origThreatDist = Math.sqrt(
-      (pos.x + dir.x - threat.x) ** 2 + (pos.z + dir.z - threat.z) ** 2
-    );
-    bestScore = clearance * 2 + origThreatDist + Math.max(0, origBoundaryDist) * 0.5;
-
-    // Sample 10 directions, alternating left/right from the original heading
-    for (let i = 0; i < 10; i++) {
-      const sign = i % 2 === 0 ? 1 : -1;
-      const step = Math.ceil((i + 1) / 2);
-      const angle = baseAngle + sign * step * (Math.PI / 5); // ~36° steps, up to ±180°
+    // Sample 12 directions: the original + 11 alternatives spanning ±165°
+    for (let i = -1; i < 12; i++) {
+      let angle: number;
+      if (i < 0) {
+        angle = baseAngle; // Original direction
+      } else {
+        const sign = i % 2 === 0 ? 1 : -1;
+        const step = Math.ceil((i + 1) / 2);
+        angle = baseAngle + sign * step * (Math.PI / 6); // 30° steps
+      }
 
       const cx = Math.sin(angle);
       const cz = Math.cos(angle);
 
-      // Probe clearance
-      const cpx = pos.x + cx * PROBE_DIST;
-      const cpz = pos.z + cz * PROBE_DIST;
-      const cResolved = this.collision.resolve(cpx, cpz, pos.y, COLLISION_RADIUS, NPC_STEP_HEIGHT);
-      const cClearance = Math.sqrt((cResolved.x - pos.x) ** 2 + (cResolved.z - pos.z) ** 2);
+      // Raycast for wall/obstacle distance in this direction
+      const cWallDist = this.collision.raycastDistance(pos.x, pos.z, cx, cz, RAY_MAX, pos.y);
+      const cBoundDist = this.boundaryDistInDir(pos.x, pos.z, cx, cz);
+      const cDist = Math.min(cWallDist, cBoundDist);
 
-      // Boundary distance at probe point
-      const cBoundaryDist = Math.min(
-        cpx - this.bounds.minX, this.bounds.maxX - cpx,
-        cpz - this.bounds.minZ, this.bounds.maxZ - cpz
-      );
+      // How much this direction points away from the threat (1 = perfect flee, -1 = toward threat)
+      const fleeDot = cx * idealFleeX + cz * idealFleeZ;
 
-      // How much this direction moves us away from the threat
-      const cThreatDist = Math.sqrt(
-        (pos.x + cx - threat.x) ** 2 + (pos.z + cz - threat.z) ** 2
-      );
-
-      const score = cClearance * 2 + cThreatDist + Math.max(0, cBoundaryDist) * 0.5;
+      // Score: heavily favor open space, with flee quality as tiebreaker
+      // Wall distance is the primary factor — never pick a direction with no room
+      const score = cDist * 3 + Math.max(0, fleeDot) * 2;
 
       if (score > bestScore) {
         bestScore = score;
@@ -618,6 +605,17 @@ export class MovementController {
     }
 
     return bestDir;
+  }
+
+  /** Distance from (x,z) to the arena boundary rectangle in direction (dx,dz). */
+  private boundaryDistInDir(x: number, z: number, dx: number, dz: number): number {
+    let minT = Infinity;
+    // Check all 4 walls
+    if (dx > 0.001) minT = Math.min(minT, (this.bounds.maxX - x) / dx);
+    else if (dx < -0.001) minT = Math.min(minT, (this.bounds.minX - x) / dx);
+    if (dz > 0.001) minT = Math.min(minT, (this.bounds.maxZ - z) / dz);
+    else if (dz < -0.001) minT = Math.min(minT, (this.bounds.minZ - z) / dz);
+    return minT < 0 ? 0 : minT;
   }
 
   /**

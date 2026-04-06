@@ -251,6 +251,11 @@ class GtrVecEnv(VecEnv):
             except subprocess.TimeoutExpired:
                 self.proc.kill()
 
+    def set_unlocked_abilities(self, n: int) -> None:
+        """Update the number of unlocked ability slots across all arenas (curriculum)."""
+        self._send({"cmd": "set_config", "unlockedAbilities": n})
+        self._recv()  # ack
+
     def seed(self, seed: int | None = None) -> Sequence[int | None]:
         return [None] * self.num_envs
 

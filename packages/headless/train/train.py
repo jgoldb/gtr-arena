@@ -44,7 +44,69 @@ def linear_schedule(initial_lr: float):
     return schedule
 
 
+class EntropyScheduleCallback(BaseCallback):
+    """Linearly anneal ent_coef from initial to final over training."""
+
+    def __init__(self, initial: float, final: float, verbose: int = 0):
+        super().__init__(verbose)
+        self.initial = initial
+        self.final = final
+
+    def _on_step(self) -> bool:
+        progress = self.model._current_progress_remaining  # 1 → 0
+        self.model.ent_coef = self.final + progress * (self.initial - self.final)
+        self.logger.record("train/ent_coef", self.model.ent_coef)
+        return True
+
+
 # ── Callbacks ───────────────────────────────────────────────────────────
+
+
+class CurriculumCallback(BaseCallback):
+    """Gradually unlocks ability slots over training.
+
+    Starts with `start_abilities` slots unlocked, adds one more every
+    `unlock_every` timesteps until all abilities are available.
+    """
+
+    def __init__(
+        self,
+        env: GtrVecEnv,
+        num_abilities: int,
+        start_abilities: int = 3,
+        unlock_every: int = 200_000,
+        verbose: int = 0,
+    ):
+        super().__init__(verbose)
+        self.env = env
+        self.num_abilities = num_abilities
+        self.start_abilities = start_abilities
+        self.unlock_every = unlock_every
+        self.current_unlocked = start_abilities
+
+    def _on_training_start(self) -> None:
+        self.current_unlocked = self.start_abilities
+        self.env.set_unlocked_abilities(self.current_unlocked)
+        if self.verbose:
+            print(f"[Curriculum] Starting with {self.current_unlocked}/{self.num_abilities} abilities")
+
+    def _on_step(self) -> bool:
+        if self.current_unlocked >= self.num_abilities:
+            return True
+        target = min(
+            self.num_abilities,
+            self.start_abilities + self.num_timesteps // self.unlock_every,
+        )
+        if target > self.current_unlocked:
+            self.current_unlocked = target
+            self.env.set_unlocked_abilities(self.current_unlocked)
+            if self.verbose:
+                print(
+                    f"[Curriculum] Unlocked {self.current_unlocked}/{self.num_abilities} "
+                    f"abilities at {self.num_timesteps:,} steps"
+                )
+            self.logger.record("gtr/unlocked_abilities", self.current_unlocked)
+        return True
 
 
 class WinRateCallback(BaseCallback):
@@ -137,7 +199,7 @@ def main():
     parser.add_argument("--num-envs", type=int, default=16, help="Parallel environments")
     parser.add_argument("--map", default="cage", help="Map ID")
     parser.add_argument("--lr", type=float, default=3e-4, help="Initial learning rate (anneals to 0)")
-    parser.add_argument("--ent-coef", type=float, default=0.01, help="Entropy coefficient")
+    parser.add_argument("--ent-coef", type=float, default=0.04, help="Initial entropy coefficient (anneals to 0.01)")
     parser.add_argument("--n-steps", type=int, default=2048, help="Steps per rollout per env")
     parser.add_argument("--batch-size", type=int, default=512, help="Minibatch size")
     parser.add_argument("--save-dir", default="./models", help="Directory for model checkpoints")
@@ -161,6 +223,13 @@ def main():
     parser.add_argument("--scripted-mix-rate", type=float, default=None,
                         help="Fraction (0-1) of episodes using scripted opponents. "
                              "Remaining episodes use self-play/random. E.g. 0.3 = 30%% scripted")
+    # Curriculum options
+    parser.add_argument("--curriculum-start", type=int, default=3,
+                        help="Number of ability slots unlocked at training start (default 3)")
+    parser.add_argument("--curriculum-unlock-every", type=int, default=200_000,
+                        help="Unlock one more ability slot every N timesteps (default 200k)")
+    parser.add_argument("--no-curriculum", action="store_true",
+                        help="Disable ability curriculum (all abilities available from start)")
     args = parser.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
@@ -208,6 +277,7 @@ def main():
 
     # Callbacks
     callbacks = [
+        EntropyScheduleCallback(initial=args.ent_coef, final=0.01, verbose=1),
         WinRateCallback(window=100, verbose=1),
         CheckpointCallback(
             save_freq=max(args.save_freq // args.num_envs, 1),
@@ -242,8 +312,22 @@ def main():
     elif args.opponent_characters:
         print(f"Opponent characters: {', '.join(args.opponent_characters)}")
 
+    # Ability curriculum
+    if not args.no_curriculum:
+        curriculum_cb = CurriculumCallback(
+            env=env,
+            num_abilities=env.num_abilities,
+            start_abilities=min(args.curriculum_start, env.num_abilities),
+            unlock_every=args.curriculum_unlock_every,
+            verbose=1,
+        )
+        callbacks.append(curriculum_cb)
+        print(f"Curriculum: {args.curriculum_start} abilities at start, "
+              f"+1 every {args.curriculum_unlock_every:,} steps "
+              f"(all {env.num_abilities} by ~{args.curriculum_start + (env.num_abilities - args.curriculum_start) * args.curriculum_unlock_every:,} steps)")
+
     # Train
-    print(f"\nTraining for {args.timesteps:,} timesteps (LR {args.lr} → 0)...")
+    print(f"\nTraining for {args.timesteps:,} timesteps (LR {args.lr} → 0, ent_coef {args.ent_coef} → 0.01)...")
     t0 = time.time()
 
     try:
@@ -262,7 +346,7 @@ def main():
     model.save(final_path)
 
     # Summary
-    win_cb = callbacks[0]
+    win_cb = callbacks[1]
     print(f"\n{'='*50}")
     print(f"Training complete in {elapsed:.0f}s")
     print(f"Model saved to {final_path}")

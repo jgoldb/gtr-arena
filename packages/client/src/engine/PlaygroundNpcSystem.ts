@@ -16,7 +16,7 @@ import type { CombatSystem } from './combat/CombatSystem';
 import type { AutoAttackSystem } from './combat/AutoAttackSystem';
 import type { CastingSystem } from './combat/CastingSystem';
 import { NpcController } from './npc/NpcController';
-import { NpcAiBrain, type AiEngineInterface } from './npc/ai/NpcAiBrain';
+import { NpcAiBrain, type AiEngineInterface, type NpcBehaviorMode } from './npc/ai/NpcAiBrain';
 import { createCharacterBehavior } from './npc/ai/behaviors';
 import { NeuralBehavior } from './npc/ai/behaviors/NeuralBehavior';
 import { DIFFICULTY_PRESETS, type DifficultyLevel } from './npc/ai/DifficultyProfile';
@@ -66,6 +66,7 @@ export class PlaygroundNpcSystem {
   private readonly host: PlaygroundNpcSystemHost;
   private readonly npcs: NpcController[] = [];
   private aiEngineInterface: AiEngineInterface | null = null;
+  private matchStartTime = performance.now();
 
   constructor(host: PlaygroundNpcSystemHost) {
     this.host = host;
@@ -135,6 +136,7 @@ export class PlaygroundNpcSystem {
       npc.dispose();
     }
     this.npcs.length = 0;
+    this.matchStartTime = performance.now();
   }
 
   // ── AI NPC Spawning ─────────────────────────────────────────────
@@ -144,7 +146,8 @@ export class PlaygroundNpcSystem {
     position: THREE.Vector3,
     team: number,
     name: string,
-    difficulty: DifficultyLevel = 'medium'
+    difficulty: DifficultyLevel = 'medium',
+    behaviorMode?: NpcBehaviorMode,
   ): NpcController {
     const { host } = this;
     const npc = this.spawnNpc(characterId, position, team, name);
@@ -163,6 +166,9 @@ export class PlaygroundNpcSystem {
     }
 
     npc.aiBrain = new NpcAiBrain(npc, aiEngine, behavior, profile);
+    if (behaviorMode && difficulty !== 'neural') {
+      npc.aiBrain.behaviorMode = behaviorMode;
+    }
 
     // Fall damage for AI NPCs (same formula as player)
     npc.aiBrain.movement.onFallDamage = (fallDistance: number) => {
@@ -227,6 +233,7 @@ export class PlaygroundNpcSystem {
           const script = host.mapManager.getScript();
           return script?.getPillarState?.() ?? { ewPillarUp: 0, nsPillarUp: 0, pillarPhasePct: 0 };
         },
+        getMatchTimePct: () => Math.min((performance.now() - this.matchStartTime) / 120_000, 1),
       };
     }
     return this.aiEngineInterface;

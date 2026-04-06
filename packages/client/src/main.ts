@@ -837,14 +837,14 @@ async function startSpectatorMode(config: SpectatorConfig): Promise<void> {
   const npc1 = engine.spawnAiNpc(
     config.char1,
     new THREEVector3(spawn1.x, spawn1.y, spawn1.z),
-    0, name1, config.diff1,
+    0, name1, config.diff1, config.mode1,
   );
   npc1.mesh.rotation.y = Math.atan2(spawn2.x - spawn1.x, spawn2.z - spawn1.z);
 
   const npc2 = engine.spawnAiNpc(
     config.char2,
     new THREEVector3(spawn2.x, spawn2.y, spawn2.z),
-    1, name2, config.diff2,
+    1, name2, config.diff2, config.mode2,
   );
   npc2.mesh.rotation.y = Math.atan2(spawn1.x - spawn2.x, spawn1.z - spawn2.z);
 

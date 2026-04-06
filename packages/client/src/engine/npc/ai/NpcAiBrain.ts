@@ -4,13 +4,21 @@ import type { Targetable } from '../../types';
 import type { BuffSystem } from '../../combat/BuffSystem';
 import type { CombatSystem } from '../../combat/CombatSystem';
 import type { CollisionSystem } from '../../physics/CollisionSystem';
-import { getCharacterStats, yardsToUnits, Bandage, RecentlyBandagedDebuff, type Ability } from '@gtr/shared';
+import { getCharacterStats, yardsToUnits, isFacingCheck, Bandage, RecentlyBandagedDebuff, type Ability } from '@gtr/shared';
 import { MovementController } from './MovementController';
 import { NpcCooldownTracker } from './NpcCooldownTracker';
 import { NpcNavigation } from './NpcNavigation';
 import type { DifficultyProfile } from './DifficultyProfile';
 import type { CharacterBehavior, ScoredAction } from './behaviors/BaseBehavior';
 import { buildWorldState, type WorldState, type EntityInfo, type HazardInfo } from './WorldState';
+
+/**
+ * Controls the NPC's overall playstyle.
+ * - `aggressive`: (default) Chases opponent, uses abilities proactively.
+ * - `passive`: Stands ground, only fights when opponent is close.
+ * - `kiting`: Maintains distance, runs away from melee.
+ */
+export type NpcBehaviorMode = 'aggressive' | 'passive' | 'kiting';
 
 interface NpcCastingState {
   ability: Ability;
@@ -37,6 +45,7 @@ export interface AiEngineInterface {
   isNpcCharging(npc: NpcController): boolean;
   isArenaPreparationActive(): boolean;
   getPillarState(): { ewPillarUp: number; nsPillarUp: number; pillarPhasePct: number };
+  getMatchTimePct(): number;
 }
 
 export class NpcAiBrain {
@@ -46,6 +55,8 @@ export class NpcAiBrain {
   private difficulty: DifficultyProfile;
   readonly movement: MovementController;
   readonly cooldowns: NpcCooldownTracker;
+  /** Controls overall playstyle — defaults to aggressive. */
+  behaviorMode: NpcBehaviorMode = 'aggressive';
   private abilityLookup: Map<string, Ability>;
 
   private thinkTimer = 0;
@@ -232,6 +243,28 @@ export class NpcAiBrain {
     if (this.casting) return false;
     if (!ability.castTime) return false;
 
+    // Validate range, facing, and line of sight for hostile-targeted abilities
+    if (ability.requiresHostileTarget && target) {
+      const selfPos = this.npc.mesh.position;
+      const targetPos = target.mesh.position;
+      const dist = selfPos.distanceTo(targetPos);
+      if (ability.range && dist > ability.range) return false;
+      if (ability.minRange && dist < ability.minRange) return false;
+      if (ability.requiresFacing !== false) {
+        const fwdX = Math.sin(this.npc.mesh.rotation.y);
+        const fwdZ = Math.cos(this.npc.mesh.rotation.y);
+        if (!isFacingCheck(fwdX, fwdZ, targetPos.x - selfPos.x, targetPos.z - selfPos.z)) return false;
+      }
+      const collision = this.engine.getCollisionSystem();
+      if (!collision.hasLineOfSight(selfPos.x, selfPos.z, targetPos.x, targetPos.z, selfPos.y, targetPos.y)) return false;
+    }
+
+    // Validate range for friendly-targeted abilities (non-self)
+    if (ability.requiresTarget && !ability.requiresHostileTarget && target && target !== this.npc) {
+      const dist = this.npc.mesh.position.distanceTo(target.mesh.position);
+      if (ability.range && dist > ability.range) return false;
+    }
+
     // Check blockedByTargetDebuff (e.g. RecentlyBandaged prevents Bandage spam)
     if (ability.blockedByTargetDebuff) {
       const effectiveTarget = target ?? this.npc;
@@ -412,8 +445,21 @@ export class NpcAiBrain {
     // Always face our target
     this.movement.faceTarget = this.currentTarget.position;
 
-    // Get movement intent from behavior
-    const movementIntent = this.behavior.getMovementIntent(world, this.currentTarget, this.cooldowns, this.difficulty);
+    // Get movement intent — behavior mode can override the character behavior's movement
+    let movementIntent = this.behavior.getMovementIntent(world, this.currentTarget, this.cooldowns, this.difficulty);
+    if (this.behaviorMode === 'passive') {
+      // Passive: stand ground, don't chase
+      movementIntent = { type: 'idle' };
+    } else if (this.behaviorMode === 'kiting') {
+      // Kiting: use kiteFrom intent — wall avoidance is handled by MovementController
+      const desiredRange = yardsToUnits(18);
+      movementIntent = {
+        type: 'kiteFrom',
+        threat: this.currentTarget.position,
+        maxRange: desiredRange + yardsToUnits(5),
+        preferredRange: desiredRange,
+      };
+    }
 
     // Override movement for navigation paths (archways), elevator, or LoS issues
     const navResult = this.navigation.resolveNavigation(this.npc.mesh.position, this.currentTarget.position);
@@ -435,8 +481,14 @@ export class NpcAiBrain {
       this.movement.intent = movementIntent;
     }
 
+    // Behavior mode ability gating — passive NPCs only use abilities reactively when close,
+    // kiting NPCs only when within their comfortable range
+    const abilityGateDistance = this.behaviorMode === 'passive' ? yardsToUnits(8)
+      : this.behaviorMode === 'kiting' ? yardsToUnits(15) : Infinity;
+    const behaviorAllowsAbilities = this.currentTarget.distance <= abilityGateDistance;
+
     // Score and execute ability actions — skip if no LoS (abilities will fail validation)
-    if (this.currentTarget.inLineOfSight && Math.random() < this.difficulty.abilityUsageRate) {
+    if (behaviorAllowsAbilities && this.currentTarget.inLineOfSight && Math.random() < this.difficulty.abilityUsageRate) {
       const actions = this.behavior.scoreActions(
         world, this.cooldowns, this.difficulty, this.currentTarget
       );

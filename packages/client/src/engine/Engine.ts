@@ -22,6 +22,7 @@ import { PlaygroundLoop, type PlaygroundLoopHost } from './PlaygroundLoop';
 import { BlindEffect } from './effects/BlindEffect';
 import { soundEffects } from '../ui/SoundEffects';
 import type { DifficultyLevel } from './npc/ai/DifficultyProfile';
+import type { NpcBehaviorMode } from './npc/ai/NpcAiBrain';
 
 export class Engine {
   readonly scene: THREE.Scene;
@@ -645,9 +646,10 @@ export class Engine {
     position: THREE.Vector3,
     team: number,
     name: string,
-    difficulty: DifficultyLevel = 'medium'
+    difficulty: DifficultyLevel = 'medium',
+    behaviorMode?: NpcBehaviorMode,
   ): NpcController {
-    return this.npcSystem.spawnAiNpc(characterId, position, team, name, difficulty);
+    return this.npcSystem.spawnAiNpc(characterId, position, team, name, difficulty, behaviorMode);
   }
 
   npcUseAbility(npc: NpcController, abilityId: string, target: Targetable | null, groundPos?: THREE.Vector3): boolean {

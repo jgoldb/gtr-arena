@@ -147,6 +147,15 @@ function handleStep(cmd: Record<string, unknown>): void {
   send({ obs, rewards, dones, infos });
 }
 
+function handleSetConfig(cmd: Record<string, unknown>): void {
+  if (typeof cmd.unlockedAbilities === 'number') {
+    for (const arena of arenas) {
+      arena.setUnlockedAbilities(cmd.unlockedAbilities);
+    }
+  }
+  send({ ok: true });
+}
+
 // ── Main loop ────────────────────────────────────────────────────────────
 
 const rl = readline.createInterface({ input: process.stdin, terminal: false });
@@ -158,6 +167,7 @@ rl.on('line', (line) => {
       case 'init':  handleInit(cmd);  break;
       case 'reset': handleReset();    break;
       case 'step':  handleStep(cmd);  break;
+      case 'set_config': handleSetConfig(cmd); break;
       case 'close': process.exit(0);
       default:      send({ error: `Unknown command: ${cmd.cmd}` });
     }

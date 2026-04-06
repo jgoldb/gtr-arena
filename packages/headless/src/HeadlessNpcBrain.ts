@@ -34,6 +34,20 @@ interface ScoredAction {
   targetsSelf?: boolean;
 }
 
+// ── Behavior modes ───────────────────────────────────────────────────
+
+/**
+ * Controls the NPC's overall playstyle during training episodes.
+ * - `aggressive`: (default) Chases opponent, uses abilities proactively.
+ * - `passive`: Stands ground, only fights when opponent is close. Teaches
+ *   the RL agent to initiate combat rather than waiting.
+ * - `kiting`: Maintains distance, runs away from melee. Teaches the RL
+ *   agent to close gaps and deal with evasive opponents.
+ * - `punching-bag`: Never attacks. Wanders slowly. Lets the RL agent
+ *   freely experiment with ability combos without pressure.
+ */
+export type NpcBehaviorMode = 'aggressive' | 'passive' | 'kiting' | 'punching-bag';
+
 // ── Constants ─────────────────────────────────────────────────────────
 
 const MELEE_RANGE = yardsToUnits(3);
@@ -47,10 +61,13 @@ export class HeadlessNpcBrain {
   private opponent: HeadlessEntity;
   private buffSystem: BuffSystem<HeadlessEntity>;
   private collision: CollisionSystem;
+  private bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   private characterId: CharacterId;
   private abilities: readonly (Ability | null)[];
   /** Map ability id → index in abilities array. */
   private abilityIdx: Map<string, number>;
+  /** Controls overall playstyle — randomized per episode to create training diversity. */
+  behaviorMode: NpcBehaviorMode = 'aggressive';
 
   // Sweep aim-leading state (janitor)
   private lastTargetX = 0;
@@ -59,17 +76,25 @@ export class HeadlessNpcBrain {
   private targetVelZ = 0;
   private tickCount = 0;
 
+  // Punching-bag wander state
+  private punchingBagAngle = 0;
+  private punchingBagTimer = 0;
+
   constructor(
     entity: HeadlessEntity,
     opponent: HeadlessEntity,
     buffSystem: BuffSystem<HeadlessEntity>,
     collision: CollisionSystem,
+    bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+    behaviorMode?: NpcBehaviorMode,
   ) {
     this.entity = entity;
     this.opponent = opponent;
     this.buffSystem = buffSystem;
     this.collision = collision;
+    this.bounds = bounds;
     this.characterId = entity.characterId;
+    this.behaviorMode = behaviorMode ?? 'aggressive';
 
     const stats = getCharacterStats(entity.characterId);
     this.abilities = stats.abilities;
@@ -96,6 +121,17 @@ export class HeadlessNpcBrain {
       return { abilityIndex: null, moveAngle: Math.random() * Math.PI * 2, moveSpeed: 1 };
     }
 
+    // Punching bag — slow wander, never attacks or enters combat
+    if (this.behaviorMode === 'punching-bag') {
+      this.punchingBagTimer -= dt;
+      if (this.punchingBagTimer <= 0) {
+        this.punchingBagAngle = Math.random() * Math.PI * 2;
+        this.punchingBagTimer = 1.5 + Math.random() * 2.5; // new direction every 1.5–4s
+      }
+      const angle = this.wallAwareFleeAngle(this.punchingBagAngle);
+      return { abilityIndex: null, moveAngle: angle, moveSpeed: 0.35 };
+    }
+
     // Currently casting/channeling — don't act, just stand still
     if (e.castingAbilityName !== null) {
       return { abilityIndex: null, moveAngle: null, moveSpeed: 0 };
@@ -106,20 +142,27 @@ export class HeadlessNpcBrain {
     const dz = opp.z - e.z;
     const hasLoS = !opp.dead && this.collision.hasLineOfSight(e.x, e.z, opp.x, opp.z, e.y, opp.y);
 
-    // Score abilities
-    const actions = this.scoreCharacterActions(dist, dx, dz, hasLoS);
-    this.scoreCommonActions(actions, dist);
-    if (actions.length > 0) {
-      this.applySmartFilters(actions, dist);
-      actions.sort((a, b) => b.score - a.score);
-    }
+    // Score abilities — passive NPCs only use abilities reactively when
+    // the opponent is already close; kiting NPCs use them defensively
+    const useAbilities = this.behaviorMode === 'aggressive'
+      || (this.behaviorMode === 'passive' && dist <= yardsToUnits(8))
+      || (this.behaviorMode === 'kiting' && dist <= yardsToUnits(15));
 
-    const best = actions[0];
     let abilityIndex: number | null = null;
-    if (best && best.score > 0 && hasLoS) {
-      abilityIndex = best.abilityIndex;
-      if (best.aimRotation != null) {
-        e.rotY = best.aimRotation;
+    if (useAbilities) {
+      const actions = this.scoreCharacterActions(dist, dx, dz, hasLoS);
+      this.scoreCommonActions(actions, dist);
+      if (actions.length > 0) {
+        this.applySmartFilters(actions, dist);
+        actions.sort((a, b) => b.score - a.score);
+      }
+
+      const best = actions[0];
+      if (best && best.score > 0 && hasLoS) {
+        abilityIndex = best.abilityIndex;
+        if (best.aimRotation != null) {
+          e.rotY = best.aimRotation;
+        }
       }
     }
 
@@ -566,6 +609,36 @@ export class HeadlessNpcBrain {
     const opp = this.opponent;
     if (opp.dead) return { angle: null, speed: 0 };
 
+    // ── Passive mode: stand ground, only engage when very close ──
+    if (this.behaviorMode === 'passive') {
+      // Only move if opponent is in melee range (fight back) or very far (slow wander)
+      if (dist <= yardsToUnits(5) && hasLoS) {
+        // In melee — stand and fight
+        return { angle: null, speed: 0 };
+      }
+      // Otherwise idle — don't chase
+      return { angle: null, speed: 0 };
+    }
+
+    // ── Kiting mode: maintain distance, run away from melee ──
+    if (this.behaviorMode === 'kiting') {
+      const desiredRange = yardsToUnits(18);
+      const fleeRange = yardsToUnits(10);
+      if (dist < fleeRange) {
+        // Run away — avoid walls
+        const rawAngle = Math.atan2(-dx, -dz);
+        return { angle: this.wallAwareFleeAngle(rawAngle), speed: 1 };
+      }
+      if (dist > desiredRange + yardsToUnits(5)) {
+        // Too far — close in a bit so the fight actually happens
+        return { angle: Math.atan2(dx, dz), speed: 0.5 };
+      }
+      // Comfortable range — strafe (wall-aware)
+      const rawStrafe = Math.atan2(dx, dz) + Math.PI * 0.5;
+      return { angle: this.wallAwareFleeAngle(rawStrafe), speed: 0.6 };
+    }
+
+    // ── Aggressive mode (default): character-specific movement ──
     // No LoS: chase directly
     if (!hasLoS) {
       const angle = Math.atan2(dx, dz);
@@ -603,10 +676,10 @@ export class HeadlessNpcBrain {
     const attackRange = getCharacterStats('crackhead').autoAttackRange;
     const selfHpPct = this.selfHpPct();
 
-    // Low HP and enemy close: kite away
+    // Low HP and enemy close: kite away — wall-aware
     if (selfHpPct < 0.2 && dist < yardsToUnits(5)) {
-      const awayAngle = Math.atan2(-dx, -dz);
-      return { angle: awayAngle, speed: 1 };
+      const rawAngle = Math.atan2(-dx, -dz);
+      return { angle: this.wallAwareFleeAngle(rawAngle), speed: 1 };
     }
 
     // In melee range but not behind: strafe to get behind
@@ -627,10 +700,10 @@ export class HeadlessNpcBrain {
   private moveDrRetardo(dist: number, dx: number, dz: number): { angle: number | null; speed: number } {
     const desiredRange = yardsToUnits(15);
 
-    // Kite if enemy is close (< 8yd)
+    // Kite if enemy is close (< 8yd) — wall-aware
     if (dist < yardsToUnits(8)) {
-      const awayAngle = Math.atan2(-dx, -dz);
-      return { angle: awayAngle, speed: 1 };
+      const rawAngle = Math.atan2(-dx, -dz);
+      return { angle: this.wallAwareFleeAngle(rawAngle), speed: 1 };
     }
 
     // Move toward if out of ability range
@@ -649,5 +722,77 @@ export class HeadlessNpcBrain {
       return { angle: Math.atan2(dx, dz), speed: 1 };
     }
     return { angle: null, speed: 0 };
+  }
+
+  // ── Wall-aware flee ────────────────────────────────────────────────
+
+  /**
+   * Compute a flee angle that avoids running into walls/corners.
+   * Uses raycasts to detect obstacles and arena boundaries in the flee direction,
+   * and picks an alternative if the direct flee path is too short.
+   */
+  private wallAwareFleeAngle(rawAngle: number): number {
+    const e = this.entity;
+    const RAY_MAX = 8; // ~13 yards lookahead
+    const WALL_DANGER_DIST = 5; // Start adjusting within ~8 yards
+
+    const rawDirX = Math.sin(rawAngle);
+    const rawDirZ = Math.cos(rawAngle);
+
+    // Check wall/obstacle distance in the raw flee direction
+    const wallDist = this.collision.raycastDistance(e.x, e.z, rawDirX, rawDirZ, RAY_MAX, e.y);
+    const boundDist = this.boundaryDistInDir(e.x, e.z, rawDirX, rawDirZ);
+    const effectiveDist = Math.min(wallDist, boundDist);
+
+    if (effectiveDist > WALL_DANGER_DIST) return rawAngle; // Plenty of room
+
+    // Wall is close — evaluate candidate directions
+    // Ideal flee direction (normalized)
+    const idealX = rawDirX;
+    const idealZ = rawDirZ;
+
+    let bestAngle = rawAngle;
+    let bestScore = -Infinity;
+
+    // Sample 13 directions: original + 12 alternatives spanning ±180°
+    for (let i = -1; i < 12; i++) {
+      let angle: number;
+      if (i < 0) {
+        angle = rawAngle;
+      } else {
+        const sign = i % 2 === 0 ? 1 : -1;
+        const step = Math.ceil((i + 1) / 2);
+        angle = rawAngle + sign * step * (Math.PI / 6); // 30° steps
+      }
+
+      const cx = Math.sin(angle);
+      const cz = Math.cos(angle);
+
+      const cWallDist = this.collision.raycastDistance(e.x, e.z, cx, cz, RAY_MAX, e.y);
+      const cBoundDist = this.boundaryDistInDir(e.x, e.z, cx, cz);
+      const cDist = Math.min(cWallDist, cBoundDist);
+
+      // How much this direction aligns with ideal flee (1 = perfect, -1 = toward threat)
+      const fleeDot = cx * idealX + cz * idealZ;
+
+      const score = cDist * 3 + Math.max(0, fleeDot) * 2;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestAngle = angle;
+      }
+    }
+
+    return bestAngle;
+  }
+
+  /** Distance from (x,z) to the arena boundary in direction (dx,dz). */
+  private boundaryDistInDir(x: number, z: number, dx: number, dz: number): number {
+    let minT = Infinity;
+    if (dx > 0.001) minT = Math.min(minT, (this.bounds.maxX - x) / dx);
+    else if (dx < -0.001) minT = Math.min(minT, (this.bounds.minX - x) / dx);
+    if (dz > 0.001) minT = Math.min(minT, (this.bounds.maxZ - z) / dz);
+    else if (dz < -0.001) minT = Math.min(minT, (this.bounds.minZ - z) / dz);
+    return minT < 0 ? 0 : minT;
   }
 }
