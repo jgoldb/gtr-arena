@@ -5,7 +5,7 @@ import type { Targetable } from '../types';
 import type { RegenSystem } from './RegenSystem';
 import type { BuffSystem } from './BuffSystem';
 import type { CollisionSystem } from '../physics/CollisionSystem';
-import { type CombatError, type CombatResult, type CombatTextType, COMBAT_DURATION, MISS_CHANCE, GOD_MODE_DAMAGE_MULT, rollAbilityBaseDamage, applyBonusDamage, isFacingCheck } from '@gtr/shared';
+import { type CombatError, type CombatResult, type CombatTextType, COMBAT_DURATION, MISS_CHANCE, GOD_MODE_DAMAGE_MULT, rollAbilityBaseDamage, applyBonusDamage, isFacingCheck, abilityCooldown } from '@gtr/shared';
 
 export type { CombatError, CombatResult, CombatTextType };
 
@@ -161,6 +161,10 @@ export class CombatSystem {
 
   triggerGcd(duration: number): void {
     this.gcd = { remaining: duration, total: duration };
+  }
+
+  resetGcd(): void {
+    this.gcd = null;
   }
 
   getGcdRemaining(): number {
@@ -366,7 +370,7 @@ export class CombatSystem {
     }
 
     if (!this.godModeEntities.has(attacker) && !skipGlobalCooldown) {
-      this.setCooldown(ability.id, ability.cooldown);
+      this.setCooldown(ability.id, abilityCooldown(ability));
     }
 
     return { success: true };

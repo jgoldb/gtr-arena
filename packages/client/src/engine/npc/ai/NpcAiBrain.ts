@@ -4,7 +4,7 @@ import type { Targetable } from '../../types';
 import type { BuffSystem } from '../../combat/BuffSystem';
 import type { CombatSystem } from '../../combat/CombatSystem';
 import type { CollisionSystem } from '../../physics/CollisionSystem';
-import { getCharacterStats, yardsToUnits, isFacingCheck, Bandage, RecentlyBandagedDebuff, type Ability } from '@gtr/shared';
+import { getCharacterStats, yardsToUnits, isFacingCheck, Bandage, RecentlyBandagedDebuff, abilityCooldown, type Ability } from '@gtr/shared';
 import { MovementController } from './MovementController';
 import { NpcCooldownTracker } from './NpcCooldownTracker';
 import { NpcNavigation } from './NpcNavigation';
@@ -286,8 +286,10 @@ export class NpcAiBrain {
     if (ability.isChannel) {
       // Channels: deduct mana and set cooldown upfront (player behavior)
       this.npc.mana -= effectiveCost;
-      this.cooldowns.setCooldown(ability.id, ability.cooldown);
-      this.cooldowns.triggerGcd();
+      this.cooldowns.setCooldown(ability.id, abilityCooldown(ability));
+      if (!ability.offGcd) {
+        this.cooldowns.triggerGcd();
+      }
     }
     // Regular casts: mana/cooldown/GCD handled on completion via npcUseAbility
 
@@ -386,6 +388,10 @@ export class NpcAiBrain {
   }
 
   private cancelCasting(): void {
+    // Reset GCD when a non-channel cast is canceled
+    if (this.casting && !this.casting.isChannel) {
+      this.cooldowns.resetGcd();
+    }
     this.casting = null;
     this.npc.castingAbilityName = null;
     this.npc.castingAbilityId = null;
@@ -440,25 +446,36 @@ export class NpcAiBrain {
       return;
     }
 
-    // Neural rest: if the behavior wants to rest, stop fighting and sit down
+    // Always trigger neural inference so the model gets fresh observations every
+    // think cycle — matching the headless arena where the agent always receives new
+    // observations. Without this, resting creates a feedback loop: rest=1 → brain
+    // returns early → scoreActions never called → no new inference → stuck forever.
+    this.behavior.updateInference?.(this.cooldowns, this.currentTarget);
+
+    // Neural rest: only actually rest when conditions allow it.
+    // In the headless arena (training), rest=1 fails silently when inCombat/isMoving
+    // and movement+abilities still process. Match that behavior here: only commit to
+    // resting when it would actually succeed, otherwise fall through to normal combat.
     const wantsRest = this.behavior.wantsRest?.() ?? false;
-    if (wantsRest) {
+    if (wantsRest && !this.npc.inCombat && !this.npc.isMoving) {
       this.npc.autoAttackTarget = null;
       this.currentTargetEntity = this.currentTarget.entity;
       this.movement.intent = { type: 'idle' };
-      this.movement.faceTarget = this.currentTarget.position;
+      this.movement.faceTarget = null;
       this.engine.npcSetResting(this.npc, true);
       return;
     }
-    // Cancel resting if we were resting but no longer want to
+    // Cancel resting if we were resting but no longer want to (or can't)
     this.engine.npcSetResting(this.npc, false);
 
     // Set auto-attack target
     this.npc.autoAttackTarget = this.currentTarget.entity;
     this.currentTargetEntity = this.currentTarget.entity;
 
-    // Enter combat
-    if (!this.npc.inCombat) {
+    // Enter combat — rule-based behaviors force combat on engagement so
+    // auto-attacks start immediately. Neural behaviors enter combat organically
+    // through damage events, matching the training environment.
+    if (!this.npc.inCombat && !this.behavior.updateInference) {
       this.engine.combatSystem.enterCombat(this.npc);
     }
 

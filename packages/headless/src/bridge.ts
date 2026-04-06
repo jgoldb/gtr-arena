@@ -140,7 +140,7 @@ function handleStep(cmd: Record<string, unknown>): void {
       const termObs = flattenObs(result.observations);
       const newObs = flattenObs(arena.reset());
       obs.push(newObs);
-      infos.push({ terminal_obs: termObs, winner: result.winner, time: result.time });
+      infos.push({ terminal_obs: termObs, winner: result.winner, time: result.time, scripted: result.scripted });
     } else {
       obs.push(flattenObs(result.observations));
       infos.push({});

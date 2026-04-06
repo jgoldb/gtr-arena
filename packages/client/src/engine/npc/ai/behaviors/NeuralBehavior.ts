@@ -90,6 +90,17 @@ export class NeuralBehavior implements CharacterBehavior {
     return getCharacterStats(this.characterId).autoAttackRange;
   }
 
+  /**
+   * Trigger inference if not already running. Must be called every think cycle
+   * so the model always gets fresh observations — even when resting.
+   * In the headless arena (training), the agent receives a new observation every
+   * step regardless of its action outputs.
+   */
+  updateInference(cooldowns: NpcCooldownTracker, currentTarget: EntityInfo | null): void {
+    if (!this.session || !currentTarget) return;
+    this.scheduleInference(cooldowns, currentTarget);
+  }
+
   scoreActions(
     _world: WorldState,
     cooldowns: NpcCooldownTracker,

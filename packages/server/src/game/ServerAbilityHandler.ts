@@ -4,7 +4,7 @@ import type {
   S2C_GasCloudSpawn, S2C_ChemPoolSpawn,
   ServerMessage,
 } from '@gtr/shared';
-import { GLOBAL_COOLDOWN, yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff, Sweep, TweakerSprint, ChargeSystem } from '@gtr/shared';
+import { GLOBAL_COOLDOWN, yardsToUnits, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff, Sweep, TweakerSprint, ChargeSystem, abilityCooldown } from '@gtr/shared';
 import type { ServerEntity } from './ServerEntity.js';
 import type { ServerCombatSystem } from './ServerCombatSystem.js';
 import type { ServerBuffSystem } from './ServerBuffSystem.js';
@@ -103,8 +103,8 @@ export class ServerAbilityHandler {
     const ability = entity.abilities.find(a => a !== null && a.id === abilityId);
     if (!ability) return;
 
-    // Block during GCD (CC-immune abilities bypass GCD)
-    if (!entity.godMode && !ability.usableWhileCCd && this.deps.combatSystem.getGcdRemaining(entityId) > 0) {
+    // Block during GCD (CC-immune and off-GCD abilities bypass GCD)
+    if (!entity.godMode && !ability.usableWhileCCd && !ability.offGcd && this.deps.combatSystem.getGcdRemaining(entityId) > 0) {
       // Queue the ability if GCD is about to expire (within tolerance) — fires on next tick
       if (this.deps.combatSystem.getGcdRemaining(entityId) <= ServerAbilityHandler.ABILITY_QUEUE_TOLERANCE) {
         this.abilityQueue.set(entityId, { abilityId, targetEntityId, groundTarget, clientServerTimestamp, age: 0 });
@@ -112,6 +112,10 @@ export class ServerAbilityHandler {
       return;
     }
 
+    // Block CC-immune abilities (e.g. PvP Trinket) during normal casts, but allow during channels
+    if (ability.usableWhileCCd && this.deps.castingSystem.isCasting(entity) && !this.deps.castingSystem.isChanneling(entity)) {
+      return;
+    }
     // Cancel channel if starting new ability
     if (this.deps.castingSystem.isCasting(entity) && this.deps.combatSystem.getCooldownRemaining(entityId, abilityId) <= 0) {
       this.deps.castingSystem.cancel(entity);
@@ -153,7 +157,7 @@ export class ServerAbilityHandler {
       const result = this.deps.combatSystem.useAbility(ability, entity, target, targetPosOverride);
       if (result.success) {
         this.onAbilitySuccess(entity, ability, target);
-        if (!ability.usableWhileCCd) this.triggerEntityGcd(entity);
+        if (!ability.offGcd) this.triggerEntityGcd(entity);
       } else if (result.errorMessage) {
         this.deps.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
       }
@@ -208,7 +212,7 @@ export class ServerAbilityHandler {
     }
 
     if (!entity.godMode) {
-      this.deps.combatSystem.setCooldown(entity.id, ability.id, ability.cooldown);
+      this.deps.combatSystem.setCooldown(entity.id, ability.id, abilityCooldown(ability));
     }
 
     // Schedule damage for when the projectile lands
@@ -289,12 +293,13 @@ export class ServerAbilityHandler {
     this.deps.emitEvent(abilityEvent);
 
     // Send cooldown update to the entity's player (skip in god mode)
-    if (ability.cooldown > 0 && !entity.godMode) {
+    const cd = abilityCooldown(ability);
+    if (cd > 0 && !entity.godMode) {
       this.deps.onSendToPlayer?.(entity.id, {
         type: 'cooldown_update',
         abilityId: ability.id,
-        remaining: ability.cooldown,
-        total: ability.cooldown,
+        remaining: cd,
+        total: cd,
       } as S2C_CooldownUpdate);
     }
 
@@ -422,6 +427,17 @@ export class ServerAbilityHandler {
       abilityId: '__gcd__',
       remaining: GLOBAL_COOLDOWN,
       total: GLOBAL_COOLDOWN,
+    } as S2C_CooldownUpdate);
+  }
+
+  resetEntityGcd(entity: ServerEntity): void {
+    if (entity.godMode) return;
+    this.deps.combatSystem.triggerGcd(entity.id, 0);
+    this.deps.onSendToPlayer?.(entity.id, {
+      type: 'cooldown_update',
+      abilityId: '__gcd__',
+      remaining: 0,
+      total: 0,
     } as S2C_CooldownUpdate);
   }
 

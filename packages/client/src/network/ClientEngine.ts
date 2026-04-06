@@ -312,6 +312,7 @@ export class ClientEngine {
       isPredictingCast: (abilityId) => engine.abilitySystem.isPredictingCast(abilityId),
       clearPendingPrediction: () => engine.abilitySystem.clearPendingPrediction(),
       clearQueuedAbility: () => engine.abilitySystem.clearAbilityQueue(),
+      cancelCastFromServer: () => engine.abilitySystem.cancelCastLocally(),
       selectTarget: (t) => engine.selectTarget(t),
       activateBlind: (canvas) => engine.blindEffect.activate(canvas),
       deactivateBlind: () => engine.blindEffect.deactivate(),
@@ -348,6 +349,7 @@ export class ClientEngine {
       getLocalBuffEffects: () => engine.localBuffs,
       get onCooldownUpdate() { return engine.onCooldownUpdate; },
       get onQueuedAbilityReady() { return engine.onQueuedAbilityReady; },
+      sendCancelCast: () => engine.network.send({ type: 'cancel_cast' }),
     });
 
     // Dumpster Dive emerge SFX (local Crackhead player)
@@ -699,6 +701,10 @@ export class ClientEngine {
     this.sound.playAbilityEffectSfx(msg);
 
     if (msg.entityId === this.localEntityId) {
+      // If client is still showing this cast (slight timing difference), complete it now
+      if (this.localCastingAbilityId === msg.abilityId) {
+        this.abilitySystem.completeCastLocally();
+      }
       // If we predicted this ability, clear prediction state
       const predicted = this.abilitySystem.getPendingPredictionAbilityId() === msg.abilityId;
       if (predicted) {
@@ -1028,6 +1034,7 @@ export class ClientEngine {
   }
 
   sendCancelCast(): void {
+    this.abilitySystem.cancelCastLocally();
     this.network.send({ type: 'cancel_cast' });
   }
 
@@ -1151,12 +1158,11 @@ export class ClientEngine {
     // Update local player using the real PlayerController (same as playground)
     this.playerController.update(dt);
 
-    // Locally advance casting elapsed so animations run at render framerate (60fps)
-    // instead of server tickrate (30fps). Server corrections (pushback, interrupt)
-    // override via applyEntityStateDeltas / applyLocalEntityState.
-    if (this.localCastingAbilityId) {
-      this.localCastingElapsed += dt;
-    }
+    // Update casting, cooldowns, ability queue, and prediction timeout
+    // (must run before PlayerController sync so cancel/completion is reflected this frame)
+    this.abilitySystem.update(dt);
+
+    // Advance remote entity casting elapsed at render framerate
     for (const entity of this.remoteEntities.values()) {
       if (entity.castingAbilityId) {
         entity.castingElapsed += dt;
@@ -1205,9 +1211,6 @@ export class ClientEngine {
 
     // Send position updates (30Hz + immediate on state change)
     this.positionSync.update(dt);
-
-    // Update cooldowns, ability queue, and prediction timeout
-    this.abilitySystem.update(dt);
 
     // Locally decrement buff remaining timers so UI stays smooth between
     // server updates (server only sends buff changes on add/remove/shield change)

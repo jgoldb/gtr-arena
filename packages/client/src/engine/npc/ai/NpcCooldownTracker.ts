@@ -40,6 +40,11 @@ export class NpcCooldownTracker {
     this.gcdTotal = GLOBAL_COOLDOWN;
   }
 
+  resetGcd(): void {
+    this.gcdRemaining = 0;
+    this.gcdTotal = 0;
+  }
+
   update(dt: number): void {
     if (this.gcdRemaining > 0) {
       this.gcdRemaining = Math.max(0, this.gcdRemaining - dt);

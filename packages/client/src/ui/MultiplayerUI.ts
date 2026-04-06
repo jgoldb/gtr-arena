@@ -307,7 +307,7 @@ export function setup(deps: MultiplayerUIDeps): void {
       }
 
       if (clientEngine.isResting()) clientEngine.stopResting();
-      // Cancel current channel if starting new ability (same as playground)
+      // Cancel current channel if starting new ability
       const castState = clientEngine.getLocalCastingState();
       if (castState?.isChannel && clientEngine.getCooldownRemaining(ability.id) <= 0) {
         clientEngine.sendCancelCast();
@@ -315,7 +315,7 @@ export function setup(deps: MultiplayerUIDeps): void {
 
       // Determine if blocked by GCD or casting
       const gcdRemaining = clientEngine.getGcdRemaining();
-      const gcdBlocked = !ability.usableWhileCCd && gcdRemaining > 0;
+      const gcdBlocked = !ability.usableWhileCCd && !ability.offGcd && gcdRemaining > 0;
       const castBlocked = castState !== null && !castState.isChannel;
       const castRemaining = castBlocked ? Math.max(0, castState!.totalTime - castState!.elapsed) : 0;
 
@@ -340,16 +340,25 @@ export function setup(deps: MultiplayerUIDeps): void {
       getCooldownRemaining: (id: string) => clientEngine.getCooldownRemaining(id),
       getCooldownTotal: (id: string) => clientEngine.getCooldownTotal(id),
     }) as any,
-    getGcdRemaining: () => clientEngine.getGcdRemaining(),
-    getGcdTotal: () => clientEngine.getGcdTotal(),
-    isDisabled: () => {
-      if (player.dead || player.stunned || player.charging) return true;
+    getGcdRemaining: () => {
+      const gcd = clientEngine.getGcdRemaining();
       const castState = clientEngine.getLocalCastingState();
       if (castState && !castState.isChannel) {
-        // Allow ability presses in the last 400ms of a cast for queuing
-        const castRemaining = Math.max(0, castState.totalTime - castState.elapsed);
-        return !clientEngine.isWithinQueueWindow(castRemaining);
+        return Math.max(gcd, Math.max(0, castState.totalTime - castState.elapsed));
       }
+      return gcd;
+    },
+    getGcdTotal: () => {
+      const gcdTotal = clientEngine.getGcdTotal();
+      const castState = clientEngine.getLocalCastingState();
+      if (castState && !castState.isChannel) {
+        const castRemaining = Math.max(0, castState.totalTime - castState.elapsed);
+        if (castRemaining > clientEngine.getGcdRemaining()) return castState.totalTime;
+      }
+      return gcdTotal;
+    },
+    isDisabled: () => {
+      if (player.dead || player.stunned || player.charging) return true;
       return false;
     },
     getQueuedAbilityId: () => clientEngine.getQueuedAbilityId(),

@@ -1,4 +1,5 @@
 import type { S2C_GameStart, S2C_RejoinGame } from '@gtr/shared';
+import { DebugStun, DiscombobulateDebuff } from './engine/combat/Ability';
 import { Vector3 as THREEVector3 } from 'three';
 import { AuthScreen } from './screens/AuthScreen';
 import { LobbyScreen } from './screens/LobbyScreen';
@@ -935,7 +936,6 @@ async function startPlayground(): Promise<void> {
   const { MapSelector } = await import('./ui/MapSelector');
   const { CharacterSelector } = await import('./ui/CharacterSelector');
   const { NpcSpawner } = await import('./ui/NpcSpawner');
-  const { DebugStun, DiscombobulateDebuff } = await import('./engine/combat/Ability');
 
   const engine = new Engine(canvas);
   engine.isAdmin = isAdmin;

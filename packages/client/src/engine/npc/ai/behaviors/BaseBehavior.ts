@@ -38,6 +38,9 @@ export interface CharacterBehavior {
 
   /** Whether this behavior wants to rest (sit down for mana regen). Default: false. */
   wantsRest?(): boolean;
+
+  /** Trigger inference update (neural behaviors only). Called every think cycle. */
+  updateInference?(cooldowns: NpcCooldownTracker, currentTarget: EntityInfo | null): void;
 }
 
 /**

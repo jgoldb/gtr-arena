@@ -1,6 +1,6 @@
 import type { Positionable } from './types.js';
 import type { Ability, BuffDefinition } from './abilities.js';
-import { RecentlyBandagedDebuff } from './abilities.js';
+import { RecentlyBandagedDebuff, abilityCooldown } from './abilities.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -39,6 +39,7 @@ export interface CastingCallbacks<T extends Positionable> {
   consumeMana(entity: T, amount: number): void;
   notifyManaUsed(entity: T): void;
   triggerGcd(entity: T): void;
+  resetGcd(entity: T): void;
   setCooldown(entity: T, abilityId: string, duration: number): void;
   clearCooldown(entity: T, abilityId: string): void;
 
@@ -83,8 +84,10 @@ export class CastingSystem<T extends Positionable> {
 
     const godMode = this.cb.isGodMode(entity);
 
-    // GCD at cast/channel start
-    this.cb.triggerGcd(entity);
+    // GCD at cast/channel start (skip for off-GCD abilities)
+    if (!ability.offGcd) {
+      this.cb.triggerGcd(entity);
+    }
 
     const isChannel = ability.isChannel ?? false;
 
@@ -94,7 +97,7 @@ export class CastingSystem<T extends Positionable> {
         const effectiveCost = Math.round(ability.manaCost * this.cb.getManaCostMultiplier(entity));
         this.cb.consumeMana(entity, effectiveCost);
         if (effectiveCost > 0) this.cb.notifyManaUsed(entity);
-        this.cb.setCooldown(entity, ability.id, ability.cooldown);
+        this.cb.setCooldown(entity, ability.id, abilityCooldown(ability));
       }
 
       if (target && target.isHostileTo(entity)) {
@@ -154,6 +157,11 @@ export class CastingSystem<T extends Positionable> {
     const casting = this.states.get(entity);
     if (!casting) return;
     this.removeChannelAura(casting);
+    // Reset GCD when a cast-time ability is canceled (not channels — they already consumed resources)
+    if (!casting.isChannel) {
+      this.cb.resetGcd(entity);
+      this.cb.clearCooldown(entity, casting.ability.id);
+    }
     this.states.delete(entity);
     this.cb.onCastEnded?.(entity, casting.ability, casting.isChannel);
   }

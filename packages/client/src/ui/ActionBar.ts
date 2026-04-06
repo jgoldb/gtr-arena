@@ -1,5 +1,5 @@
 import { YARDS_TO_UNITS, type Ability } from '../engine/combat/Ability';
-import { getCharacterStats, type CharacterId } from '@gtr/shared';
+import { getCharacterStats, abilityCooldown, type CharacterId } from '@gtr/shared';
 import type { CombatSystem } from '../engine/combat/CombatSystem';
 import { keybindManager, matchesKeybindEvent } from './KeybindManager';
 
@@ -269,7 +269,7 @@ export class ActionBar {
         continue;
       }
       const cdRemaining = combat.getCooldownRemaining(slot.ability.id);
-      const gcdRemaining = this.callbacks.getGcdRemaining?.() ?? 0;
+      const gcdRemaining = slot.ability.offGcd ? 0 : (this.callbacks.getGcdRemaining?.() ?? 0);
       const onCooldown = cdRemaining > 0 || gcdRemaining > 0;
 
       // Status tint: red for out-of-range, blue for not-enough-resource
@@ -475,7 +475,8 @@ export class ActionBar {
 
   private showTooltip(ability: Ability, anchor: HTMLElement): void {
     const hasRange = ability.range !== undefined;
-    const hasCooldown = ability.cooldown > 0;
+    const cd = abilityCooldown(ability);
+    const hasCooldown = cd > 0;
 
     let statsHtml = '';
     if (ability.isAutoAttack && this.currentCharacterId) {
@@ -492,7 +493,7 @@ export class ActionBar {
       statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${label}</div>`;
     }
     if (hasCooldown) {
-      statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${ability.cooldown}s cooldown</div>`;
+      statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${cd}s cooldown</div>`;
     }
     if (ability.castTime) {
       statsHtml += `<div style="color:#aaa;font-size:11px;margin-bottom:2px;">${ability.castTime}s cast</div>`;

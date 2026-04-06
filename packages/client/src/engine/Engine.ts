@@ -8,7 +8,7 @@ import type { BuffDefinition } from './combat/BuffSystem';
 import { CastingSystem } from './combat/CastingSystem';
 import { AutoAttackSystem } from './combat/AutoAttackSystem';
 import { CharacterId } from './player/characters';
-import { getCharacterStats, getCharacterSfx, isRangedAutoAttack, GasCloudSystem, DotSystem, ChemicalPoolSystem, FullRetardAuraSystem, ChargeSystem, KABOOM_CONE_RANGE } from '@gtr/shared';
+import { getCharacterStats, getCharacterSfx, isRangedAutoAttack, GasCloudSystem, DotSystem, ChemicalPoolSystem, FullRetardAuraSystem, ChargeSystem, KABOOM_CONE_RANGE, abilityCooldown } from '@gtr/shared';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera';
 import { NpcController } from './npc/NpcController';
 import { TargetingSystem } from './targeting/TargetingSystem';
@@ -131,6 +131,7 @@ export class Engine {
       consumeMana: (entity, amount) => { entity.mana -= amount; },
       notifyManaUsed: (entity) => this.regenSystem.notifyManaUsed(entity),
       triggerGcd: () => { if (!this.godMode) this.combatSystem.triggerGcd(GLOBAL_COOLDOWN); },
+      resetGcd: () => { this.combatSystem.resetGcd(); },
       setCooldown: (_entity, abilityId, duration) => { if (!this.godMode) this.combatSystem.setCooldown(abilityId, duration); },
       clearCooldown: (_entity, abilityId) => this.combatSystem.clearCooldown(abilityId),
       rollMiss: () => this.combatSystem.rollMiss(),
@@ -211,10 +212,16 @@ export class Engine {
       if (target === this.playerController) {
         this.castingSystem.applyPushback(this.playerController);
       }
-      // NPC spell pushback
+      // NPC: cancel resting + spell pushback on damage
       for (const npc of this.npcSystem.getNpcs()) {
-        if (npc === target && npc.aiBrain) {
-          npc.aiBrain.applyPushback();
+        if (npc === target) {
+          if (this.buffSystem.hasBuff(npc, 'resting')) {
+            this.buffSystem.remove(npc, RestingBuff.id, true);
+            npc.setResting(false);
+          }
+          if (npc.aiBrain) {
+            npc.aiBrain.applyPushback();
+          }
           break;
         }
       }
@@ -760,7 +767,7 @@ export class Engine {
     }
 
     if (!this.godMode) {
-      this.combatSystem.setCooldown(ability.id, ability.cooldown);
+      this.combatSystem.setCooldown(ability.id, abilityCooldown(ability));
       this.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
     }
 

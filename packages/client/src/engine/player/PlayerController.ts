@@ -169,6 +169,7 @@ export class PlayerController implements Targetable {
   }
 
   setResting(active: boolean): void {
+    this.resting = active;
     this.characterModel.setResting(active);
   }
 
@@ -178,6 +179,7 @@ export class PlayerController implements Targetable {
 
   movementSpeedModifier = 1;
   stunned = false;
+  resting = false;
   charging = false;
   chargeAnimSpeed = 1;
   discombobulated = false;
@@ -288,6 +290,35 @@ export class PlayerController implements Targetable {
         isMoving: false,
         isGrounded: this.grounded,
         velocityY: this.velocityY,
+        turnSpeed: 0,
+        speedMultiplier: 1,
+        strafeDirection: 0,
+      });
+      return;
+    }
+
+    if (this.resting) {
+      // Resting: no movement, no rotation — only gravity/ground resolution
+      this.isMoving = false;
+      this.moveFlags = 0;
+      this.currentMoveSpeed = 0;
+      this.velocityY -= this.gravity * deltaTime;
+      this.mesh.position.y += this.velocityY * deltaTime;
+      const resolved = this.mapManager.collision.resolve(
+        this.mesh.position.x, this.mesh.position.z,
+        this.mesh.position.y, this.collisionRadius
+      );
+      this.mesh.position.x = resolved.x;
+      this.mesh.position.z = resolved.z;
+      if (this.mesh.position.y <= resolved.groundY) {
+        this.mesh.position.y = resolved.groundY;
+        this.velocityY = 0;
+        this.grounded = true;
+      }
+      this.characterModel.update(deltaTime, {
+        isMoving: false,
+        isGrounded: this.grounded,
+        velocityY: 0,
         turnSpeed: 0,
         speedMultiplier: 1,
         strafeDirection: 0,

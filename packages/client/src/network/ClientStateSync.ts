@@ -57,6 +57,7 @@ export interface ClientStateSyncHost {
   isPredictingCast(abilityId: string): boolean;
   clearPendingPrediction(): void;
   clearQueuedAbility(): void;
+  cancelCastFromServer(): void;
 
   // Actions
   selectTarget(target: Targetable | null): void;
@@ -106,17 +107,34 @@ export class ClientStateSync {
         if (delta.charging !== undefined) pc.charging = delta.charging;
         if (delta.isAutoAttacking !== undefined) pc.setAutoAttacking(delta.isAutoAttacking);
         if ('castingAbilityId' in delta) {
-          // Server confirmed the cast we predicted — clear prediction so it won't timeout/revert
-          if (host.isPredictingCast(delta.castingAbilityId!)) {
-            host.clearPendingPrediction();
+          const serverAbilityId = delta.castingAbilityId!;
+          const clientAbilityId = host.localCastingAbilityId;
+
+          if (serverAbilityId && serverAbilityId === clientAbilityId) {
+            // Server confirms the cast we're driving locally — clear prediction, keep client state
+            if (host.isPredictingCast(serverAbilityId)) {
+              host.clearPendingPrediction();
+            }
+          } else if (!serverAbilityId && clientAbilityId) {
+            // Server rejected or interrupted our cast — cancel locally
+            host.cancelCastFromServer();
+          } else if (serverAbilityId && serverAbilityId !== clientAbilityId) {
+            // Different cast or client isn't casting — accept server authority
+            host.sound.updateBandageLoop(delta.id, clientAbilityId, serverAbilityId);
+            host.sound.updateCastSpellLoop(delta.id, clientAbilityId, serverAbilityId);
+            host.localCastingAbilityId = serverAbilityId;
           }
-          host.sound.updateBandageLoop(delta.id, host.localCastingAbilityId, delta.castingAbilityId!);
-          host.sound.updateCastSpellLoop(delta.id, host.localCastingAbilityId, delta.castingAbilityId!);
-          host.localCastingAbilityId = delta.castingAbilityId!;
+          // Server says null, client says null — no-op
         }
-        if (delta.castingElapsed !== undefined) host.localCastingElapsed = delta.castingElapsed;
+        // Accept totalTime changes (handles pushback from server)
         if (delta.castingTotalTime !== undefined) host.localCastingTotalTime = delta.castingTotalTime;
-        if (delta.castingIsChannel !== undefined) host.localCastingIsChannel = delta.castingIsChannel;
+        // Ignore server elapsed/isChannel when client is driving the same cast
+        if (delta.castingElapsed !== undefined && !host.localCastingAbilityId) {
+          host.localCastingElapsed = delta.castingElapsed;
+        }
+        if (delta.castingIsChannel !== undefined && !host.localCastingAbilityId) {
+          host.localCastingIsChannel = delta.castingIsChannel;
+        }
         if ('targetEntityId' in delta) host.localTargetEntityId = delta.targetEntityId!;
         continue;
       }
@@ -171,12 +189,18 @@ export class ClientStateSync {
     pc.charging = snap.charging;
     pc.setAutoAttacking(snap.isAutoAttacking);
     pc.setStunned(snap.stunned);
-    host.sound.updateBandageLoop(snap.id, host.localCastingAbilityId, snap.castingAbilityId);
-    host.sound.updateCastSpellLoop(snap.id, host.localCastingAbilityId, snap.castingAbilityId);
-    host.localCastingAbilityId = snap.castingAbilityId;
-    host.localCastingElapsed = snap.castingElapsed;
-    host.localCastingTotalTime = snap.castingTotalTime;
-    host.localCastingIsChannel = snap.castingIsChannel;
+    // If client is actively casting, preserve client-driven casting state (only accept totalTime for pushback).
+    // Otherwise accept the keyframe's casting state.
+    if (host.localCastingAbilityId) {
+      host.localCastingTotalTime = snap.castingTotalTime;
+    } else {
+      host.sound.updateBandageLoop(snap.id, host.localCastingAbilityId, snap.castingAbilityId);
+      host.sound.updateCastSpellLoop(snap.id, host.localCastingAbilityId, snap.castingAbilityId);
+      host.localCastingAbilityId = snap.castingAbilityId;
+      host.localCastingElapsed = snap.castingElapsed;
+      host.localCastingTotalTime = snap.castingTotalTime;
+      host.localCastingIsChannel = snap.castingIsChannel;
+    }
     host.localTargetEntityId = snap.targetEntityId;
   }
 

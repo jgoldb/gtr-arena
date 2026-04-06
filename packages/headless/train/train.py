@@ -110,31 +110,42 @@ class CurriculumCallback(BaseCallback):
 
 
 class WinRateCallback(BaseCallback):
-    """Logs win rate and episode stats to TensorBoard."""
+    """Logs win rate and episode stats to TensorBoard, split by opponent type."""
 
     def __init__(self, window: int = 100, verbose: int = 0):
         super().__init__(verbose)
         self.window = window
         self.outcomes: list[bool] = []
+        self.scripted_outcomes: list[bool] = []
+        self.external_outcomes: list[bool] = []
         self.episode_times: list[float] = []
 
     def _on_step(self) -> bool:
         for info in self.locals.get("infos", []):
             if "is_win" in info:
                 self.outcomes.append(info["is_win"])
+                if info.get("scripted", False):
+                    self.scripted_outcomes.append(info["is_win"])
+                else:
+                    self.external_outcomes.append(info["is_win"])
             if "episode_time" in info:
                 self.episode_times.append(info["episode_time"])
 
         if len(self.outcomes) >= self.window:
             recent = self.outcomes[-self.window :]
-            win_rate = sum(recent) / len(recent)
-            self.logger.record("gtr/win_rate", win_rate)
+            self.logger.record("gtr/win_rate", sum(recent) / len(recent))
             self.logger.record("gtr/total_episodes", len(self.outcomes))
             if self.episode_times:
                 self.logger.record(
                     "gtr/avg_episode_time",
                     np.mean(self.episode_times[-self.window :]),
                 )
+        if len(self.scripted_outcomes) >= self.window:
+            recent = self.scripted_outcomes[-self.window :]
+            self.logger.record("gtr/win_rate_vs_scripted", sum(recent) / len(recent))
+        if len(self.external_outcomes) >= self.window:
+            recent = self.external_outcomes[-self.window :]
+            self.logger.record("gtr/win_rate_vs_external", sum(recent) / len(recent))
 
         return True
 
@@ -355,6 +366,12 @@ def main():
         n = min(100, len(win_cb.outcomes))
         final_wr = sum(win_cb.outcomes[-n:]) / n
         print(f"Final win rate (last {n}): {final_wr:.1%}")
+    if win_cb.scripted_outcomes:
+        n = min(100, len(win_cb.scripted_outcomes))
+        print(f"  vs scripted (last {n}): {sum(win_cb.scripted_outcomes[-n:]) / n:.1%}")
+    if win_cb.external_outcomes:
+        n = min(100, len(win_cb.external_outcomes))
+        print(f"  vs external (last {n}): {sum(win_cb.external_outcomes[-n:]) / n:.1%}")
     print(f"{'='*50}")
 
     env.close()

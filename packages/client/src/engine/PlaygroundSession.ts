@@ -432,8 +432,10 @@ export function createPlaygroundSession(config: PlaygroundSessionConfig): Playgr
       }
 
       if (engine.isResting()) engine.stopResting();
+      // Block all abilities during normal (non-channel) casts
+      if (engine.isCasting() && !engine.isChanneling()) return;
       if (engine.isChanneling() && engine.combatSystem.getCooldownRemaining(ability.id) <= 0) engine.cancelCasting();
-      if (!engine.godMode && !ability.usableWhileCCd && engine.combatSystem.getGcdRemaining() > 0) return;
+      if (!engine.godMode && !ability.usableWhileCCd && !ability.offGcd && engine.combatSystem.getGcdRemaining() > 0) return;
 
       if (ability.groundTargeted) {
         if (pendingGroundAbility?.id === ability.id) {
@@ -462,7 +464,7 @@ export function createPlaygroundSession(config: PlaygroundSessionConfig): Playgr
         const result = engine.combatSystem.useAbility(ability, engine.playerController, engine.playerController.mesh.rotation.y, target);
         if (result.success) {
           onAbilitySuccess(ability);
-          if (!engine.godMode && !ability.usableWhileCCd) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+          if (!engine.godMode && !ability.offGcd) engine.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
           if (ability.id === 'pvp-trinket') {
             engine.buffSystem.removeAllCCEffects(engine.playerController);
             const trinketSfx = getSharedSfx().pvpTrinket;
@@ -508,9 +510,24 @@ export function createPlaygroundSession(config: PlaygroundSessionConfig): Playgr
     },
 
     getCombatSystem: () => engine.combatSystem,
-    getGcdRemaining: () => engine.combatSystem.getGcdRemaining(),
-    getGcdTotal: () => engine.combatSystem.getGcdTotal(),
-    isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging || (engine.isCasting() && !engine.isChanneling()),
+    getGcdRemaining: () => {
+      const gcd = engine.combatSystem.getGcdRemaining();
+      const castState = engine.getCastingState();
+      if (castState && !castState.isChannel) {
+        return Math.max(gcd, Math.max(0, castState.totalTime - castState.elapsed));
+      }
+      return gcd;
+    },
+    getGcdTotal: () => {
+      const gcdTotal = engine.combatSystem.getGcdTotal();
+      const castState = engine.getCastingState();
+      if (castState && !castState.isChannel) {
+        const castRemaining = Math.max(0, castState.totalTime - castState.elapsed);
+        if (castRemaining > engine.combatSystem.getGcdRemaining()) return castState.totalTime;
+      }
+      return gcdTotal;
+    },
+    isDisabled: () => engine.playerController.dead || engine.playerController.stunned || engine.playerController.charging,
     isAutoAttacking: () => engine.isAutoAttackActive(),
   });
 

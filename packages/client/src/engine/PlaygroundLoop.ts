@@ -115,7 +115,8 @@ export class PlaygroundLoop {
 
       // NPC auto-attack updates (NPCs still fight each other)
       for (const npc of host.npcSystem.getNpcs()) {
-        if (npc.inCombat && npc.autoAttackTarget && !npc.dead && !npc.stunned && !npc.blinded) {
+        const npcResting = host.buffSystem.hasBuff(npc, 'resting');
+        if (npc.inCombat && npc.autoAttackTarget && !npc.dead && !npc.stunned && !npc.blinded && !npcResting) {
           autoAttackSystem.start(npc, npc.autoAttackTarget);
         } else if (autoAttackSystem.isAttacking(npc)) {
           autoAttackSystem.stop(npc);
@@ -160,7 +161,8 @@ export class PlaygroundLoop {
 
     autoAttackSystem.update(playerController, deltaTime);
     for (const npc of host.npcSystem.getNpcs()) {
-      if (npc.inCombat && npc.autoAttackTarget && !npc.dead && !npc.stunned && !npc.blinded) {
+      const npcResting = host.buffSystem.hasBuff(npc, 'resting');
+      if (npc.inCombat && npc.autoAttackTarget && !npc.dead && !npc.stunned && !npc.blinded && !npcResting) {
         autoAttackSystem.start(npc, npc.autoAttackTarget);
       } else if (autoAttackSystem.isAttacking(npc)) {
         autoAttackSystem.stop(npc);

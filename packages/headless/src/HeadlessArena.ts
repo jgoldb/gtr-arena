@@ -42,6 +42,7 @@ import {
   KABOOM_CONE_RANGE,
   KABOOM_CONE_HALF_ANGLE,
   RestingBuff,
+  abilityCooldown,
 } from '@gtr/shared';
 import { HeadlessEntity } from './HeadlessEntity.js';
 import { HeadlessCombat } from './HeadlessCombat.js';
@@ -138,6 +139,8 @@ export interface StepResult {
   winner: number;
   /** Total elapsed simulation time in seconds. */
   time: number;
+  /** Whether the opponent was scripted AI this episode. */
+  scripted: boolean;
 }
 
 export interface ArenaConfig {
@@ -184,7 +187,7 @@ interface ActiveBuffWindow {
 }
 
 const BUFF_WASTE_BASE_PENALTY = 0.015;
-const OFFENSIVE_BUFF_WASTE_MULTIPLIER = 1.3;
+const OFFENSIVE_BUFF_WASTE_MULTIPLIER = 2.5;
 
 const BOTTLE_CHUCK_IMPACT_DELAY = 0.825;
 
@@ -263,10 +266,14 @@ export class HeadlessArena {
   private trinketWastedCount: [number, number] = [0, 0];
   /** Accumulated penalty for offensive self-buffs used far from opponent (distance-scaled). */
   private prematureCooldownPenalty: [number, number] = [0, 0];
+  /** Bonus for using offensive self-buffs reactively (opponent already in range). */
+  private reactiveBuffBonus: [number, number] = [0, 0];
   /** Damage dealt by charge abilities (Sweep, etc.) — tracked separately for bonus reward. */
   private chargeDamageDealt: [number, number] = [0, 0];
   /** Count of Sweep charges that finished without hitting anyone. */
   private sweepWhiffCount: [number, number] = [0, 0];
+  /** Count of Sweep charges used as a gap closer (far from opponent). */
+  private sweepGapCloseCount: [number, number] = [0, 0];
   /** Tracks unique ability IDs used per step for diversity bonus. */
   private abilitiesUsedThisStep: [Set<string>, Set<string>] = [new Set(), new Set()];
   /** Running ability usage counts (EMA) for intrinsic curiosity reward. Persists across episodes. */
@@ -277,6 +284,8 @@ export class HeadlessArena {
   private activeBuffWindows: ActiveBuffWindow[] = [];
   /** Mana snapshot at start of step, for tracking mana gained while resting. */
   private manaAtStepStart: [number, number] = [0, 0];
+  /** Total mana spent on abilities this step (for mana efficiency reward). */
+  private manaSpent: [number, number] = [0, 0];
 
   // Opponent config
   /** 0–1 fraction of episodes using scripted AI. 1.0 = pure scripted, 0 = pure external. */
@@ -384,6 +393,7 @@ export class HeadlessArena {
       consumeMana: (entity, amount) => { entity.mana -= amount; },
       notifyManaUsed: (entity) => this.regenSystem.notifyManaUsed(entity),
       triggerGcd: (entity) => entity.cooldowns.triggerGcd(),
+      resetGcd: (entity) => entity.cooldowns.resetGcd(),
       setCooldown: (entity, abilityId, duration) => entity.cooldowns.setCooldown(abilityId, duration),
       clearCooldown: (entity, abilityId) => entity.cooldowns.clearCooldown(abilityId),
       rollMiss: () => Math.random() < MISS_CHANCE,
@@ -634,6 +644,7 @@ export class HeadlessArena {
     this.buffWastePenalty = [0, 0];
     this.trinketWastedCount = [0, 0];
     this.sweepWhiffCount = [0, 0];
+    this.sweepGapCloseCount = [0, 0];
     this.activeBuffWindows = [];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
 
@@ -753,6 +764,7 @@ export class HeadlessArena {
         done: true,
         winner: this.winner,
         time: this.elapsed,
+        scripted: this.opponentBrain !== null,
       };
     }
 
@@ -785,11 +797,14 @@ export class HeadlessArena {
     this.buffWastePenalty = [0, 0];
     this.trinketWastedCount = [0, 0];
     this.prematureCooldownPenalty = [0, 0];
+    this.reactiveBuffBonus = [0, 0];
     this.chargeDamageDealt = [0, 0];
     this.sweepWhiffCount = [0, 0];
+    this.sweepGapCloseCount = [0, 0];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
     this.curiosityBonus = [0, 0];
     this.manaAtStepStart = [this.entities[0].mana, this.entities[1].mana];
+    this.manaSpent = [0, 0];
 
     // Process actions for each entity
     for (let i = 0; i < 2; i++) {
@@ -868,8 +883,8 @@ export class HeadlessArena {
         this.buffSystem.remove(entity, 'resting', true);
       }
 
-      // ── Face opponent (auto) ──────────────────────────────────
-      if (!opponent.dead) {
+      // ── Face opponent (auto) — locked while resting ────────────
+      if (!opponent.dead && !this.buffSystem.hasBuff(entity, 'resting')) {
         entity.faceToward(opponent);
       }
 
@@ -890,6 +905,10 @@ export class HeadlessArena {
         } else {
         const ability = entity.abilities[action.abilityIndex];
         if (ability && !ability.isAutoAttack) {
+          // CC-immune abilities (e.g. PvP Trinket) cancel a channel and proceed, but are blocked during normal casts
+          if (ability.usableWhileCCd && this.castingSystem.isChanneling(entity)) {
+            this.castingSystem.cancel(entity);
+          }
           if (this.castingSystem.isCasting(entity)) {
             // Trying to use ability while casting — wasted action
             this.abilityFailedCount[i]++;
@@ -920,6 +939,9 @@ export class HeadlessArena {
             if (validation.success) {
               const castResult = this.castingSystem.start(entity, ability, target);
               if (castResult.started) {
+                // Track mana spent for efficiency reward
+                const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
+                this.manaSpent[i] += effectiveCost;
                 this.abilityUsedCount[i]++;
                 this.abilitiesUsedThisStep[i].add(ability.id);
                 this.recordAbilityForCuriosity(i, action.abilityIndex!);
@@ -927,7 +949,7 @@ export class HeadlessArena {
                   this.activeBuffWindows.push({
                     entityIdx: i, abilityId: ability.id,
                     buffId: ability.appliesSelfBuff.id,
-                    cooldown: ability.cooldown, ticksActive: 0, ticksProductive: 0,
+                    cooldown: abilityCooldown(ability), ticksActive: 0, ticksProductive: 0,
                   });
                 }
                 if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
@@ -951,6 +973,9 @@ export class HeadlessArena {
             }
             const result = this.combat.useAbility(ability, entity, target);
             if (result.success) {
+              // Track mana spent for efficiency reward
+              const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
+              this.manaSpent[i] += effectiveCost;
               // Track trinket used while not CC'd (before post-effects clear CC)
               if (ability.id === 'pvp-trinket' &&
                   !this.buffSystem.isStunned(entity) &&
@@ -960,7 +985,7 @@ export class HeadlessArena {
               }
               // Track offensive self-buff used while far from opponent (distance-scaled penalty)
               if (ability.appliesSelfBuff && !ability.healAmount &&
-                  ability.cooldown >= 15) {
+                  abilityCooldown(ability) >= 15) {
                 const buffDist = entity.distanceTo(opponent);
                 const productiveRange = entity.autoAttackRange * 1.5;
                 if (buffDist > productiveRange) {
@@ -969,8 +994,17 @@ export class HeadlessArena {
                   const timeToClose = (buffDist - productiveRange) / yardsToUnits(8);
                   const wastedFraction = Math.min(timeToClose / buffDuration, 0.9);
                   // Higher-CD abilities are more costly to waste (60s CD = 2x, 30s = 1x)
-                  const cdImportance = ability.cooldown / 30;
-                  this.prematureCooldownPenalty[i] += wastedFraction * cdImportance * 0.025;
+                  const cdImportance = abilityCooldown(ability) / 30;
+                  this.prematureCooldownPenalty[i] += wastedFraction * cdImportance * 0.06;
+                } else {
+                  // Reactive use — opponent already in range, reward good timing
+                  const buffEffects = ability.appliesSelfBuff.effects ?? [];
+                  const isOffensive = buffEffects.some(e =>
+                    e.type === 'autoAttackSpeedPercent' || e.type === 'damageDealtPercent');
+                  if (isOffensive) {
+                    const cdImportance = abilityCooldown(ability) / 30;
+                    this.reactiveBuffBonus[i] += cdImportance * 0.03;
+                  }
                 }
               }
               this.handleAbilityPostEffects(entity, ability, target, opponent);
@@ -981,7 +1015,7 @@ export class HeadlessArena {
                 this.activeBuffWindows.push({
                   entityIdx: i, abilityId: ability.id,
                   buffId: ability.appliesSelfBuff.id,
-                  cooldown: ability.cooldown, ticksActive: 0, ticksProductive: 0,
+                  cooldown: abilityCooldown(ability), ticksActive: 0, ticksProductive: 0,
                 });
               }
               if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
@@ -1101,8 +1135,8 @@ export class HeadlessArena {
         rewards[i] += (myHpPct - oppHpPct) * 0.002;
       }
 
-      // Ability usage — small flat bonus; effective use rewarded via damage/CC
-      rewards[i] += this.abilityUsedCount[i] * 0.001;
+      // Ability usage — tiny flat bonus; real value comes from damage/CC/heal rewards
+      rewards[i] += this.abilityUsedCount[i] * 0.0003;
       rewards[i] -= this.abilityFailedCount[i] * 0.002;
 
       // Ability diversity bonus — reward using multiple distinct abilities per step
@@ -1123,12 +1157,18 @@ export class HeadlessArena {
       // Premature cooldown penalty — offensive buff used far from opponent (distance-scaled)
       rewards[i] -= this.prematureCooldownPenalty[i];
 
+      // Reactive buff bonus — reward using offensive self-buffs when opponent is already in range
+      rewards[i] += this.reactiveBuffBonus[i];
+
       // Charge ability damage bonus — extra reward for landing Sweep/charge damage
       // (on top of general damage reward; encourages learning skill-shot positioning)
       rewards[i] += this.chargeDamageDealt[i] * 0.0002;
 
       // Sweep whiff penalty — wasted cooldown + mana when charge hits nobody
-      rewards[i] -= this.sweepWhiffCount[i] * 0.03;
+      rewards[i] -= this.sweepWhiffCount[i] * 0.08;
+
+      // Sweep gap-close penalty — using Sweep from far away wastes CD + mana for mobility
+      rewards[i] -= this.sweepGapCloseCount[i] * 0.15;
 
       // CC application bonus (stun/sleep/blind)
       rewards[i] += this.ccAppliedCount[i] * 0.008;
@@ -1136,18 +1176,52 @@ export class HeadlessArena {
       // Auto-attack hit bonus — directly rewards melee engagement
       rewards[i] += this.autoAttackHits[i] * 0.005;
 
-      // Resting — reward mana recovered while resting, penalize resting near enemies
+      // ── Mana efficiency ──────────────────────────────────────────────
+      if (entity.maxMana > 0) {
+        // Mana waste penalty — mana spent that didn't produce proportional value.
+        // "Value" = damage dealt + healing done (converted to mana-equivalent).
+        // Average ability does ~200 damage per ~150 mana ≈ 1.33 dmg/mana.
+        // We use 1.0 as a generous baseline so only clearly wasteful casts are penalized.
+        if (this.manaSpent[i] > 0) {
+          const valueProduced = this.damageDealt[i] + this.healingDone[i];
+          const manaEquivalentValue = valueProduced * 1.0; // 1 damage ≈ 1 mana of value
+          const wastedFraction = Math.max(0, 1 - manaEquivalentValue / this.manaSpent[i]);
+          // Penalty scales with how much mana was spent (as % of max) and how wasteful
+          rewards[i] -= (this.manaSpent[i] / entity.maxMana) * wastedFraction * 0.03;
+        }
+
+        // Mana differential — reward having more mana than opponent (encourages conservation)
+        if (!entity.dead && !opponent.dead && opponent.maxMana > 0) {
+          const myManaPct = entity.mana / entity.maxMana;
+          const oppManaPct = opponent.mana / opponent.maxMana;
+          rewards[i] += (myManaPct - oppManaPct) * 0.001;
+        }
+      }
+
+      // Resting — strategic mana recovery (like drinking in WoW)
       if (this.buffSystem.hasBuff(entity, 'resting') && !entity.dead) {
         const manaGained = entity.mana - this.manaAtStepStart[i];
+        const manaPct = entity.mana / entity.maxMana;
+
         if (manaGained > 0) {
-          // Reward proportional to mana recovered (normalized by max mana)
-          rewards[i] += (manaGained / entity.maxMana) * 0.05;
+          // Reward scaled by mana deficit — resting at low mana is more valuable
+          const needMult = 2 * (1 - manaPct);
+          rewards[i] += (manaGained / entity.maxMana) * 0.04 * needMult;
+        } else if (manaPct >= 0.99) {
+          // Resting at full mana is pure waste — penalize
+          rewards[i] -= 0.012;
+        } else {
+          // Resting but not gaining mana (mana regen delay) — unproductive, penalize
+          rewards[i] -= 0.005;
         }
-        // Penalty for resting while opponent is close — guaranteed crits are dangerous
+
+        // Proximity danger — graduated penalty, stronger the closer the opponent
         if (!opponent.dead) {
           const dist = entity.distanceTo(opponent);
-          if (dist < yardsToUnits(15)) {
-            rewards[i] -= 0.01;
+          const safeDist = yardsToUnits(20);
+          if (dist < safeDist) {
+            const dangerFactor = 1 - (dist / safeDist);
+            rewards[i] -= 0.02 * dangerFactor;
           }
         }
       }
@@ -1182,6 +1256,7 @@ export class HeadlessArena {
       done: this.done,
       winner: this.winner,
       time: this.elapsed,
+      scripted: this.opponentBrain !== null,
     };
   }
 
@@ -1261,6 +1336,14 @@ export class HeadlessArena {
 
     // Sweep charge
     if (ability.id === 'sweep') {
+      // Track gap-close: using Sweep from far away wastes the cooldown + mana
+      const idx = this.entities.indexOf(entity);
+      if (idx >= 0 && !opponent.dead) {
+        const dist = entity.distanceTo(opponent);
+        if (dist > yardsToUnits(12)) {
+          this.sweepGapCloseCount[idx]++;
+        }
+      }
       const dirX = Math.sin(entity.rotY);
       const dirZ = Math.cos(entity.rotY);
       this.chargeSystem.startSweepCharge(
@@ -1353,7 +1436,10 @@ export class HeadlessArena {
   ): boolean {
     if (entity.dead) return false;
     if (entity.stunned || this.buffSystem.isSleeping(entity)) return false;
-    if (!entity.cooldowns.isReady(ability.id)) return false;
+    // Cooldown check (off-GCD abilities skip GCD check)
+    if (ability.offGcd) {
+      if (entity.cooldowns.getCooldownRemaining(ability.id) > 0) return false;
+    } else if (!entity.cooldowns.isReady(ability.id)) return false;
 
     // Range check to ground position
     const dx = entity.x - groundX;
@@ -1366,9 +1452,15 @@ export class HeadlessArena {
     entity.mana -= effectiveCost;
     if (effectiveCost > 0) this.regenSystem.notifyManaUsed(entity);
 
+    // Track mana spent for efficiency reward
+    const idx = this.entities.indexOf(entity);
+    if (idx >= 0) this.manaSpent[idx] += effectiveCost;
+
     // Cooldown + GCD
-    entity.cooldowns.setCooldown(ability.id, ability.cooldown);
-    entity.cooldowns.triggerGcd();
+    entity.cooldowns.setCooldown(ability.id, abilityCooldown(ability));
+    if (!ability.offGcd) {
+      entity.cooldowns.triggerGcd();
+    }
 
     // Schedule delayed impact
     this.pendingAoeImpacts.push({

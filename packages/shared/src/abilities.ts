@@ -1,6 +1,11 @@
 // ── Global cooldown ─────────────────────────────────────────────────────
 export const GLOBAL_COOLDOWN = 0.75; // seconds — triggered on every ability use
 
+/** Effective cooldown for an ability (falls back to GCD if omitted). */
+export function abilityCooldown(ability: { cooldown?: number }): number {
+  return ability.cooldown ?? GLOBAL_COOLDOWN;
+}
+
 // ── Distance conversion ─────────────────────────────────────────────────
 // 1 yard = 0.6 world units.
 // Melee range (3 yd) = 1.8 world units, matching existing auto-attack ranges.
@@ -63,7 +68,7 @@ export interface Ability {
   readonly range?: number; // world units (use yardsToUnits() to define from yards); omit for self-buffs
   readonly minRange?: number; // world units — minimum range (ability fails if too close)
   readonly manaCost: number;
-  readonly cooldown: number; // seconds
+  readonly cooldown?: number; // seconds; omit for GCD-only (defaults to GLOBAL_COOLDOWN)
   readonly damage: number; // base damage (non-crit)
   readonly damageMin?: number; // if present with damageMax, roll random damage in range
   readonly damageMax?: number;
@@ -90,6 +95,7 @@ export interface Ability {
   readonly isAutoAttack?: boolean; // if true, this is the Attack toggle — not a real ability, just toggles auto-attack
   readonly requiresFriendlyTarget?: boolean; // if true, ability can only be used on self or friendly targets (rejects hostile targets)
   readonly blockedByTargetDebuff?: string; // if set, ability fails when target has this debuff id
+  readonly offGcd?: boolean; // if true, ability does not trigger the global cooldown
 }
 
 // ── Buff definitions ────────────────────────────────────────────────────
@@ -482,7 +488,6 @@ export const Chudmax: Ability = {
   icon: '🧬',
   range: yardsToUnits(15),
   manaCost: 275,
-  cooldown: 1.5,
   castTime: 3,
   damage: 720,
   healAmount: 900,
@@ -803,4 +808,5 @@ export const PvPTrinket: Ability = {
   description:
     'Removes all crowd control effects.',
   usableWhileCCd: true,
+  offGcd: true,
 };

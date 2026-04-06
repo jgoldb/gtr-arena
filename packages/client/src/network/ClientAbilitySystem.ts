@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { CharacterId } from '@gtr/shared';
 import type { S2C_CooldownUpdate } from '@gtr/shared';
-import { getCharacterStats, GLOBAL_COOLDOWN } from '@gtr/shared';
+import { getCharacterStats, GLOBAL_COOLDOWN, abilityCooldown } from '@gtr/shared';
 import type { ClientSoundManager } from './ClientSoundManager';
 
 // ── Host interface ────────────────────────────────────────────────────
@@ -35,6 +35,7 @@ export interface ClientAbilitySystemHost {
   // Callbacks
   onCooldownUpdate?: (abilityId: string, remaining: number, total: number) => void;
   onQueuedAbilityReady: ((abilityId: string) => void) | null;
+  sendCancelCast(): void;
 }
 
 // ── ClientAbilitySystem ──────────────────────────────────────────────
@@ -153,9 +154,10 @@ export class ClientAbilitySystem {
 
     // Predict ability cooldown
     let cooldownPredicted = false;
-    if (ability.cooldown > 0) {
-      this.cooldowns.set(abilityId, { remaining: ability.cooldown, total: ability.cooldown });
-      this.host.onCooldownUpdate?.(abilityId, ability.cooldown, ability.cooldown);
+    const cd = abilityCooldown(ability);
+    if (cd > 0) {
+      this.cooldowns.set(abilityId, { remaining: cd, total: cd });
+      this.host.onCooldownUpdate?.(abilityId, cd, cd);
       cooldownPredicted = true;
     }
 
@@ -205,9 +207,10 @@ export class ClientAbilitySystem {
     }
 
     let cooldownPredicted = false;
-    if (ability.cooldown > 0) {
-      this.cooldowns.set(abilityId, { remaining: ability.cooldown, total: ability.cooldown });
-      this.host.onCooldownUpdate?.(abilityId, ability.cooldown, ability.cooldown);
+    const cd = abilityCooldown(ability);
+    if (cd > 0) {
+      this.cooldowns.set(abilityId, { remaining: cd, total: cd });
+      this.host.onCooldownUpdate?.(abilityId, cd, cd);
       cooldownPredicted = true;
     }
 
@@ -284,10 +287,83 @@ export class ClientAbilitySystem {
     return this.pendingPrediction?.abilityId ?? null;
   }
 
+  // ── Client-driven casting ─────────────────────────────────────────
+
+  /** Instantly cancel the local cast/channel. Resets GCD + clears placeholder cooldown for casts (not channels). */
+  cancelCastLocally(): void {
+    const abilityId = this.host.localCastingAbilityId;
+    if (!abilityId) return;
+    const wasChannel = this.host.localCastingIsChannel;
+
+    // Clear sound loops
+    this.host.sound.updateBandageLoop(this.host.localEntityId, abilityId, null);
+    this.host.sound.updateCastSpellLoop(this.host.localEntityId, abilityId, null);
+
+    // Clear casting state
+    this.host.localCastingAbilityId = null;
+    this.host.localCastingElapsed = 0;
+    this.host.localCastingTotalTime = 0;
+    this.host.localCastingIsChannel = false;
+
+    // For non-channel casts: reset GCD and clear placeholder cooldown (mirrors CastingSystem.cancel)
+    if (!wasChannel) {
+      this.gcd = null;
+      this.cooldowns.delete(abilityId);
+    }
+
+    // Clear pending prediction if it matches
+    if (this.pendingPrediction?.abilityId === abilityId) {
+      this.pendingPrediction = null;
+    }
+  }
+
+  /** Local cast completed — clear cast bar. Server sends ability_effect for actual effects and real cooldown. */
+  completeCastLocally(): void {
+    const abilityId = this.host.localCastingAbilityId;
+    if (!abilityId) return;
+    const wasChannel = this.host.localCastingIsChannel;
+
+    // Clear sound loops
+    this.host.sound.updateBandageLoop(this.host.localEntityId, abilityId, null);
+    this.host.sound.updateCastSpellLoop(this.host.localEntityId, abilityId, null);
+
+    // Clear casting state
+    this.host.localCastingAbilityId = null;
+    this.host.localCastingElapsed = 0;
+    this.host.localCastingTotalTime = 0;
+    this.host.localCastingIsChannel = false;
+
+    // Clear placeholder cooldown for non-channels (server will send real cooldown via cooldown_update)
+    if (!wasChannel) {
+      this.cooldowns.delete(abilityId);
+    }
+
+    // Clear pending prediction if it matches
+    if (this.pendingPrediction?.abilityId === abilityId) {
+      this.pendingPrediction = null;
+    }
+  }
+
   // ── Per-frame update ──────────────────────────────────────────────
 
-  /** Tick cooldowns, process queue, check prediction timeout. */
+  /** Tick casting, cooldowns, process queue, check prediction timeout. */
   update(dt: number): void {
+    // Tick local casting and check cancel/completion
+    if (this.host.localCastingAbilityId) {
+      this.host.localCastingElapsed += dt;
+
+      // Auto-cancel if player can't cast (moving, dead, stunned, falling)
+      if (this.host.isPlayerDead() || this.host.isPlayerStunned() ||
+          this.host.isPlayerMoving() || !this.host.isPlayerGrounded()) {
+        this.cancelCastLocally();
+        this.host.sendCancelCast();
+      }
+      // Check completion
+      else if (this.host.localCastingElapsed >= this.host.localCastingTotalTime) {
+        this.completeCastLocally();
+      }
+    }
+
     // Tick cooldowns
     for (const [id, cd] of this.cooldowns) {
       cd.remaining = Math.max(0, cd.remaining - dt);
@@ -311,8 +387,16 @@ export class ClientAbilitySystem {
     }
   }
 
-  /** Fast-forward cooldowns after tab was backgrounded. */
+  /** Fast-forward cooldowns and casting after tab was backgrounded. */
   fastForward(gap: number): void {
+    // Fast-forward casting elapsed
+    if (this.host.localCastingAbilityId) {
+      this.host.localCastingElapsed += gap;
+      if (this.host.localCastingElapsed >= this.host.localCastingTotalTime) {
+        this.completeCastLocally();
+      }
+    }
+
     for (const [id, cd] of this.cooldowns) {
       cd.remaining = Math.max(0, cd.remaining - gap);
       if (cd.remaining <= 0) this.cooldowns.delete(id);

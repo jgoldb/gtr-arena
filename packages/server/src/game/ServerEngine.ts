@@ -131,6 +131,7 @@ export class ServerEngine {
       consumeMana: (entity, amount) => { entity.mana -= amount; },
       notifyManaUsed: (entity) => this.regenSystem.notifyManaUsed(entity),
       triggerGcd: (entity) => this.abilityHandler.triggerEntityGcd(entity),
+      resetGcd: (entity) => this.abilityHandler.resetEntityGcd(entity),
       setCooldown: (entity, abilityId, duration) => {
         if (!entity.godMode) {
           this.combatSystem.setCooldown(entity.id, abilityId, duration);
@@ -141,7 +142,12 @@ export class ServerEngine {
           }
         }
       },
-      clearCooldown: (entity, abilityId) => this.combatSystem.clearCooldown(entity.id, abilityId),
+      clearCooldown: (entity, abilityId) => {
+        this.combatSystem.clearCooldown(entity.id, abilityId);
+        this.onSendToPlayer?.(entity.id, {
+          type: 'cooldown_update', abilityId, remaining: 0, total: 0,
+        } as S2C_CooldownUpdate);
+      },
       rollMiss: () => this.combatSystem.rollMiss(),
       enterCombat: (entity) => this.combatSystem.enterCombat(entity),
       applyHeal: (healer, target, amount) => this.combatSystem.applyHeal(healer, target, amount),

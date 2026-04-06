@@ -1,5 +1,5 @@
 import type { Ability } from '@gtr/shared';
-import { yardsToUnits, JimmyLegdDebuff, type CombatError, type CombatResult, type CombatTextType, COMBAT_DURATION, MISS_CHANCE, GOD_MODE_DAMAGE_MULT, rollAbilityBaseDamage, applyBonusDamage, isFacingCheck } from '@gtr/shared';
+import { yardsToUnits, JimmyLegdDebuff, type CombatError, type CombatResult, type CombatTextType, COMBAT_DURATION, MISS_CHANCE, GOD_MODE_DAMAGE_MULT, rollAbilityBaseDamage, applyBonusDamage, isFacingCheck, abilityCooldown } from '@gtr/shared';
 import type { ServerEntity } from './ServerEntity.js';
 import type { ServerBuffSystem } from './ServerBuffSystem.js';
 import type { ServerRegenSystem } from './ServerRegenSystem.js';
@@ -328,7 +328,7 @@ export class ServerCombatSystem {
     }
 
     if (!attacker.godMode) {
-      this.setCooldown(attacker.id, ability.id, ability.cooldown);
+      this.setCooldown(attacker.id, ability.id, abilityCooldown(ability));
     }
     return { success: true };
   }

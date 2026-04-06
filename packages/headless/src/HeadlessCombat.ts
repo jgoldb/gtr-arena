@@ -13,6 +13,7 @@ import {
   applyBonusDamage,
   isFacingCheck,
   JimmyLegdDebuff,
+  abilityCooldown,
   type BuffSystem,
 } from '@gtr/shared';
 import type { HeadlessEntity } from './HeadlessEntity.js';
@@ -137,8 +138,12 @@ export class HeadlessCombat {
     if (ability.id !== 'crack-rock' && this.buffSystem.hasBuff(attacker, 'dumpster-diving')) {
       return { success: false, error: 'locked' };
     }
-    // Cooldown check via entity tracker
-    if (!attacker.cooldowns.isReady(ability.id)) {
+    // Cooldown check via entity tracker (off-GCD abilities skip GCD check)
+    if (ability.offGcd) {
+      if (attacker.cooldowns.getCooldownRemaining(ability.id) > 0) {
+        return { success: false, error: 'on-cooldown' };
+      }
+    } else if (!attacker.cooldowns.isReady(ability.id)) {
       return { success: false, error: 'on-cooldown' };
     }
     // Mana check
@@ -252,8 +257,10 @@ export class HeadlessCombat {
     }
 
     // Cooldown + GCD
-    attacker.cooldowns.setCooldown(ability.id, ability.cooldown);
-    attacker.cooldowns.triggerGcd();
+    attacker.cooldowns.setCooldown(ability.id, abilityCooldown(ability));
+    if (!ability.offGcd) {
+      attacker.cooldowns.triggerGcd();
+    }
 
     return { success: true };
   }

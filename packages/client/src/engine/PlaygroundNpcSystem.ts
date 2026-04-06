@@ -8,7 +8,7 @@
  */
 
 import * as THREE from 'three';
-import { getCharacterStats, getCharacterSfx, getSharedSfx, KABOOM_CONE_RANGE } from '@gtr/shared';
+import { getCharacterStats, getCharacterSfx, getSharedSfx, KABOOM_CONE_RANGE, abilityCooldown } from '@gtr/shared';
 import type { Ability, GasCloudSystem, DotSystem, ChemicalPoolSystem, ChargeSystem } from '@gtr/shared';
 import { yardsToUnits, Sweep, TweakerSprint, FartBombDebuff, ChemicalSpillSpeedBuff, ChemicalSpillDot, CrotchRotDot, ParanoidDebuff, RestingBuff } from './combat/Ability';
 import type { BuffDefinition, BuffSystem } from './combat/BuffSystem';
@@ -323,8 +323,10 @@ export class PlaygroundNpcSystem {
 
     // Set cooldown on the NPC's own tracker
     if (npc.aiBrain) {
-      npc.aiBrain.cooldowns.setCooldown(ability.id, ability.cooldown);
-      npc.aiBrain.cooldowns.triggerGcd();
+      npc.aiBrain.cooldowns.setCooldown(ability.id, abilityCooldown(ability));
+      if (!ability.offGcd) {
+        npc.aiBrain.cooldowns.triggerGcd();
+      }
     }
 
     // ── Post-success side effects ──
@@ -425,8 +427,10 @@ export class PlaygroundNpcSystem {
 
     // Set cooldown
     if (npc.aiBrain) {
-      npc.aiBrain.cooldowns.setCooldown(ability.id, ability.cooldown);
-      npc.aiBrain.cooldowns.triggerGcd();
+      npc.aiBrain.cooldowns.setCooldown(ability.id, abilityCooldown(ability));
+      if (!ability.offGcd) {
+        npc.aiBrain.cooldowns.triggerGcd();
+      }
     }
 
     // Animation

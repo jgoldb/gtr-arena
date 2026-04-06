@@ -234,6 +234,7 @@ class GtrVecEnv(VecEnv):
             if "winner" in info:
                 d["winner"] = info["winner"]
                 d["is_win"] = info["winner"] == 1  # Agent 0 is team 1
+                d["scripted"] = info.get("scripted", False)
             if "time" in info:
                 d["episode_time"] = info["time"]
             infos.append(d)

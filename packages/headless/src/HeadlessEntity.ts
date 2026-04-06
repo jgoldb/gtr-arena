@@ -42,6 +42,10 @@ export class CooldownTracker {
     this.gcdRemaining = GLOBAL_COOLDOWN;
   }
 
+  resetGcd(): void {
+    this.gcdRemaining = 0;
+  }
+
   getGcdRemaining(): number {
     return this.gcdRemaining;
   }
