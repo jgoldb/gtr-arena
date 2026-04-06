@@ -198,6 +198,12 @@ export class NpcAiBrain {
       this.think();
     }
 
+    // If think() just started a charge (e.g. Sweep), skip movement this frame —
+    // the charge system will take over next frame.
+    if (this.engine.isNpcCharging(this.npc)) {
+      return;
+    }
+
     // Per-frame navigation — corrects movement for archway path-following and
     // elevator awareness without waiting for the next think interval
     if (this.currentTargetEntity && !this.currentTargetEntity.dead) {
