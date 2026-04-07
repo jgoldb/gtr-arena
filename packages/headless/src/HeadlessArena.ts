@@ -276,6 +276,10 @@ export class HeadlessArena {
   private sweepWhiffCount: [number, number] = [0, 0];
   /** Count of Sweep charges used as a gap closer (far from opponent). */
   private sweepGapCloseCount: [number, number] = [0, 0];
+  /** Count of Sweep end-burst AoE hits (the skillful part — landing the finisher). */
+  private sweepEndBurstHits: [number, number] = [0, 0];
+  /** Accumulated proximity reward for Sweep near-misses (shaped gradient for distance learning). */
+  private sweepEndProximity: [number, number] = [0, 0];
   /** Tracks unique ability IDs used per step for diversity bonus. */
   private abilitiesUsedThisStep: [Set<string>, Set<string>] = [new Set(), new Set()];
   /** Running ability usage counts (EMA) for intrinsic curiosity reward. Persists across episodes. */
@@ -559,11 +563,25 @@ export class HeadlessArena {
       applyKnockbackStun: (target) => {
         this.buffSystem.apply(target, KaboomStun);
       },
-      onSweepChargeEnd: (entity, savedTarget, hitCount) => {
+      onSweepChargeEnd: (entity, savedTarget, hitCount, endBurstHitCount) => {
         if (savedTarget && !savedTarget.dead) entity.autoAttackTarget = savedTarget;
-        if (hitCount === 0) {
-          const idx = this.entities.indexOf(entity);
-          if (idx >= 0) this.sweepWhiffCount[idx]++;
+        const idx = this.entities.indexOf(entity);
+        if (idx >= 0) {
+          if (hitCount === 0 && endBurstHitCount === 0) {
+            this.sweepWhiffCount[idx]++;
+          }
+          this.sweepEndBurstHits[idx] += endBurstHitCount;
+          // Proximity reward: even on a miss, reward based on how close the
+          // charge ended to the opponent (shaped gradient for distance learning)
+          if (endBurstHitCount === 0) {
+            const opponent = this.entities[1 - idx];
+            if (opponent && !opponent.dead) {
+              const dist = entity.distanceTo(opponent);
+              // Linear falloff: full reward at 0, zero at 5 yards
+              const proximity = Math.max(0, 1 - dist / yardsToUnits(5));
+              this.sweepEndProximity[idx] += proximity;
+            }
+          }
         }
       },
       onTweakerSprintChargeEnd: (entity, savedTarget) => {
@@ -701,6 +719,8 @@ export class HeadlessArena {
     this.trinketWastedCount = [0, 0];
     this.sweepWhiffCount = [0, 0];
     this.sweepGapCloseCount = [0, 0];
+    this.sweepEndBurstHits = [0, 0];
+    this.sweepEndProximity = [0, 0];
     this.activeBuffWindows = [];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
     this.wasDiscombobulated = [false, false];
@@ -880,6 +900,8 @@ export class HeadlessArena {
     this.chargeDamageDealt = [0, 0];
     this.sweepWhiffCount = [0, 0];
     this.sweepGapCloseCount = [0, 0];
+    this.sweepEndBurstHits = [0, 0];
+    this.sweepEndProximity = [0, 0];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
     this.curiosityBonus = [0, 0];
     this.manaAtStepStart = [this.entities[0].mana, this.entities[1].mana];
@@ -1266,12 +1288,21 @@ export class HeadlessArena {
 
       // Charge ability damage bonus — extra reward for landing Sweep/charge damage
       // (on top of general damage reward; encourages learning skill-shot positioning)
-      rewards[i] += this.chargeDamageDealt[i] * 0.0002;
+      rewards[i] += this.chargeDamageDealt[i] * 0.001;
+
+      // Sweep end-burst hit bonus — the skillful part: landing the finisher at the
+      // exact right distance so the charge ends on top of the opponent
+      rewards[i] += this.sweepEndBurstHits[i] * 0.12;
+
+      // Sweep near-miss proximity reward — shaped gradient for near-misses so the
+      // agent learns distance management even when the end-burst doesn't land
+      rewards[i] += this.sweepEndProximity[i] * 0.05;
 
       // Sweep whiff penalty — wasted cooldown + mana when charge hits nobody
-      rewards[i] -= this.sweepWhiffCount[i] * 0.08;
+      rewards[i] -= this.sweepWhiffCount[i] * 0.06;
 
-      // Sweep gap-close penalty — using Sweep from far away wastes CD + mana for mobility
+      // Sweep gap-close penalty — using Sweep from beyond charge range wastes CD + mana
+      // for pure mobility (threshold at 25y, well beyond the ~20y charge distance)
       rewards[i] -= this.sweepGapCloseCount[i] * 0.15;
 
       // CC application bonus (stun/sleep/blind)
@@ -1449,11 +1480,12 @@ export class HeadlessArena {
 
     // Sweep charge
     if (ability.id === 'sweep') {
-      // Track gap-close: using Sweep from far away wastes the cooldown + mana
+      // Track gap-close: using Sweep from well beyond charge range wastes CD + mana
+      // Charge covers ~20 yards (28 yd/s × 0.714s), so threshold at 25y
       const idx = this.entities.indexOf(entity);
       if (idx >= 0 && !opponent.dead) {
         const dist = entity.distanceTo(opponent);
-        if (dist > yardsToUnits(12)) {
+        if (dist > yardsToUnits(25)) {
           this.sweepGapCloseCount[idx]++;
         }
       }

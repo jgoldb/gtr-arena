@@ -59,7 +59,7 @@ export interface ChargeCallbacks<T> {
   /** Apply knockback landing stun. */
   applyKnockbackStun(target: T): void;
   /** Called when a sweep charge finishes. Platform handles animation, SFX, auto-attack re-engage. */
-  onSweepChargeEnd(entity: T, savedAutoAttackTarget: T | null, hitCount: number): void;
+  onSweepChargeEnd(entity: T, savedAutoAttackTarget: T | null, hitCount: number, endBurstHitCount: number): void;
   /** Called when a tweaker sprint charge finishes. Platform handles auto-attack re-engage. */
   onTweakerSprintChargeEnd(entity: T, savedAutoAttackTarget: T | null): void;
   /** Called when a knockback is created (e.g. server broadcasts knockback event). */
@@ -140,6 +140,7 @@ export class ChargeSystem<T> {
     // End charge
     if (charge.elapsed >= charge.duration) {
       // AoE burst at end: full damage to all hostiles in melee range
+      let endBurstHits = 0;
       const meleeRange = this.callbacks.getAutoAttackRange(entity);
       const endPos = this.callbacks.getPosition(entity);
       for (const other of this.callbacks.getHostileEntities(entity)) {
@@ -149,10 +150,11 @@ export class ChargeSystem<T> {
         const dz = endPos.z - otherPos.z;
         if (Math.sqrt(dx * dx + dz * dz) <= meleeRange) {
           this.callbacks.applySweepDamage(entity, other, charge.maxDamage);
+          endBurstHits++;
         }
       }
 
-      this.callbacks.onSweepChargeEnd(entity, charge.savedAutoAttackTarget, charge.hitTargets.size);
+      this.callbacks.onSweepChargeEnd(entity, charge.savedAutoAttackTarget, charge.hitTargets.size, endBurstHits);
       this.sweepCharges.delete(entity);
     }
   }

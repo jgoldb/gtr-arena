@@ -286,7 +286,7 @@ export class ServerEngine {
       applyTweakerSprintSlow: (target) => this.buffSystem.apply(target, TweakerSprintSlow),
       enterCombat: (e) => this.combatSystem.enterCombat(e),
       applyKnockbackStun: (target) => this.buffSystem.apply(target, KaboomStun),
-      onSweepChargeEnd: (entity, savedTarget, _hitCount) => {
+      onSweepChargeEnd: (entity, savedTarget, _hitCount, _endBurstHitCount) => {
         this.emitEvent({
           type: 'ability_effect',
           entityId: entity.id,

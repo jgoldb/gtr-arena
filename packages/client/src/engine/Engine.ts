@@ -418,7 +418,7 @@ export class Engine {
       applyTweakerSprintSlow: (target) => this.buffSystem.apply(target, TweakerSprintSlow),
       enterCombat: (e) => this.combatSystem.enterCombat(e),
       applyKnockbackStun: (target) => this.buffSystem.apply(target, KaboomStun),
-      onSweepChargeEnd: (entity, savedTarget, _hitCount) => {
+      onSweepChargeEnd: (entity, savedTarget, _hitCount, _endBurstHitCount) => {
         if (entity === this.playerController) {
           this.playerController.triggerAbilityAnimation('sweep-finish');
           const sweepSpinSfx = getCharacterSfx(this.playerController.characterId)?.sweepSpin;

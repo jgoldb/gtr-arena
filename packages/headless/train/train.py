@@ -17,6 +17,41 @@ Usage:
         --opponent-characters janitor crackhead dr-retardo \\
         --scripted-mix-rate 0.3
 
+Flags:
+    General:
+      --timesteps N             Total training timesteps (default: 5000000)
+      --characters C1 C2        Character matchup, two names (default: janitor janitor)
+      --num-envs N              Parallel environments (default: 16)
+      --map ID                  Map ID (default: cage)
+      --resume PATH             Path to saved model to resume training
+      --save-dir DIR            Directory for model checkpoints (default: ./models)
+      --save-freq N             Checkpoint save frequency in steps (default: 100000)
+
+    Hyperparameters:
+      --lr FLOAT                Initial learning rate, anneals to 0 (default: 3e-4)
+      --ent-coef FLOAT          Initial entropy coefficient, anneals to 0.01 (default: 0.04)
+      --n-steps N               Steps per rollout per env (default: 2048)
+      --batch-size N            Minibatch size (default: 512)
+
+    Opponent:
+      --opponent MODE           random | scripted-master | self-play (default: self-play)
+      --no-self-play            Disable self-play, use random opponent instead
+      --opponent-characters C+  Pool of opponent characters to rotate per episode
+                                (e.g. janitor crackhead dr-retardo)
+      --scripted-mix-rate FLOAT Fraction (0-1) of episodes using scripted opponents;
+                                remaining use self-play/random (e.g. 0.3 = 30% scripted)
+
+    Self-play tuning:
+      --self-play-start N       Timestep to activate self-play pool (default: 300000)
+      --self-play-freq N        How often to snapshot policy into pool (default: 100000)
+      --self-play-pool-size N   Max opponents in the pool (default: 20)
+      --self-play-random-prob F Probability of random opponent per episode (default: 0.2)
+
+    Curriculum:
+      --curriculum-start N      Ability slots unlocked at training start (default: 3)
+      --curriculum-unlock-every N  Unlock one more ability slot every N steps (default: 200000)
+      --no-curriculum           Disable ability curriculum (all abilities from start)
+
 Requirements:
     pip install -r requirements.txt
 """
