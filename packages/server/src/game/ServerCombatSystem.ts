@@ -41,6 +41,17 @@ export class ServerCombatSystem {
     return isFacingCheck(Math.sin(aRotY), Math.cos(aRotY), tx - ax, tz - az);
   }
 
+  private isBehind(attackerX: number, attackerZ: number, targetX: number, targetZ: number, targetRotY: number): boolean {
+    const dx = attackerX - targetX;
+    const dz = attackerZ - targetZ;
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 0.001) return false;
+    const forwardX = Math.sin(targetRotY);
+    const forwardZ = Math.cos(targetRotY);
+    const dot = forwardX * (dx / len) + forwardZ * (dz / len);
+    return dot < 0;
+  }
+
   private rollOutcome(attacker: ServerEntity, target: ServerEntity, canDodge = true): 'miss' | 'dodge' | 'crit' | 'normal' {
     const roll = Math.random();
     if (roll < MISS_CHANCE) return 'miss';
@@ -269,6 +280,11 @@ export class ServerCombatSystem {
         baseDamage = applyBonusDamage(baseDamage, ability,
           !!ability.bonusDamageRequiresDebuff && this.buffSystem.hasDebuff(target, ability.bonusDamageRequiresDebuff));
 
+        // Shank: 50% bonus damage from behind
+        if (ability.id === 'shank' && this.isBehind(attacker.x, attacker.z, target.x, target.z, target.rotationY)) {
+          baseDamage = Math.round(baseDamage * 1.5);
+        }
+
         let damageMult = this.buffSystem.getDamageDealtMultiplier(attacker);
         if (attacker.godMode) damageMult *= GOD_MODE_DAMAGE_MULT;
         baseDamage = Math.round(baseDamage * damageMult);
@@ -277,7 +293,7 @@ export class ServerCombatSystem {
         const damage = baseDamage * multiplier;
         const actualDamage = target.godMode ? 0 : this.processDamageAbsorb(target, damage, attacker);
         target.hp = Math.max(0, target.hp - actualDamage);
-        if (damage > 0) {
+        if (actualDamage > 0) {
           this.onDirectDamageDealt?.(target);
           this.onFlinchDamage?.(target);
         }

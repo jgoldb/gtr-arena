@@ -478,7 +478,7 @@ export const RetardStrength: Ability = {
   damage: 0,
   requiresHostileTarget: false,
   description:
-    'You are much stronger than you appear. Increase damage and healing dealt by 50% and shields you, absorbing up to 100 damage and reflecting 50% of damage taken for 3 seconds.',
+    'You are much stronger than you appear. Increase damage and healing dealt by 50% and shields you, absorbing up to 100 damage and reflecting 50% of damage taken for 5 seconds.',
   appliesSelfBuff: RetardStrengthBuff,
 };
 

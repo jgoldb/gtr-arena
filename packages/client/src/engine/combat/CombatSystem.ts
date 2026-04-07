@@ -317,11 +317,9 @@ export class CombatSystem {
         const damage = baseDamage * multiplier;
         const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
         target.hp = Math.max(0, target.hp - actualDamage);
-        if (damage > 0) {
+        if (actualDamage > 0) {
           this.onDirectDamageDealt?.(target);
           this.onFlinchDamage?.(target);
-        }
-        if (actualDamage > 0) {
           this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
           this.onAbilityDamageDealt?.(attacker, ability.id);
         }
@@ -404,11 +402,9 @@ export class CombatSystem {
     const damage = Math.round(adjustedBase * multiplier);
     const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
-    if (damage > 0) {
+    if (actualDamage > 0) {
       this.onDirectDamageDealt?.(target);
       this.onFlinchDamage?.(target);
-    }
-    if (actualDamage > 0) {
       this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
     }
 
@@ -447,11 +443,9 @@ export class CombatSystem {
     const damage = baseDamage * (isCrit ? 2 : 1);
     const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
-    if (damage > 0) {
+    if (actualDamage > 0) {
       this.onDirectDamageDealt?.(target);
       this.onFlinchDamage?.(target);
-    }
-    if (actualDamage > 0) {
       this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
     }
 
@@ -502,10 +496,8 @@ export class CombatSystem {
     const damage = Math.round(adjustedTick * mult);
     const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
     target.hp = Math.max(0, target.hp - actualDamage);
-    if (damage > 0) {
-      this.onDirectDamageDealt?.(target);
-    }
     if (actualDamage > 0) {
+      this.onDirectDamageDealt?.(target);
       this.onCombatText?.(target, actualDamage, isCrit ? 'crit' : 'damage');
     }
     if (target.hp <= 0 && !target.dead) {
@@ -563,11 +555,9 @@ export class CombatSystem {
       const damage = Math.round(baseDamage * buffMult * damageMult * critMult);
       const actualDamage = this.godModeEntities.has(target) ? 0 : this.processDamageAbsorb(target, damage, attacker);
       target.hp = Math.max(0, target.hp - actualDamage);
-      if (damage > 0) {
+      if (actualDamage > 0) {
         this.onDirectDamageDealt?.(target);
         this.onFlinchDamage?.(target);
-      }
-      if (actualDamage > 0) {
         this.onCombatText?.(target, actualDamage, outcome === 'crit' ? 'crit' : 'damage');
         this.onAutoAttackDamageDealt?.(attacker, outcome === 'crit');
       }

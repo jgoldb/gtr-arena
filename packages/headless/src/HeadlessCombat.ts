@@ -28,6 +28,8 @@ export class HeadlessCombat {
   onHealDone?: (healer: HeadlessEntity, target: HeadlessEntity, amount: number) => void;
   /** Fires on any direct damage (abilities, auto-attacks, channels, AoE) — used for cast pushback. */
   onDirectDamageDealt?: (target: HeadlessEntity) => void;
+  /** Fires when mana is consumed by an ability — used to delay mana regen. */
+  onManaUsed?: (entity: HeadlessEntity) => void;
   /** LoS check between two entities (provided by arena collision system). */
   hasLineOfSight?: (a: HeadlessEntity, b: HeadlessEntity) => boolean;
 
@@ -169,6 +171,9 @@ export class HeadlessCombat {
         return { success: false, error: 'not-in-los' };
       }
     }
+    if (ability.requiresFriendlyTarget && target && target !== attacker && target.isHostileTo(attacker)) {
+      return { success: false, error: 'no-target' };
+    }
     if (ability.requiresTarget && !ability.requiresHostileTarget) {
       if (!target) return { success: false, error: 'no-target' };
       if (ability.range && attacker !== target) {
@@ -196,6 +201,9 @@ export class HeadlessCombat {
     // Deduct mana
     const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
     attacker.mana -= effectiveCost;
+    if (effectiveCost > 0) {
+      this.onManaUsed?.(attacker);
+    }
 
     // Hostile damage
     if (ability.requiresHostileTarget && target) {
@@ -224,19 +232,14 @@ export class HeadlessCombat {
           this.onDirectDamageDealt?.(target);
         }
 
-        // Wake sleeping targets
-        if (this.buffSystem.isSleeping(target)) {
-          this.buffSystem.removeSleepEffects(target);
+        // Jimmy Legs: if target already has it, also immobilize (check before applying debuff)
+        if (ability.id === 'jimmy-legs' && this.buffSystem.hasDebuff(target, 'jimmy-legs')) {
+          this.buffSystem.apply(target, JimmyLegdDebuff);
         }
 
         // Apply debuff on hit
         if (ability.appliesDebuff) {
           this.buffSystem.apply(target, ability.appliesDebuff);
-        }
-
-        // Jimmy Legs double-apply
-        if (ability.id === 'jimmy-legs' && this.buffSystem.hasDebuff(target, 'jimmy-legs')) {
-          this.buffSystem.apply(target, JimmyLegdDebuff);
         }
 
         // Death check
@@ -269,7 +272,7 @@ export class HeadlessCombat {
 
   applyAutoAttackDamage(attacker: HeadlessEntity, target: HeadlessEntity, baseDamage: number, canDodge = true): boolean {
     if (attacker.dead || target.dead) return false;
-    if (this.buffSystem.isUntargetable(target)) return false;
+    if (this.buffSystem.isUntargetable(target) || this.buffSystem.isUntargetable(attacker)) return false;
 
     const outcome = this.rollOutcome(attacker, target, canDodge);
     if (outcome === 'miss' || outcome === 'dodge') {
@@ -288,11 +291,6 @@ export class HeadlessCombat {
     if (actualDamage > 0) {
       this.onDamageDealt?.(attacker, target, actualDamage);
       this.onDirectDamageDealt?.(target);
-    }
-
-    // Wake sleeping targets
-    if (this.buffSystem.isSleeping(target)) {
-      this.buffSystem.removeSleepEffects(target);
     }
 
     if (target.hp <= 0 && !target.dead) {

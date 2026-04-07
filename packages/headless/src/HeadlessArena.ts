@@ -33,6 +33,8 @@ import {
   ChemicalSpillSpeedBuff,
   ChemicalSpillDot,
   CrotchRotDot,
+  RottenCrotchStun,
+  ODStunDebuff,
   ParanoidDebuff,
   Sweep,
   TweakerSprint,
@@ -286,6 +288,10 @@ export class HeadlessArena {
   private manaAtStepStart: [number, number] = [0, 0];
   /** Total mana spent on abilities this step (for mana efficiency reward). */
   private manaSpent: [number, number] = [0, 0];
+  /** Fixed angle offset applied to movement while discombobulated (per entity). */
+  private discombobAngleOffset: [number, number] = [0, 0];
+  /** Previous discombobulated state for detecting rising edge. */
+  private wasDiscombobulated: [boolean, boolean] = [false, false];
 
   // Opponent config
   /** 0–1 fraction of episodes using scripted AI. 1.0 = pure scripted, 0 = pure external. */
@@ -378,6 +384,53 @@ export class HeadlessArena {
       }
     };
     this.combat.hasLineOfSight = (a, b) => this.collision.hasLineOfSight(a.x, a.z, b.x, b.z, a.y, b.y);
+    this.combat.onManaUsed = (entity) => this.regenSystem.notifyManaUsed(entity);
+
+    // Buff expiration chains (must match server's onBuffExpired)
+    this.buffSystem.onBuffExpired = (target, definition) => {
+      if (definition.id === 'paranoid') {
+        this.buffSystem.removeStacks(target, 'tweaking', 100);
+      }
+      if (definition.id === 'crotch-rot') {
+        this.buffSystem.apply(target, RottenCrotchStun);
+      }
+      if (definition.id === 'overdosing') {
+        this.buffSystem.apply(target, ODStunDebuff);
+      }
+      if (definition.id === 'od-stun') {
+        // Set Tweaking to 100 stacks
+        this.buffSystem.removeStacks(target, 'tweaking', 100);
+        this.buffSystem.addStacks(target, 'tweaking', 100);
+        if (!this.buffSystem.hasDebuff(target, 'paranoid')) {
+          this.buffSystem.apply(target, ParanoidDebuff);
+        }
+      }
+      if (definition.id === 'dumpster-diving') {
+        // AoE damage on emerge: 150 damage to nearby enemies within 5 yards
+        const radius = yardsToUnits(5);
+        for (const entity of this.entities) {
+          if (entity === target || entity.dead || !entity.isHostileTo(target)) continue;
+          if (this.buffSystem.isUntargetable(entity)) continue;
+          const dx = target.x - entity.x;
+          const dz = target.z - entity.z;
+          if (dx * dx + dz * dz <= radius * radius) {
+            const actualDmg = this.combat.processDamageAbsorb(entity, 150, target);
+            entity.hp = Math.max(0, entity.hp - actualDmg);
+            if (actualDmg > 0) this.combat.onDamageDealt?.(target, entity, actualDmg);
+            this.combat.enterCombat(target);
+            this.combat.enterCombat(entity);
+            if (entity.hp <= 0 && !entity.dead) {
+              entity.die();
+              this.combat.onDeath?.(entity, target);
+            }
+          }
+        }
+        // Re-engage auto-attack on saved target
+        if (target.autoAttackTarget && !target.autoAttackTarget.dead) {
+          this.autoAttack.start(target, target.autoAttackTarget);
+        }
+      }
+    };
 
     // Casting system
     this.castingSystem = new CastingSystem<HeadlessEntity>({
@@ -412,8 +465,11 @@ export class HeadlessArena {
       },
     });
 
-    // Cast pushback + cancel resting on direct damage
+    // Cast pushback + cancel resting + wake sleep on direct damage
     this.combat.onDirectDamageDealt = (target) => {
+      if (this.buffSystem.isSleeping(target)) {
+        this.buffSystem.removeSleepEffects(target);
+      }
       this.castingSystem.applyPushback(target);
       if (this.buffSystem.hasBuff(target, 'resting')) {
         this.buffSystem.remove(target, 'resting', true);
@@ -647,6 +703,8 @@ export class HeadlessArena {
     this.sweepGapCloseCount = [0, 0];
     this.activeBuffWindows = [];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
+    this.wasDiscombobulated = [false, false];
+    this.discombobAngleOffset = [0, 0];
 
     // Clear all system state (before potential entity swap)
     this.buffSystem.clearEntity(this.entities[0]);
@@ -693,9 +751,30 @@ export class HeadlessArena {
       }
     }
 
-    // Reset entities to real map spawn points
-    const sp0 = this.spawnPoints[0] ?? { x: 0, y: 0, z: 10 };
-    const sp1 = this.spawnPoints[1] ?? { x: 0, y: 0, z: -10 };
+    // Randomize spawn positions within arena bounds for spatial diversity.
+    // ~70% of episodes use the default fixed spawns; ~30% use randomized positions
+    // so the model learns to navigate around walls (e.g. starting pen side walls).
+    const bounds = this.arenaBounds;
+    let sp0: { x: number; y: number; z: number };
+    let sp1: { x: number; y: number; z: number };
+    if (Math.random() < 0.3) {
+      // Randomized spawn: pick positions within bounds, ensure minimum separation
+      const pad = 3; // stay away from edges
+      const randX = () => (bounds.minX + pad) + Math.random() * (bounds.maxX - bounds.minX - pad * 2);
+      const randZ = () => (bounds.minZ + pad) + Math.random() * (bounds.maxZ - bounds.minZ - pad * 2);
+      sp0 = this.resolvePosition(randX(), randZ(), 0);
+      sp1 = this.resolvePosition(randX(), randZ(), 0);
+      // Ensure they aren't on top of each other
+      const dx = sp0.x - sp1.x, dz = sp0.z - sp1.z;
+      if (dx * dx + dz * dz < 25) { // < 5 units apart, nudge apart
+        sp1 = this.resolvePosition(sp0.x, sp0.z - 12, 0);
+      }
+    } else {
+      const def0 = this.spawnPoints[0] ?? { x: 0, y: 0, z: 10 };
+      const def1 = this.spawnPoints[1] ?? { x: 0, y: 0, z: -10 };
+      sp0 = def0;
+      sp1 = def1;
+    }
     this.entities[0].respawn(sp0.x, sp0.z, sp0.y);
     this.entities[1].respawn(sp1.x, sp1.z, sp1.y);
     // Face each other
@@ -818,33 +897,33 @@ export class HeadlessArena {
       entity.stunned = this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity);
       entity.blinded = this.buffSystem.isBlinded(entity);
 
-      // Skip actions while stunned
+      // Detect discombobulate rising edge — generate a fixed scramble offset
+      const isDiscombob = this.buffSystem.isDiscombobulated(entity);
+      if (isDiscombob && !this.wasDiscombobulated[i]) {
+        // Pick a random offset that guarantees wrong direction (90°, 180°, or 270°)
+        const offsets = [Math.PI / 2, Math.PI, -Math.PI / 2];
+        this.discombobAngleOffset[i] = offsets[Math.floor(Math.random() * offsets.length)];
+      }
+      this.wasDiscombobulated[i] = isDiscombob;
+
+      // Stun effects — stop auto-attack, cancel resting, cancel charges (matches server)
       if (entity.stunned) {
         entity.isMoving = false;
+        this.autoAttack.stop(entity);
+        entity.autoAttackTarget = null;
+        if (this.buffSystem.hasBuff(entity, 'resting')) {
+          this.buffSystem.remove(entity, 'resting', true);
+        }
+        this.chargeSystem.cancelCharges(entity);
         continue;
       }
 
       // Skip actions while charging
       if (this.chargeSystem.isCharging(entity)) continue;
 
-      // ── Movement ───────────────────────────────────────────────
-      if (action.moveAngle !== null && action.moveSpeed > 0 && !entity.blinded) {
-        const baseSpeed = yardsToUnits(8); // ~8 yd/s base run speed
-        const speedMult = this.buffSystem.getMovementSpeedMultiplier(entity);
-        const speed = baseSpeed * speedMult * action.moveSpeed;
-        const dx = Math.sin(action.moveAngle) * speed * dt;
-        const dz = Math.cos(action.moveAngle) * speed * dt;
-        const resolved = this.resolvePosition(entity.x + dx, entity.z + dz, entity.y);
-        entity.x = resolved.x;
-        entity.z = resolved.z;
-        entity.y = resolved.y;
-        entity.isMoving = true;
-      } else {
-        entity.isMoving = false;
-      }
-
-      // Blinded entities wander randomly
+      // ── Blinded entities lose control ──────────────────────────
       if (entity.blinded) {
+        // Wander randomly — agent's movement input is ignored
         const wanderAngle = Math.random() * Math.PI * 2;
         const speed = yardsToUnits(3) * dt;
         const resolved = this.resolvePosition(
@@ -856,8 +935,30 @@ export class HeadlessArena {
         entity.z = resolved.z;
         entity.y = resolved.y;
         entity.isMoving = true;
+        // Blinded entities lose auto-attack target
+        this.autoAttack.stop(entity);
         entity.autoAttackTarget = null;
         continue;
+      }
+
+      // ── Movement ───────────────────────────────────────────────
+      if (action.moveAngle !== null && action.moveSpeed > 0) {
+        // Discombobulate: scramble movement direction
+        const effectiveAngle = isDiscombob
+          ? action.moveAngle + this.discombobAngleOffset[i]
+          : action.moveAngle;
+        const baseSpeed = 5.6; // world units/s — must match client/server PlayerController.speed
+        const speedMult = this.buffSystem.getMovementSpeedMultiplier(entity);
+        const speed = baseSpeed * speedMult * action.moveSpeed;
+        const dx = Math.sin(effectiveAngle) * speed * dt;
+        const dz = Math.cos(effectiveAngle) * speed * dt;
+        const resolved = this.resolvePosition(entity.x + dx, entity.z + dz, entity.y);
+        entity.x = resolved.x;
+        entity.z = resolved.z;
+        entity.y = resolved.y;
+        entity.isMoving = true;
+      } else {
+        entity.isMoving = false;
       }
 
       // ── Rest ────────────────────────────────────────────────
@@ -1057,10 +1158,13 @@ export class HeadlessArena {
         e.castingTotalTime = 0;
         e.castingIsChannel = false;
       }
+    }
+    // Charges before auto-attack (must match server tick order)
+    this.chargeSystem.update(dt);
+    for (const e of this.entities) {
       this.autoAttack.update(e, dt);
     }
     this.autoAttack.updateProjectiles(dt);
-    this.chargeSystem.update(dt);
     this.gasCloudSystem.update(dt);
     this.chemPoolSystem.update(dt);
     this.dotSystem.update(dt);
@@ -1226,15 +1330,24 @@ export class HeadlessArena {
         }
       }
 
-      // Proximity reward — encourages closing distance and melee engagement
+      // Proximity reward — encourages closing distance and melee engagement.
+      // Scaled by LoS: full reward when opponent is visible, penalty when blocked
+      // by walls so the model learns to path around obstacles instead of running
+      // into walls toward a target it can't reach.
       if (!entity.dead && !opponent.dead) {
         const dist = entity.distanceTo(opponent);
-        // Continuous gradient: closer = more reward
+        const hasLoS = this.collision.hasLineOfSight(entity.x, entity.z, opponent.x, opponent.z, entity.y, opponent.y);
         const maxRewardDist = yardsToUnits(30);
-        rewards[i] += 0.001 * Math.max(0, 1 - dist / maxRewardDist);
-        // Melee engagement bonus for being in auto-attack range
-        if (dist <= entity.autoAttackRange * 1.5) {
-          rewards[i] += 0.004;
+        const closeness = Math.max(0, 1 - dist / maxRewardDist);
+        if (hasLoS) {
+          rewards[i] += 0.001 * closeness;
+          // Melee engagement bonus for being in auto-attack range
+          if (dist <= entity.autoAttackRange * 1.5) {
+            rewards[i] += 0.004;
+          }
+        } else {
+          // No LoS — penalize proximity to encourage moving around obstacles
+          rewards[i] -= 0.002 * closeness;
         }
       }
 
@@ -1375,6 +1488,32 @@ export class HeadlessArena {
     // Kaboom — cone knockback
     if (ability.id === 'kaboom') {
       this.chargeSystem.executeKaboom(entity, entity.rotY);
+    }
+
+    // Dumpster Dive — stop auto-attack, force enemies to lose target
+    if (ability.id === 'dumpster-dive') {
+      this.autoAttack.stop(entity);
+      entity.autoAttackTarget = null;
+      // Force all enemies targeting this entity to lose their target and stop auto-attacking
+      for (const other of this.entities) {
+        if (other !== entity && other.autoAttackTarget === entity) {
+          this.autoAttack.stop(other);
+          other.autoAttackTarget = null;
+        }
+      }
+    }
+
+    // Sleep applied — attacker stops auto-attacking the sleeping target to avoid waking it
+    if (ability.appliesDebuff?.effects.some(e => e.type === 'sleep')) {
+      if (this.autoAttack.getTarget(entity) === target) {
+        this.autoAttack.stop(entity);
+      }
+    }
+
+    // Blind applied — target loses auto-attack target
+    if (ability.appliesDebuff?.effects.some(e => e.type === 'blind') && target) {
+      this.autoAttack.stop(target);
+      target.autoAttackTarget = null;
     }
 
     // Crackhead tweaking stacks
