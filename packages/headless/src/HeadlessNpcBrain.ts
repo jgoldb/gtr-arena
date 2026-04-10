@@ -20,6 +20,7 @@ import {
   type CollisionSystem,
   Sweep,
   Bandage,
+  Grenade,
 } from '@gtr/shared';
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -53,6 +54,8 @@ export type NpcBehaviorMode = 'aggressive' | 'passive' | 'kiting' | 'punching-ba
 const MELEE_RANGE = yardsToUnits(3);
 const SWEEP_CHARGE_YARDS = 28 * (Sweep.chargeDuration ?? 0.7);
 const SWEEP_CHARGE_SPEED_YDS = 28;
+// Must match GRENADE_IMPACT_DELAY in HeadlessArena.ts
+const GRENADE_IMPACT_DELAY = 0.88;
 
 // ── Brain ─────────────────────────────────────────────────────────────
 
@@ -192,13 +195,36 @@ export class HeadlessNpcBrain {
     this.lastTargetX = opp.x;
     this.lastTargetZ = opp.z;
 
+    // Ground target: opponent's current position for instant ground-targeted
+    // abilities (e.g. Bottle Chuck). For cast-time Grenade, lead the target over
+    // the full cast + impact window since the ground target is locked at cast
+    // start and can't be updated mid-cast in headless.
+    let groundX = opp.x;
+    let groundZ = opp.z;
+    if (chosenAbility?.id === 'grenade') {
+      const leadTime = (Grenade.castTime ?? 1.5) + GRENADE_IMPACT_DELAY;
+      groundX = opp.x + this.targetVelX * leadTime;
+      groundZ = opp.z + this.targetVelZ * leadTime;
+      // Clamp to within Grenade range from the caster so the cast isn't rejected
+      // if the predicted landing is outside throw range.
+      const gdx = groundX - e.x;
+      const gdz = groundZ - e.z;
+      const gdist = Math.sqrt(gdx * gdx + gdz * gdz);
+      const maxRange = (Grenade.range ?? 0);
+      if (maxRange > 0 && gdist > maxRange) {
+        const k = maxRange / gdist;
+        groundX = e.x + gdx * k;
+        groundZ = e.z + gdz * k;
+      }
+    }
+
     return {
       abilityIndex,
       moveAngle: movement.angle,
       moveSpeed: movement.speed,
       cancelCast: false,
-      groundX: opp.x,
-      groundZ: opp.z,
+      groundX,
+      groundZ,
     };
   }
 
@@ -556,6 +582,17 @@ export class HeadlessNpcBrain {
   // ── Common abilities ────────────────────────────────────────────────
 
   private scoreCommonActions(actions: ScoredAction[], dist: number): void {
+    // Grenade (1.5s cast, ground-targeted AoE damage + 3s disorient)
+    const grenadeIdx = this.idx('grenade');
+    if (grenadeIdx >= 0
+        && this.ready('grenade')
+        && dist <= (Grenade.range ?? 0)
+        && !this.buffSystem.hasBuff(this.opponent, 'grenade')) {
+      // High score so Master commits to grenade as soon as it's available —
+      // mirrors the client NPC brain's behavior.
+      actions.push({ abilityIndex: grenadeIdx, score: 100, isCastTime: true });
+    }
+
     const bandageIdx = this.idx('bandage');
     if (bandageIdx < 0) return;
 

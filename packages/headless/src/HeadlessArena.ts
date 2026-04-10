@@ -194,6 +194,14 @@ const BUFF_WASTE_BASE_PENALTY = 0.015;
 const OFFENSIVE_BUFF_WASTE_MULTIPLIER = 2.5;
 
 const BOTTLE_CHUCK_IMPACT_DELAY = 0.825;
+// Grenade lands later than bottle chuck: ~0.18s throw wind-up + ~0.7s arc flight.
+// Must match GRENADE_IMPACT_DELAY in client/src/engine/PlaygroundNpcSystem.ts so
+// simulated and rendered grenade timings line up.
+const GRENADE_IMPACT_DELAY = 0.88;
+
+function groundTargetImpactDelay(ability: Ability): number {
+  return ability.id === 'grenade' ? GRENADE_IMPACT_DELAY : BOTTLE_CHUCK_IMPACT_DELAY;
+}
 
 // ── Arena ─────────────���────────────────────────────────��─────────────────
 
@@ -469,7 +477,7 @@ export class HeadlessArena {
             ability,
             groundX: groundTarget.x,
             groundZ: groundTarget.z,
-            delay: BOTTLE_CHUCK_IMPACT_DELAY,
+            delay: groundTargetImpactDelay(ability),
             elapsed: 0,
             owner: entity,
           });
@@ -1683,7 +1691,7 @@ export class HeadlessArena {
       ability,
       groundX,
       groundZ,
-      delay: BOTTLE_CHUCK_IMPACT_DELAY,
+      delay: groundTargetImpactDelay(ability),
       elapsed: 0,
       owner: entity,
     });

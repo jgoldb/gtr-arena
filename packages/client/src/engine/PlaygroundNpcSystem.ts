@@ -61,6 +61,9 @@ export interface PlaygroundNpcSystemHost {
 
 // Delay from ability activation to projectile impact (animation wind-up + flight time)
 const BOTTLE_CHUCK_IMPACT_DELAY = 0.825; // ~0.275s launch + 0.55s flight
+// Grenade: throw release at ~0.19s into the throw animation, then ~0.7s arc flight
+const GRENADE_IMPACT_DELAY = 0.88;
+const GRENADE_FLIGHT_DURATION = 0.7;
 
 export class PlaygroundNpcSystem {
   private readonly host: PlaygroundNpcSystemHost;
@@ -433,14 +436,25 @@ export class PlaygroundNpcSystem {
       }
     }
 
+    // Wire up grenade release callback BEFORE triggering the animation, so the
+    // throw release frame can spawn the arcing projectile at the right hand position.
+    if (ability.id === 'grenade') {
+      const aoeRadius = ability.aoeRadius ?? 0;
+      const landingPos = groundPos.clone();
+      npc.model.onGrenadeRelease = (handPos) => {
+        host.effects.launchGrenadeProjectile(handPos, landingPos, GRENADE_FLIGHT_DURATION, aoeRadius);
+      };
+    }
+
     // Animation
     npc.model.triggerAbilityAnimation(ability.id, groundPos);
 
-    // Schedule AoE impact with delay
+    // Schedule AoE impact with delay (grenade has its own throw + flight timing)
+    const impactDelay = ability.id === 'grenade' ? GRENADE_IMPACT_DELAY : BOTTLE_CHUCK_IMPACT_DELAY;
     host.addPendingAoeImpact({
       ability,
       groundPos: groundPos.clone(),
-      delay: BOTTLE_CHUCK_IMPACT_DELAY,
+      delay: impactDelay,
       elapsed: 0,
       owner: npc,
     });

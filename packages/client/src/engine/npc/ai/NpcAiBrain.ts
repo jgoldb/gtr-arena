@@ -4,7 +4,7 @@ import type { Targetable } from '../../types';
 import type { BuffSystem } from '../../combat/BuffSystem';
 import type { CombatSystem } from '../../combat/CombatSystem';
 import type { CollisionSystem } from '../../physics/CollisionSystem';
-import { getCharacterStats, yardsToUnits, isFacingCheck, Bandage, RecentlyBandagedDebuff, abilityCooldown, type Ability } from '@gtr/shared';
+import { getCharacterStats, yardsToUnits, isFacingCheck, Bandage, Grenade, RecentlyBandagedDebuff, abilityCooldown, type Ability } from '@gtr/shared';
 import { MovementController } from './MovementController';
 import { NpcCooldownTracker } from './NpcCooldownTracker';
 import { NpcNavigation } from './NpcNavigation';
@@ -29,6 +29,8 @@ interface NpcCastingState {
   tickInterval: number;
   ticksDelivered: number;
   damageMultiplier: number;
+  /** For ground-targeted cast-time abilities (e.g. Grenade): resolved at completion. */
+  groundTargeted: boolean;
 }
 
 /** Interface for the subset of Engine the AI brain needs. Avoids circular dependency. */
@@ -72,6 +74,17 @@ export class NpcAiBrain {
   /** Discombobulate adaptation — tracks how long we've been scrambled */
   private discombobActive = false;
   private discombobElapsed = 0;
+
+  /** Grenade reaction delay — counts down from reactionDelayMs once grenade is usable */
+  private grenadeReactionTimer = 0;
+  private grenadeReactionArmed = false;
+
+  /** Target velocity tracking (for grenade lead prediction) */
+  private velTrackedEntity: Targetable | null = null;
+  private lastTargetX = 0;
+  private lastTargetZ = 0;
+  private targetVelX = 0;
+  private targetVelZ = 0;
 
   private readonly navigation: NpcNavigation;
 
@@ -124,6 +137,40 @@ export class NpcAiBrain {
     }
 
     this.cooldowns.update(dt);
+
+    // Decrement grenade reaction timer (runs even while casting so timer keeps ticking)
+    if (this.grenadeReactionArmed && this.grenadeReactionTimer > 0) {
+      this.grenadeReactionTimer = Math.max(0, this.grenadeReactionTimer - dt);
+    }
+
+    // Track current target velocity for grenade lead prediction.
+    // Runs every frame (including during casts) so velocity stays fresh.
+    // Uses the engine's `dt` directly — this is the same timestep the player
+    // controller just used to move the target, so position delta / dt yields
+    // the exact per-frame velocity. Previously this used performance.now() with
+    // a 10ms threshold, which caused velocity to skip updates at high refresh
+    // rates and latch stale values between frame hiccups — leading to "ghost
+    // velocity" leads on stopped targets.
+    if (this.currentTargetEntity && !this.currentTargetEntity.dead) {
+      const tp = this.currentTargetEntity.mesh.position;
+      if (this.velTrackedEntity !== this.currentTargetEntity) {
+        // New target: re-anchor and zero velocity until the next frame.
+        this.velTrackedEntity = this.currentTargetEntity;
+        this.lastTargetX = tp.x;
+        this.lastTargetZ = tp.z;
+        this.targetVelX = 0;
+        this.targetVelZ = 0;
+      } else if (dt > 0) {
+        this.targetVelX = (tp.x - this.lastTargetX) / dt;
+        this.targetVelZ = (tp.z - this.lastTargetZ) / dt;
+        this.lastTargetX = tp.x;
+        this.lastTargetZ = tp.z;
+      }
+    } else {
+      this.velTrackedEntity = null;
+      this.targetVelX = 0;
+      this.targetVelZ = 0;
+    }
 
     // Update movement speed from buffs
     this.movement.speedMultiplier = this.engine.buffSystem.getMovementSpeedMultiplier(this.npc);
@@ -306,6 +353,7 @@ export class NpcAiBrain {
       tickInterval,
       ticksDelivered: 0,
       damageMultiplier: this.engine.buffSystem.getDamageDealtMultiplier(this.npc),
+      groundTargeted: !!ability.groundTargeted,
     };
 
     // Set casting state on NPC for nameplate display, animation, and beam
@@ -316,8 +364,13 @@ export class NpcAiBrain {
     this.npc.castingTotalTime = ability.castTime;
     this.npc.castingIsChannel = isChannel;
 
-    // Trigger animation
-    this.npc.model.triggerAbilityAnimation(ability.id, target?.mesh.position.clone());
+    // Trigger ability "use" animation. Skip for ground-targeted casts (e.g. Grenade)
+    // since their throw animation IS the release motion — it gets fired at cast
+    // completion via npcUseGroundTargetAbility, not here. Triggering it now would
+    // overlap and fight the cast pose animation.
+    if (!ability.groundTargeted) {
+      this.npc.model.triggerAbilityAnimation(ability.id, target?.mesh.position.clone());
+    }
 
     // Apply blockedByTargetDebuff at channel start (e.g. Recently Bandaged)
     if (isChannel && ability.id === 'bandage' && target) {
@@ -368,7 +421,7 @@ export class NpcAiBrain {
 
   private completeCasting(): void {
     if (!this.casting) return;
-    const { ability, target, isChannel } = this.casting;
+    const { ability, target, isChannel, groundTargeted } = this.casting;
     this.casting = null;
 
     // Clear nameplate, animation, and beam
@@ -382,9 +435,52 @@ export class NpcAiBrain {
     // For regular casts (not channels), execute the ability now
     // Skip cooldown check — was set when casting started
     if (!isChannel) {
-      this.engine.npcUseAbility(this.npc, ability.id, target);
+      // For ground-targeted casts (e.g. Grenade), resolve the impact point
+      // at completion time so the target's current position is used.
+      const groundPos = (groundTargeted && target && !target.dead)
+        ? this.computeGrenadeGroundPos(target)
+        : undefined;
+      this.engine.npcUseAbility(this.npc, ability.id, target, groundPos);
     }
     // Channels already delivered their ticks during updateCasting
+  }
+
+  /**
+   * Resolve the ground impact position for a grenade-style ground-targeted cast.
+   * Master leads the target perfectly with zero offset; lower difficulties get a
+   * shorter lead and a wider random scatter, so easier bots miss more often.
+   */
+  private computeGrenadeGroundPos(target: Targetable): THREE.Vector3 {
+    const pos = target.mesh.position.clone();
+    // Skill: 0 (easy) → 1 (master). Derived from wastefulness like other behaviors.
+    const skill = Math.max(0, Math.min(1, 1 - this.difficulty.wastefulness));
+    // Lead prediction over the grenade impact delay (throw wind-up + flight).
+    // Must match GRENADE_IMPACT_DELAY in PlaygroundNpcSystem so the grenade
+    // lands where the player will actually be when it explodes.
+    const impactDelay = 0.88;
+    pos.x += this.targetVelX * impactDelay * skill;
+    pos.z += this.targetVelZ * impactDelay * skill;
+    // Random scatter — 0 yards on master, up to ~4 yards on easy.
+    const fuzzYards = (1 - skill) * 4;
+    if (fuzzYards > 0) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = Math.random() * yardsToUnits(fuzzYards);
+      pos.x += Math.cos(angle) * radius;
+      pos.z += Math.sin(angle) * radius;
+    }
+    // Clamp to within Grenade range from the NPC so the throw isn't rejected
+    // by the range check if the target ran outside the radius during the cast.
+    const npcPos = this.npc.mesh.position;
+    const dx = pos.x - npcPos.x;
+    const dz = pos.z - npcPos.z;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    const maxRange = (Grenade.range ?? 0) + yardsToUnits(1);
+    if (maxRange > 0 && dist > maxRange) {
+      const k = maxRange / dist;
+      pos.x = npcPos.x + dx * k;
+      pos.z = npcPos.z + dz * k;
+    }
+    return pos;
   }
 
   private cancelCasting(): void {
@@ -569,10 +665,40 @@ export class NpcAiBrain {
   }
 
   /**
-   * Score common abilities available to all characters (e.g. Bandage).
+   * Score common abilities available to all characters (e.g. Bandage, Grenade).
    * Appends scored actions to the provided array.
    */
   private scoreCommonActions(actions: ScoredAction[], world: WorldState): void {
+    // ── Grenade (1.5s cast, ground-targeted AoE damage + disorient) ──
+    // Skip for Neural NPCs — they should only use abilities through their model.
+    if (this.difficulty.name !== 'Neural'
+        && this.abilityLookup.has('grenade')
+        && this.cooldowns.isReady('grenade')
+        && this.currentTarget
+        && this.currentTarget.distance <= Grenade.range!
+        && this.currentTarget.inLineOfSight) {
+      // Arm reaction timer the first cycle the grenade becomes usable.
+      // Lower difficulties wait longer (uses the same reactionDelayMs as
+      // trinket use). Master = 0ms, easy = 1500ms.
+      if (!this.grenadeReactionArmed) {
+        this.grenadeReactionArmed = true;
+        this.grenadeReactionTimer = this.difficulty.reactionDelayMs / 1000;
+      }
+      if (this.grenadeReactionTimer <= 0) {
+        // High score so the NPC commits to the grenade as soon as it's available.
+        actions.push({
+          type: 'ability', score: 100, abilityId: 'grenade',
+          target: this.currentTarget,
+          ability: Grenade, isCastTime: true,
+          execute: () => {},
+        });
+      }
+    } else {
+      // Grenade not usable right now — disarm so the timer restarts next window.
+      this.grenadeReactionArmed = false;
+      this.grenadeReactionTimer = 0;
+    }
+
     // ── Bandage (8s channel, heal 1000) ──
     if (this.abilityLookup.has('bandage') && this.cooldowns.isReady('bandage')) {
       // Check for Recently Bandaged debuff
