@@ -290,6 +290,10 @@ export class HeadlessArena {
   private sweepEndBurstHits: [number, number] = [0, 0];
   /** Accumulated proximity reward for Sweep near-misses (shaped gradient for distance learning). */
   private sweepEndProximity: [number, number] = [0, 0];
+  /** Count of Grenade impacts that landed on at least one opponent (the skillful part). */
+  private grenadeHitCount: [number, number] = [0, 0];
+  /** Accumulated proximity reward for Grenade near-misses — shaped gradient for learning to lead targets. */
+  private grenadeNearMissProximity: [number, number] = [0, 0];
   /** Tracks unique ability IDs used per step for diversity bonus. */
   private abilitiesUsedThisStep: [Set<string>, Set<string>] = [new Set(), new Set()];
   /** Running ability usage counts (EMA) for intrinsic curiosity reward. Persists across episodes. */
@@ -749,6 +753,8 @@ export class HeadlessArena {
     this.sweepGapClosePenalty = [0, 0];
     this.sweepEndBurstHits = [0, 0];
     this.sweepEndProximity = [0, 0];
+    this.grenadeHitCount = [0, 0];
+    this.grenadeNearMissProximity = [0, 0];
     this.activeBuffWindows = [];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
     this.wasDiscombobulated = [false, false];
@@ -930,6 +936,8 @@ export class HeadlessArena {
     this.sweepGapClosePenalty = [0, 0];
     this.sweepEndBurstHits = [0, 0];
     this.sweepEndProximity = [0, 0];
+    this.grenadeHitCount = [0, 0];
+    this.grenadeNearMissProximity = [0, 0];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
     this.curiosityBonus = [0, 0];
     this.manaAtStepStart = [this.entities[0].mana, this.entities[1].mana];
@@ -1065,7 +1073,10 @@ export class HeadlessArena {
             this.abilityFailedCount[i]++;
           } else if (ability.groundTargeted && action.groundX !== undefined && action.groundZ !== undefined) {
             if (ability.castTime) {
-              // Ground-targeted cast-time ability (e.g. Grenade): start cast with stored ground target
+              // Ground-targeted cast-time ability (e.g. Grenade): start cast with stored ground target.
+              // CC application is counted at impact (in updatePendingAoeImpacts), not at cast start,
+              // since the AoE can miss entirely — giving CC credit for starting a cast would reward
+              // casting grenades into empty space.
               const validation = this.combat.validateAbility(ability, entity, null);
               if (validation.success) {
                 const castResult = this.castingSystem.start(entity, ability, null, { x: action.groundX, z: action.groundZ });
@@ -1075,9 +1086,6 @@ export class HeadlessArena {
                   this.abilityUsedCount[i]++;
                   this.abilitiesUsedThisStep[i].add(ability.id);
                   this.recordAbilityForCuriosity(i, action.abilityIndex!);
-                  if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
-                    this.ccAppliedCount[i]++;
-                  }
                 } else {
                   this.abilityFailedCount[i]++;
                 }
@@ -1355,6 +1363,16 @@ export class HeadlessArena {
       // Sweep gap-close penalty — scaled by distance beyond optimal range (22y).
       // Farther away = more clearly a wasted gap-closer, not an offensive play.
       rewards[i] -= this.sweepGapClosePenalty[i] * 0.15;
+
+      // Grenade landing bonus — the skillful part of a 1.5s cast-time,
+      // ground-targeted AoE with a 0.88s impact delay. Landing it requires
+      // predicting opponent movement ~2.4s ahead, so the signal needs to be
+      // distinct from raw damage to be learnable.
+      rewards[i] += this.grenadeHitCount[i] * 0.12;
+
+      // Grenade near-miss proximity — shaped gradient so the agent can learn
+      // to lead targets even when the impact doesn't land in the AoE.
+      rewards[i] += this.grenadeNearMissProximity[i] * 0.05;
 
       // CC application bonus (stun/sleep/blind)
       rewards[i] += this.ccAppliedCount[i] * 0.008;
@@ -1707,13 +1725,41 @@ export class HeadlessArena {
       if (impact.elapsed < impact.delay) continue;
 
       const radius = impact.ability.aoeRadius ?? 0;
+      const ownerIdx = this.entities.indexOf(impact.owner);
+      const isGrenade = impact.ability.id === 'grenade';
+      const isCC = !!impact.ability.appliesDebuff && this.isDebuffCC(impact.ability.appliesDebuff);
+      let grenadeHit = false;
+      let nearestDistSq = Infinity;
+
       for (const target of this.entities) {
         if (target === impact.owner || target.dead || !target.isHostileTo(impact.owner)) continue;
         if (this.buffSystem.isUntargetable(target)) continue;
         const dx = target.x - impact.groundX;
         const dz = target.z - impact.groundZ;
-        if (dx * dx + dz * dz > radius * radius) continue;
+        const distSq = dx * dx + dz * dz;
+        if (isGrenade && distSq < nearestDistSq) nearestDistSq = distSq;
+        if (distSq > radius * radius) continue;
         this.combat.applyAoeDamage(impact.owner, target, impact.ability);
+        if (isGrenade) {
+          grenadeHit = true;
+          if (isCC && ownerIdx >= 0) this.ccAppliedCount[ownerIdx]++;
+        }
+      }
+
+      // Grenade-specific shaping: landing bonus + near-miss proximity gradient.
+      // Grenade is a high-commitment skill shot (1.5s cast + 0.88s impact delay),
+      // so raw damage alone gives too sparse a signal for the agent to learn to
+      // lead the target. These shaped rewards mirror how Sweep's end-burst is
+      // handled (see sweepEndBurstHits / sweepEndProximity).
+      if (isGrenade && ownerIdx >= 0) {
+        if (grenadeHit) {
+          this.grenadeHitCount[ownerIdx]++;
+        } else if (nearestDistSq < Infinity) {
+          const dist = Math.sqrt(nearestDistSq);
+          // Linear falloff from the AoE edge out to 6 yards beyond center.
+          const proximity = Math.max(0, 1 - dist / yardsToUnits(6));
+          this.grenadeNearMissProximity[ownerIdx] += proximity;
+        }
       }
 
       this.pendingAoeImpacts.splice(i, 1);

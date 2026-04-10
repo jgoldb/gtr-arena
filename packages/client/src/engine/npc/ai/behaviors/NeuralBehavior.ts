@@ -265,6 +265,7 @@ export class NeuralBehavior implements CharacterBehavior {
       // Self — CC & status
       buffSystem.isStunned(npc) ? 1 : 0,
       buffSystem.isSleeping(npc) ? 1 : 0,
+      buffSystem.isDisoriented(npc) ? 1 : 0,
       buffSystem.isBlinded(npc) ? 1 : 0,
       buffSystem.isDiscombobulated(npc) ? 1 : 0,
       buffSystem.isUntargetable(npc) ? 1 : 0,
@@ -290,6 +291,7 @@ export class NeuralBehavior implements CharacterBehavior {
       // Opponent — CC & status
       currentTarget.isStunned ? 1 : 0,
       currentTarget.isSleeping ? 1 : 0,
+      buffSystem.isDisoriented(oppEntity) ? 1 : 0,
       currentTarget.isBlinded ? 1 : 0,
       buffSystem.isDiscombobulated(oppEntity) ? 1 : 0,
       buffSystem.isUntargetable(oppEntity) ? 1 : 0,

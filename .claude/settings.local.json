@@ -62,7 +62,8 @@
       "Bash(git -C /c/Users/Joey/Repos/gtr log --all --decorate --oneline --graph)",
       "Bash(xargs cat:*)",
       "Bash(xxd \"C:/Users/Joey/Repos/gtr/packages/headless/train/train.py\")",
-      "Bash(/c/Program Files/nodejs/node.exe:*)"
+      "Bash(/c/Program Files/nodejs/node.exe:*)",
+      "Bash(python train.py --curriculum-start 4)"
     ]
   }
 }

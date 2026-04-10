@@ -373,7 +373,7 @@ def main():
               f"(all {env.num_abilities} by ~{args.curriculum_start + (env.num_abilities - args.curriculum_start) * args.curriculum_unlock_every:,} steps)")
 
     # Train
-    print(f"\nTraining for {args.timesteps:,} timesteps (LR {args.lr} → 0, ent_coef {args.ent_coef} → 0.01)...")
+    print(f"\nTraining for {args.timesteps:,} timesteps (LR {args.lr} -> 0, ent_coef {args.ent_coef} -> 0.01)...")
     t0 = time.time()
 
     try:
