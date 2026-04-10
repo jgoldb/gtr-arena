@@ -27,7 +27,7 @@ const SLOT_ACTION_IDS = [
   'action_0',
   'action_1', 'action_2', 'action_3', 'action_4',
   'action_5', 'action_6', 'action_7', 'action_8',
-  'action_9', 'action_10',
+  'action_9', 'action_10', 'action_11',
 ];
 
 const LAYOUT_STORAGE_KEY = 'actionbar_layout';

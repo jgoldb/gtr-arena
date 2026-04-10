@@ -22,6 +22,7 @@ export class CombatSystem {
   onFlinchDamage?: (target: Targetable) => void;
   onDodge?: (target: Targetable) => void;
   onSleepApplied?: (attacker: Targetable, target: Targetable) => void;
+  onDisorientApplied?: (attacker: Targetable, target: Targetable) => void;
   onBlindApplied?: (attacker: Targetable, target: Targetable) => void;
   onHostileAction?: (attacker: Targetable, target: Targetable, ability?: Ability) => void;
   onEnterCombat?: (entity: Targetable) => void;
@@ -339,6 +340,9 @@ export class CombatSystem {
             if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
               this.onSleepApplied?.(attacker, target);
             }
+            if (ability.appliesDebuff.effects.some(e => e.type === 'disorient')) {
+              this.onDisorientApplied?.(attacker, target);
+            }
             if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
               this.onBlindApplied?.(attacker, target);
             }
@@ -456,6 +460,9 @@ export class CombatSystem {
       } else {
         if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
           this.onSleepApplied?.(attacker, target);
+        }
+        if (ability.appliesDebuff.effects.some(e => e.type === 'disorient')) {
+          this.onDisorientApplied?.(attacker, target);
         }
         if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
           this.onBlindApplied?.(attacker, target);

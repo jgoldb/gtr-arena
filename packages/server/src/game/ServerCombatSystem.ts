@@ -22,6 +22,7 @@ export class ServerCombatSystem {
   onDirectDamageDealt?: (target: ServerEntity) => void;
   onFlinchDamage?: (target: ServerEntity) => void;
   onSleepApplied?: (attacker: ServerEntity, target: ServerEntity) => void;
+  onDisorientApplied?: (attacker: ServerEntity, target: ServerEntity) => void;
   onBlindApplied?: (attacker: ServerEntity, target: ServerEntity) => void;
   onEntityKilled?: (killer: ServerEntity, victim: ServerEntity) => void;
 
@@ -318,6 +319,9 @@ export class ServerCombatSystem {
             if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
               this.onSleepApplied?.(attacker, target);
             }
+            if (ability.appliesDebuff.effects.some(e => e.type === 'disorient')) {
+              this.onDisorientApplied?.(attacker, target);
+            }
             if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
               this.onBlindApplied?.(attacker, target);
             }
@@ -422,6 +426,9 @@ export class ServerCombatSystem {
       } else {
         if (ability.appliesDebuff.effects.some(e => e.type === 'sleep')) {
           this.onSleepApplied?.(attacker, target);
+        }
+        if (ability.appliesDebuff.effects.some(e => e.type === 'disorient')) {
+          this.onDisorientApplied?.(attacker, target);
         }
         if (ability.appliesDebuff.effects.some(e => e.type === 'blind')) {
           this.onBlindApplied?.(attacker, target);

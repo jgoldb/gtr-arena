@@ -80,6 +80,7 @@ export interface EntityObservation {
   // Self — CC & status
   isStunned: number;   // pure stun (not sleep)
   isSleeping: number;
+  isDisoriented: number;
   isBlinded: number;
   isDiscombobulated: number;
   isUntargetable: number;
@@ -106,6 +107,7 @@ export interface EntityObservation {
   // Opponent — CC & status
   oppIsStunned: number;
   oppIsSleeping: number;
+  oppIsDisoriented: number;
   oppIsBlinded: number;
   oppIsDiscombobulated: number;
   oppIsUntargetable: number;
@@ -274,8 +276,8 @@ export class HeadlessArena {
   private chargeDamageDealt: [number, number] = [0, 0];
   /** Count of Sweep charges that finished without hitting anyone. */
   private sweepWhiffCount: [number, number] = [0, 0];
-  /** Count of Sweep charges used as a gap closer (far from opponent). */
-  private sweepGapCloseCount: [number, number] = [0, 0];
+  /** Scaled penalty for Sweep used as gap closer — ramps linearly beyond optimal range. */
+  private sweepGapClosePenalty: [number, number] = [0, 0];
   /** Count of Sweep end-burst AoE hits (the skillful part — landing the finisher). */
   private sweepEndBurstHits: [number, number] = [0, 0];
   /** Accumulated proximity reward for Sweep near-misses (shaped gradient for distance learning). */
@@ -439,8 +441,8 @@ export class HeadlessArena {
     // Casting system
     this.castingSystem = new CastingSystem<HeadlessEntity>({
       isGodMode: () => false,
-      shouldCancel: (entity) =>
-        entity.dead || entity.stunned || this.buffSystem.isSleeping(entity) || entity.isMoving,
+      shouldCancel: (entity, ability) =>
+        entity.dead || entity.stunned || this.buffSystem.isSleeping(entity) || this.buffSystem.isDisoriented(entity) || (!ability.castableWhileMoving && entity.isMoving),
       getPosition: (entity) => ({ x: entity.x, z: entity.z }),
       getManaCostMultiplier: (entity) => this.buffSystem.getManaCostMultiplier(entity),
       getDamageDealtMultiplier: (entity) => this.buffSystem.getDamageDealtMultiplier(entity),
@@ -458,7 +460,22 @@ export class HeadlessArena {
       applyHeal: (healer, target, amount) => this.combat.applyHeal(target, amount, healer),
       applyChannelTickDamage: (attacker, target, damage, multiplier) =>
         this.combat.applyChannelTickDamage(attacker, target, damage, multiplier),
-      useAbility: (entity, ability, target) => {
+      useAbility: (entity, ability, target, groundTarget) => {
+        // Ground-targeted cast completed — fire AoE at stored position
+        if (ability.groundTargeted && groundTarget) {
+          // CastingSystem cleared the placeholder cooldown on completion; set the real one now.
+          entity.cooldowns.setCooldown(ability.id, abilityCooldown(ability));
+          this.pendingAoeImpacts.push({
+            ability,
+            groundX: groundTarget.x,
+            groundZ: groundTarget.z,
+            delay: BOTTLE_CHUCK_IMPACT_DELAY,
+            elapsed: 0,
+            owner: entity,
+          });
+          this.combat.enterCombat(entity);
+          return { success: true };
+        }
         // Called when a non-channel cast completes — route to combat + post-effects
         const opponent = this.entities[0] === entity ? this.entities[1] : this.entities[0];
         const result = this.combat.useAbility(ability, entity, target);
@@ -469,10 +486,13 @@ export class HeadlessArena {
       },
     });
 
-    // Cast pushback + cancel resting + wake sleep on direct damage
+    // Cast pushback + cancel resting + wake sleep/disorient on direct damage
     this.combat.onDirectDamageDealt = (target) => {
       if (this.buffSystem.isSleeping(target)) {
         this.buffSystem.removeSleepEffects(target);
+      }
+      if (this.buffSystem.isDisoriented(target)) {
+        this.buffSystem.removeDisorientEffects(target);
       }
       this.castingSystem.applyPushback(target);
       if (this.buffSystem.hasBuff(target, 'resting')) {
@@ -718,7 +738,7 @@ export class HeadlessArena {
     this.buffWastePenalty = [0, 0];
     this.trinketWastedCount = [0, 0];
     this.sweepWhiffCount = [0, 0];
-    this.sweepGapCloseCount = [0, 0];
+    this.sweepGapClosePenalty = [0, 0];
     this.sweepEndBurstHits = [0, 0];
     this.sweepEndProximity = [0, 0];
     this.activeBuffWindows = [];
@@ -899,7 +919,7 @@ export class HeadlessArena {
     this.reactiveBuffBonus = [0, 0];
     this.chargeDamageDealt = [0, 0];
     this.sweepWhiffCount = [0, 0];
-    this.sweepGapCloseCount = [0, 0];
+    this.sweepGapClosePenalty = [0, 0];
     this.sweepEndBurstHits = [0, 0];
     this.sweepEndProximity = [0, 0];
     this.abilitiesUsedThisStep = [new Set(), new Set()];
@@ -916,7 +936,7 @@ export class HeadlessArena {
       if (entity.dead) continue;
 
       // Sync CC state from buffs
-      entity.stunned = this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity);
+      entity.stunned = this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity) || this.buffSystem.isDisoriented(entity);
       entity.blinded = this.buffSystem.isBlinded(entity);
 
       // Detect discombobulate rising edge — generate a fixed scramble offset
@@ -994,7 +1014,7 @@ export class HeadlessArena {
       // Start resting if requested and conditions are met
       if (action.rest && !this.buffSystem.hasBuff(entity, 'resting')) {
         if (!entity.inCombat && !entity.isMoving && !entity.stunned
-            && !this.buffSystem.isSleeping(entity)
+            && !this.buffSystem.isSleeping(entity) && !this.buffSystem.isDisoriented(entity)
             && !this.castingSystem.isCasting(entity)) {
           this.autoAttack.stop(entity);
           entity.autoAttackTarget = null;
@@ -1036,17 +1056,39 @@ export class HeadlessArena {
             // Trying to use ability while casting — wasted action
             this.abilityFailedCount[i]++;
           } else if (ability.groundTargeted && action.groundX !== undefined && action.groundZ !== undefined) {
-            // Ground-targeted AoE (e.g. Bottle Chuck)
-            const ok = this.useGroundTargetAbility(entity, ability, action.groundX, action.groundZ);
-            if (ok) {
-              this.abilityUsedCount[i]++;
-              this.abilitiesUsedThisStep[i].add(ability.id);
-              this.recordAbilityForCuriosity(i, action.abilityIndex!);
-              if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
-                this.ccAppliedCount[i]++;
+            if (ability.castTime) {
+              // Ground-targeted cast-time ability (e.g. Grenade): start cast with stored ground target
+              const validation = this.combat.validateAbility(ability, entity, null);
+              if (validation.success) {
+                const castResult = this.castingSystem.start(entity, ability, null, { x: action.groundX, z: action.groundZ });
+                if (castResult.started) {
+                  const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(entity));
+                  this.manaSpent[i] += effectiveCost;
+                  this.abilityUsedCount[i]++;
+                  this.abilitiesUsedThisStep[i].add(ability.id);
+                  this.recordAbilityForCuriosity(i, action.abilityIndex!);
+                  if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
+                    this.ccAppliedCount[i]++;
+                  }
+                } else {
+                  this.abilityFailedCount[i]++;
+                }
+              } else {
+                this.abilityFailedCount[i]++;
               }
             } else {
-              this.abilityFailedCount[i]++;
+              // Instant ground-targeted AoE (e.g. Bottle Chuck)
+              const ok = this.useGroundTargetAbility(entity, ability, action.groundX, action.groundZ);
+              if (ok) {
+                this.abilityUsedCount[i]++;
+                this.abilitiesUsedThisStep[i].add(ability.id);
+                this.recordAbilityForCuriosity(i, action.abilityIndex!);
+                if (ability.appliesDebuff && this.isDebuffCC(ability.appliesDebuff)) {
+                  this.ccAppliedCount[i]++;
+                }
+              } else {
+                this.abilityFailedCount[i]++;
+              }
             }
           } else if (ability.castTime) {
             // Cast-time or channeled ability — route through CastingSystem
@@ -1103,6 +1145,7 @@ export class HeadlessArena {
               if (ability.id === 'pvp-trinket' &&
                   !this.buffSystem.isStunned(entity) &&
                   !this.buffSystem.isSleeping(entity) &&
+                  !this.buffSystem.isDisoriented(entity) &&
                   !this.buffSystem.isBlinded(entity)) {
                 this.trinketWastedCount[i]++;
               }
@@ -1198,7 +1241,7 @@ export class HeadlessArena {
 
     // Re-sync CC state after tick
     for (const e of this.entities) {
-      e.stunned = this.buffSystem.isStunned(e) || this.buffSystem.isSleeping(e);
+      e.stunned = this.buffSystem.isStunned(e) || this.buffSystem.isSleeping(e) || this.buffSystem.isDisoriented(e);
       e.blinded = this.buffSystem.isBlinded(e);
     }
 
@@ -1301,9 +1344,9 @@ export class HeadlessArena {
       // Sweep whiff penalty — wasted cooldown + mana when charge hits nobody
       rewards[i] -= this.sweepWhiffCount[i] * 0.06;
 
-      // Sweep gap-close penalty — using Sweep from beyond charge range wastes CD + mana
-      // for pure mobility (threshold at 25y, well beyond the ~20y charge distance)
-      rewards[i] -= this.sweepGapCloseCount[i] * 0.15;
+      // Sweep gap-close penalty — scaled by distance beyond optimal range (22y).
+      // Farther away = more clearly a wasted gap-closer, not an offensive play.
+      rewards[i] -= this.sweepGapClosePenalty[i] * 0.15;
 
       // CC application bonus (stun/sleep/blind)
       rewards[i] += this.ccAppliedCount[i] * 0.008;
@@ -1480,13 +1523,15 @@ export class HeadlessArena {
 
     // Sweep charge
     if (ability.id === 'sweep') {
-      // Track gap-close: using Sweep from well beyond charge range wastes CD + mana
-      // Charge covers ~20 yards (28 yd/s × 0.714s), so threshold at 25y
+      // Scaled gap-close penalty: Sweep charge covers ~20 yards, end-burst lands
+      // at melee (~3y), so optimal max initiation range is ~22 yards. Beyond that
+      // the penalty ramps linearly — the farther away, the more it's pure gap-closing.
       const idx = this.entities.indexOf(entity);
       if (idx >= 0 && !opponent.dead) {
-        const dist = entity.distanceTo(opponent);
-        if (dist > yardsToUnits(25)) {
-          this.sweepGapCloseCount[idx]++;
+        const distYards = entity.distanceTo(opponent) / yardsToUnits(1);
+        const optimalMax = 22; // charge (20y) + melee tolerance (2y)
+        if (distYards > optimalMax) {
+          this.sweepGapClosePenalty[idx] += (distYards - optimalMax) / 10;
         }
       }
       const dirX = Math.sin(entity.rotY);
@@ -1593,7 +1638,7 @@ export class HeadlessArena {
 
   private isDebuffCC(debuff: BuffDefinition): boolean {
     return debuff.effects.some(e =>
-      e.type === 'stun' || e.type === 'sleep' || e.type === 'blind',
+      e.type === 'stun' || e.type === 'sleep' || e.type === 'disorient' || e.type === 'blind',
     );
   }
 
@@ -1606,7 +1651,7 @@ export class HeadlessArena {
     groundZ: number,
   ): boolean {
     if (entity.dead) return false;
-    if (entity.stunned || this.buffSystem.isSleeping(entity)) return false;
+    if (entity.stunned || this.buffSystem.isSleeping(entity) || this.buffSystem.isDisoriented(entity)) return false;
     // Cooldown check (off-GCD abilities skip GCD check)
     if (ability.offGcd) {
       if (entity.cooldowns.getCooldownRemaining(ability.id) > 0) return false;
@@ -1705,6 +1750,7 @@ export class HeadlessArena {
       // Self — CC & status
       isStunned: this.buffSystem.isStunned(self) ? 1 : 0,
       isSleeping: this.buffSystem.isSleeping(self) ? 1 : 0,
+      isDisoriented: this.buffSystem.isDisoriented(self) ? 1 : 0,
       isBlinded: this.buffSystem.isBlinded(self) ? 1 : 0,
       isDiscombobulated: this.buffSystem.isDiscombobulated(self) ? 1 : 0,
       isUntargetable: this.buffSystem.isUntargetable(self) ? 1 : 0,
@@ -1733,6 +1779,7 @@ export class HeadlessArena {
       // Opponent — CC & status
       oppIsStunned: this.buffSystem.isStunned(opp) ? 1 : 0,
       oppIsSleeping: this.buffSystem.isSleeping(opp) ? 1 : 0,
+      oppIsDisoriented: this.buffSystem.isDisoriented(opp) ? 1 : 0,
       oppIsBlinded: this.buffSystem.isBlinded(opp) ? 1 : 0,
       oppIsDiscombobulated: this.buffSystem.isDiscombobulated(opp) ? 1 : 0,
       oppIsUntargetable: this.buffSystem.isUntargetable(opp) ? 1 : 0,
@@ -1776,7 +1823,7 @@ export class HeadlessArena {
       // Self — vitals & position
       obs.hpPct, obs.manaPct, obs.x, obs.z, obs.y, obs.rotY,
       // Self — CC & status
-      obs.isStunned, obs.isSleeping, obs.isBlinded,
+      obs.isStunned, obs.isSleeping, obs.isDisoriented, obs.isBlinded,
       obs.isDiscombobulated, obs.isUntargetable, obs.inCombat, obs.isResting,
       // Self — buff multipliers
       obs.speedMult, obs.dmgDealtMult, obs.dmgTakenMult,
@@ -1787,7 +1834,7 @@ export class HeadlessArena {
       // Opponent — vitals & position
       obs.oppHpPct, obs.oppManaPct, obs.oppRelX, obs.oppRelZ, obs.oppDistance, obs.oppRotY,
       // Opponent — CC & status
-      obs.oppIsStunned, obs.oppIsSleeping, obs.oppIsBlinded,
+      obs.oppIsStunned, obs.oppIsSleeping, obs.oppIsDisoriented, obs.oppIsBlinded,
       obs.oppIsDiscombobulated, obs.oppIsUntargetable, obs.oppIsResting,
       // Opponent — buff multipliers
       obs.oppSpeedMult, obs.oppDmgDealtMult, obs.oppDmgTakenMult,

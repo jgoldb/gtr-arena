@@ -14,6 +14,7 @@ export interface CastingState<T> {
   tickInterval: number;
   ticksDelivered: number;
   damageMultiplier: number; // snapshotted at channel start for buff consistency
+  groundTarget?: { x: number; z: number }; // for ground-targeted cast-time abilities
 }
 
 export const CAST_PUSHBACK_SECONDS = 0.5;
@@ -25,7 +26,7 @@ export interface CastingCallbacks<T extends Positionable> {
   // Queries
   isGodMode(entity: T): boolean;
   /** Return true if the entity should have its cast cancelled (dead, stunned, moving, falling, etc.) */
-  shouldCancel(entity: T): boolean;
+  shouldCancel(entity: T, ability: Ability): boolean;
   getPosition(entity: T): { x: number; z: number };
 
   // Buff system
@@ -48,12 +49,12 @@ export interface CastingCallbacks<T extends Positionable> {
   enterCombat(entity: T): void;
   applyHeal(healer: T, target: T, amount: number): void;
   applyChannelTickDamage(attacker: T, target: T, damage: number, multiplier: number): void;
-  useAbility(entity: T, ability: Ability, target: T | null): { success: boolean; errorMessage?: string };
+  useAbility(entity: T, ability: Ability, target: T | null, groundTarget?: { x: number; z: number }): { success: boolean; errorMessage?: string };
 
   // Events (optional)
   onHostileAction?(attacker: T, target: T): void;
   onChannelMiss?(attacker: T, target: T): void;
-  onCastCompleted?(entity: T, ability: Ability, target: T | null, result: { success: boolean; errorMessage?: string }): void;
+  onCastCompleted?(entity: T, ability: Ability, target: T | null, result: { success: boolean; errorMessage?: string }, groundTarget?: { x: number; z: number }): void;
   /** Fires whenever a cast/channel ends (cancel, completion, or channel expiry). Use for SFX cleanup etc. */
   onCastEnded?(entity: T, ability: Ability, wasChannel: boolean): void;
 }
@@ -74,11 +75,11 @@ export class CastingSystem<T extends Positionable> {
    * @returns `{ started: true }` on success, or `{ started: false, errorMessage }` on failure.
    *          `missed` is true if a hostile channel roll missed (cast consumed resources but won't tick).
    */
-  start(entity: T, ability: Ability, target: T | null): { started: boolean; errorMessage?: string; missed?: boolean } {
+  start(entity: T, ability: Ability, target: T | null, groundTarget?: { x: number; z: number }): { started: boolean; errorMessage?: string; missed?: boolean } {
     if (this.states.has(entity)) {
       return { started: false, errorMessage: 'Already casting' };
     }
-    if (this.cb.shouldCancel(entity)) {
+    if (this.cb.shouldCancel(entity, ability)) {
       return { started: false, errorMessage: 'Cannot cast while moving' };
     }
 
@@ -127,6 +128,7 @@ export class CastingSystem<T extends Positionable> {
       tickInterval: isChannel ? ability.castTime! / ability.channelTicks! : 0,
       ticksDelivered: 0,
       damageMultiplier: isChannel ? this.cb.getDamageDealtMultiplier(entity) : 1,
+      groundTarget,
     });
 
     // ── Bandage: apply "Recently Bandaged" debuff ──
@@ -174,7 +176,7 @@ export class CastingSystem<T extends Positionable> {
     casting.elapsed += dt;
 
     // Cancel if dead, stunned, moving, falling, etc.
-    if (this.cb.shouldCancel(entity)) {
+    if (this.cb.shouldCancel(entity, casting.ability)) {
       this.cancel(entity);
       return;
     }
@@ -231,12 +233,12 @@ export class CastingSystem<T extends Positionable> {
 
     // ── Regular cast completion ──
     if (casting.elapsed >= casting.totalTime) {
-      const { ability, target } = casting;
+      const { ability, target, groundTarget: gt } = casting;
       this.states.delete(entity);
       this.cb.clearCooldown(entity, ability.id);
-      const result = this.cb.useAbility(entity, ability, target);
+      const result = this.cb.useAbility(entity, ability, target, gt);
       this.cb.onCastEnded?.(entity, ability, false);
-      this.cb.onCastCompleted?.(entity, ability, target, result);
+      this.cb.onCastCompleted?.(entity, ability, target, result, gt);
     }
   }
 

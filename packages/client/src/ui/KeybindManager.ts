@@ -41,6 +41,7 @@ const DEFAULT_BINDS: { id: string; label: string; category: string; code: string
   { id: 'action_8', label: 'Action Bar 8', category: 'Action Bar', code: 'KeyE' },
   { id: 'action_9', label: 'Action Bar 9', category: 'Action Bar', code: 'KeyV' },
   { id: 'action_10', label: 'Action Bar 10', category: 'Action Bar', code: 'KeyT' },
+  { id: 'action_11', label: 'Action Bar 11', category: 'Action Bar', code: 'KeyY' },
   // Targeting
   { id: 'target_nearest_enemy', label: 'Target Nearest Enemy', category: 'Targeting', code: 'Tab' },
   { id: 'target_of_target', label: 'Assist Target', category: 'Targeting', code: 'KeyF' },
@@ -75,6 +76,7 @@ export function buildComboString(e: KeyboardEvent): string {
 
 /** Check if a KeyboardEvent matches a bind string (exact modifier matching) */
 export function matchesKeybindEvent(bindCode: string, e: KeyboardEvent): boolean {
+  if (!bindCode) return false;
   const { shift, ctrl, alt, baseCode } = parseCombo(bindCode);
   return e.code === baseCode && e.shiftKey === shift && e.ctrlKey === ctrl && e.altKey === alt;
 }
@@ -112,6 +114,7 @@ function baseCodeToLabel(code: string): string {
 
 /** Friendly display name for a bind string (handles combos like "Shift+Digit1" → "Shift+1") */
 export function codeToDisplayLabel(code: string): string {
+  if (!code) return '';
   const { shift, ctrl, alt, baseCode } = parseCombo(code);
   let label = '';
   if (shift) label += 'Shift+';
@@ -156,16 +159,18 @@ export class KeybindManager {
     return Array.from(this.binds.values());
   }
 
-  /** Rebind an action in memory. If the new code is already used by another action, swap them. Does NOT persist — call save() explicitly. */
+  /** Rebind an action in memory. If the new code is already used by another action, swap them. Pass '' to unbind. Does NOT persist — call save() explicitly. */
   rebind(actionId: string, newCode: string): void {
     const entry = this.binds.get(actionId);
     if (!entry) return;
 
-    // Find any existing action using this code and swap
-    for (const other of this.binds.values()) {
-      if (other.id !== actionId && other.code === newCode) {
-        other.code = entry.code;
-        break;
+    // Swap only when binding to a real key (not when unbinding)
+    if (newCode) {
+      for (const other of this.binds.values()) {
+        if (other.id !== actionId && other.code === newCode) {
+          other.code = entry.code;
+          break;
+        }
       }
     }
 
@@ -209,7 +214,7 @@ export class KeybindManager {
   getAllBoundCodes(): Set<string> {
     const codes = new Set<string>();
     for (const entry of this.binds.values()) {
-      codes.add(parseCombo(entry.code).baseCode);
+      if (entry.code) codes.add(parseCombo(entry.code).baseCode);
     }
     // Always include modifier & utility keys regardless of binding
     codes.add('ShiftLeft');
@@ -268,6 +273,18 @@ export class KeybindManager {
         const entry = this.binds.get(id);
         if (entry && typeof code === 'string') {
           entry.code = code;
+        }
+      }
+
+      // Unbind new actions whose defaults conflict with existing binds.
+      // A "new" action is one the user has never touched (no saved override).
+      const boundCodes = new Set<string>();
+      for (const entry of this.binds.values()) {
+        if (entry.id in overrides && entry.code) boundCodes.add(entry.code);
+      }
+      for (const entry of this.binds.values()) {
+        if (!(entry.id in overrides) && entry.code && boundCodes.has(entry.code)) {
+          entry.code = '';
         }
       }
     } catch {

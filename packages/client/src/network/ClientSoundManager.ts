@@ -34,6 +34,9 @@ export class ClientSoundManager {
   // Dr. Retardo cast-spell loop SFX (keyed by entity ID)
   private castSpellLoops = new Map<string, LoopHandle>();
 
+  // Grenade cast loop SFX — shared across all characters (keyed by entity ID)
+  private castGrenadeLoops = new Map<string, LoopHandle>();
+
   constructor(host: ClientSoundHost) {
     this.host = host;
     soundEffects.init();
@@ -202,17 +205,35 @@ export class ClientSoundManager {
     if (prev === next) return;
     const charId = this.resolveCharacterId(entityId);
     if (charId !== 'dr-retardo') return;
-    if (prev && prev !== 'bandage') {
+    if (prev && prev !== 'bandage' && prev !== 'grenade') {
       const handle = this.castSpellLoops.get(entityId);
       if (handle) { handle.stop(); this.castSpellLoops.delete(entityId); }
     }
-    if (next && next !== 'bandage') {
+    if (next && next !== 'bandage' && next !== 'grenade') {
       const sfx = getSharedSfx().castSpell;
       if (sfx) {
         const dist = entityId === this.host.localEntityId ? undefined : this.host.distToEntity(entityId);
         const pan = entityId === this.host.localEntityId ? undefined : this.host.panToEntity(entityId);
         const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, entityId);
         if (handle) this.castSpellLoops.set(entityId, handle);
+      }
+    }
+  }
+
+  /** Start or stop the shared cast-grenade loop SFX when an entity's casting state changes. */
+  updateCastGrenadeLoop(entityId: string, prev: string | null, next: string | null): void {
+    if (prev === next) return;
+    if (prev === 'grenade') {
+      const handle = this.castGrenadeLoops.get(entityId);
+      if (handle) { handle.stop(); this.castGrenadeLoops.delete(entityId); }
+    }
+    if (next === 'grenade') {
+      const sfx = getSharedSfx().castGrenade;
+      if (sfx) {
+        const dist = entityId === this.host.localEntityId ? undefined : this.host.distToEntity(entityId);
+        const pan = entityId === this.host.localEntityId ? undefined : this.host.panToEntity(entityId);
+        const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, entityId);
+        if (handle) this.castGrenadeLoops.set(entityId, handle);
       }
     }
   }
@@ -242,6 +263,8 @@ export class ClientSoundManager {
     this.bandageLoops.clear();
     for (const handle of this.castSpellLoops.values()) handle.stop();
     this.castSpellLoops.clear();
+    for (const handle of this.castGrenadeLoops.values()) handle.stop();
+    this.castGrenadeLoops.clear();
   }
 
   // ── Helpers ───────────────────────────────────────────────────────

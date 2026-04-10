@@ -24,13 +24,15 @@ import type { CastingSystem } from '../combat/CastingSystem';
 import type { BuffSystem } from '../combat/BuffSystem';
 import {
   type GasCloudVisual, type ChemPoolVisual, type FullRetardAuraVisual, type CrotchRotVisual,
-  type BandageHealVisual,
+  type BandageHealVisual, type GrenadeProjectileVisual, type GrenadeExplosionVisual,
   createGasCloud, updateGasCloud,
   createChemPool, updateChemPool,
   createFullRetardAura, updateFullRetardAura as updateFullRetardAuraVisual,
   createCrotchRotCloud, updateCrotchRotCloud,
   createChannelBeam, updateChannelBeam as updateChannelBeamVisual, removeChannelBeam,
   createBandageHealEffect, updateBandageHealEffect, removeBandageHealEffect,
+  createGrenadeProjectile, updateGrenadeProjectile,
+  createGrenadeExplosion, updateGrenadeExplosion,
   disposeGroup,
 } from './VisualEffects';
 import { soundEffects, type LoopHandle } from '../../ui/SoundEffects';
@@ -87,11 +89,17 @@ export class PlaygroundEffects {
   // Bandage heal visual
   private bandageHealVisual: BandageHealVisual | null = null;
 
+  // Active grenade projectiles in flight (with explosion radius for the impact VFX)
+  private grenadeProjectiles: { visual: GrenadeProjectileVisual; radius: number }[] = [];
+  // Active grenade explosion visuals
+  private grenadeExplosions: GrenadeExplosionVisual[] = [];
+
   // Sound loops
   private bandageLoopHandle: LoopHandle | null = null;
   private castSpellLoopHandle: LoopHandle | null = null;
+  private castGrenadeLoopHandle: LoopHandle | null = null;
   private odLoopHandle: LoopHandle | null = null;
-  private npcCastLoops = new Map<NpcController, { handle: LoopHandle; type: 'castSpell' | 'bandage' }>();
+  private npcCastLoops = new Map<NpcController, { handle: LoopHandle; type: 'castSpell' | 'bandage' | 'castGrenade' }>();
 
   constructor(deps: PlaygroundEffectsDeps) {
     this.scene = deps.scene;
@@ -112,6 +120,48 @@ export class PlaygroundEffects {
     this.updateNpcChannelBeams();
     this.updateBandageHeal();
     this.updateNpcCastLoops();
+    this.updateGrenadeProjectiles(dt);
+    this.updateGrenadeExplosions(dt);
+  }
+
+  // ── Grenade projectiles + explosions ─────────────────────────────
+
+  /** Launch a grenade visual: arcing projectile from start → ground, explosion at impact. */
+  launchGrenadeProjectile(start: THREE.Vector3, ground: THREE.Vector3, flightDuration: number, aoeRadius: number): void {
+    const visual = createGrenadeProjectile(this.scene, start, ground, flightDuration);
+    this.grenadeProjectiles.push({ visual, radius: aoeRadius });
+  }
+
+  private updateGrenadeProjectiles(dt: number): void {
+    for (let i = this.grenadeProjectiles.length - 1; i >= 0; i--) {
+      const entry = this.grenadeProjectiles[i];
+      const done = updateGrenadeProjectile(entry.visual, dt);
+      if (done) {
+        const impactPos = entry.visual.end.clone();
+        disposeGroup(this.scene, entry.visual.group);
+        this.grenadeProjectiles.splice(i, 1);
+        // Spawn explosion at impact site
+        const explosion = createGrenadeExplosion(this.scene, impactPos, entry.radius);
+        this.grenadeExplosions.push(explosion);
+        // Play explosion SFX at the impact location
+        const explodeSfx = getSharedSfx().grenadeExplode;
+        if (explodeSfx) {
+          const playerPos = this.deps.playerController.mesh.position;
+          soundEffects.play(explodeSfx.url, playerPos.distanceTo(impactPos), this.deps.sfxPan(impactPos), explodeSfx.volume);
+        }
+      }
+    }
+  }
+
+  private updateGrenadeExplosions(dt: number): void {
+    for (let i = this.grenadeExplosions.length - 1; i >= 0; i--) {
+      const explosion = this.grenadeExplosions[i];
+      const done = updateGrenadeExplosion(explosion, dt);
+      if (done) {
+        disposeGroup(this.scene, explosion.group);
+        this.grenadeExplosions.splice(i, 1);
+      }
+    }
   }
 
   // ── Gas cloud visuals ─────────────────────────────────────────────
@@ -552,6 +602,19 @@ export class PlaygroundEffects {
     }
   }
 
+  startCastGrenadeLoop(): void {
+    if (this.castGrenadeLoopHandle) return;
+    const sfx = getSharedSfx().castGrenade;
+    if (sfx) this.castGrenadeLoopHandle = soundEffects.playLoop(sfx.url, undefined, undefined, sfx.volume);
+  }
+
+  stopCastGrenadeLoop(): void {
+    if (this.castGrenadeLoopHandle) {
+      this.castGrenadeLoopHandle.stop();
+      this.castGrenadeLoopHandle = null;
+    }
+  }
+
   /** Track NPC casting loops — start/stop cast-spell and bandage loop SFX as NPCs begin/end casts. */
   private updateNpcCastLoops(): void {
     const playerPos = this.deps.playerController.mesh.position;
@@ -568,6 +631,12 @@ export class PlaygroundEffects {
             if (sfx) {
               const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, npc.mesh.uuid);
               if (handle) this.npcCastLoops.set(npc, { handle, type: 'bandage' });
+            }
+          } else if (npc.castingAbilityId === 'grenade') {
+            const sfx = getSharedSfx().castGrenade;
+            if (sfx) {
+              const handle = soundEffects.playLoop(sfx.url, dist, pan, sfx.volume, npc.mesh.uuid);
+              if (handle) this.npcCastLoops.set(npc, { handle, type: 'castGrenade' });
             }
           } else if (npc.characterId === 'dr-retardo') {
             const sfx = getSharedSfx().castSpell;
@@ -621,9 +690,15 @@ export class PlaygroundEffects {
       removeBandageHealEffect(this.scene, this.bandageHealVisual);
       this.bandageHealVisual = null;
     }
+    // Grenade projectiles + explosions
+    for (const entry of this.grenadeProjectiles) disposeGroup(this.scene, entry.visual.group);
+    this.grenadeProjectiles.length = 0;
+    for (const explosion of this.grenadeExplosions) disposeGroup(this.scene, explosion.group);
+    this.grenadeExplosions.length = 0;
     // Sound loops
     this.stopBandageLoop();
     this.stopCastSpellLoop();
+    this.stopCastGrenadeLoop();
     this.stopODLoop();
     for (const [, loop] of this.npcCastLoops) loop.handle.stop();
     this.npcCastLoops.clear();

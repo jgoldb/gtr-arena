@@ -3,7 +3,7 @@ import {
   Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper,
   BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom,
   Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD,
-  Attack, PvPTrinket, Bandage,
+  Attack, PvPTrinket, Bandage, Grenade,
   TweakingBuff,
   yardsToUnits,
 } from './abilities.js';
@@ -87,7 +87,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.17,
     hpRegen: 32,
     manaRegen: 12,
-    abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket, Bandage],
+    abilities: [Attack, Sweep, BucketSplash, Mop, BigBoot, FartBomb, CrashOut, JimmyLegs, JanitorsHelper, PvPTrinket, Bandage, Grenade],
     soundEffects: {
       autoAttackHit: 'auto-attack.ogg',
       autoAttackCrit: 'crit.ogg',
@@ -117,7 +117,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.17,
     hpRegen: 24,
     manaRegen: 48,
-    abilities: [Attack, BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket, Bandage],
+    abilities: [Attack, BottleChuck, Discombobulate, Chudmax, ChemicalSpill, RetardStrength, FullRetard, CrotchRot, Kaboom, PvPTrinket, Bandage, Grenade],
     soundEffects: {
       autoAttackHit: { file: 'auto-attack1.ogg', volume: 3 },
       autoAttackHit2: { file: 'auto-attack2.ogg', volume: 3 },
@@ -147,7 +147,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.10,
     hpRegen: 28,
     manaRegen: 16,
-    abilities: [Attack, Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD, PvPTrinket, Bandage],
+    abilities: [Attack, Shank, PocketSand, StickyFingers, CrackRock, DumpsterDive, TweakerSprint, Gank, OD, PvPTrinket, Bandage, Grenade],
     startingBuffs: [TweakingBuff],
     soundEffects: {
       autoAttackHit: { file: 'auto-attack1.ogg', volume: 3 },
@@ -179,7 +179,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.15,
     hpRegen: 30,
     manaRegen: 20,
-    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage],
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage, Grenade],
     playgroundOnly: true,
   },
   'brad-clemons': {
@@ -195,7 +195,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.12,
     hpRegen: 35,
     manaRegen: 14,
-    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage],
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage, Grenade],
     playgroundOnly: true,
   },
   'gourd-of-war': {
@@ -211,7 +211,7 @@ export const CHARACTERS: Record<CharacterId, CharacterStats> = {
     dodgeChance: 0.10,
     hpRegen: 34,
     manaRegen: 12,
-    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage],
+    abilities: [Attack, null, null, null, null, null, null, null, null, PvPTrinket, Bandage, Grenade],
     playgroundOnly: true,
   },
 };
@@ -254,6 +254,8 @@ const SHARED_SFX_DEFS: Record<string, SfxEntry> = {
   pvpTrinket: { file: 'pvp-trinket.ogg', volume: 3 },
   bandage: { file: 'bandage.ogg', volume: 5, loop: true },
   castSpell: { file: 'cast-spell.ogg', volume: 4, loop: true },
+  castGrenade: { file: 'cast-grenade.ogg', volume: 4, loop: true },
+  grenadeExplode: { file: 'grenade_explode.ogg', volume: 5 },
 };
 
 export type ResolvedSharedSfx = { [K in keyof typeof SHARED_SFX_DEFS]?: ResolvedSfx };

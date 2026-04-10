@@ -53,7 +53,7 @@ export class Engine {
 
   readonly castingSystem: CastingSystem;
   private readonly gameLoop: PlaygroundLoop;
-  onCastComplete?: (ability: Ability, target: Targetable | null) => void;
+  onCastComplete?: (ability: Ability, target: Targetable | null, groundTarget?: { x: number; z: number }) => void;
   onCastFailed?: (message: string) => void;
   onGroundTargetConfirmed?: () => void;
   pendingNpcSpawn: { characterId: CharacterId; team?: number } | null = null;
@@ -118,10 +118,10 @@ export class Engine {
 
     this.castingSystem = new CastingSystem({
       isGodMode: () => this.godMode,
-      shouldCancel: (entity) =>
+      shouldCancel: (entity, ability) =>
         entity.dead
-        || this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity)
-        || this.playerController.isMoving || !this.playerController.grounded,
+        || this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity) || this.buffSystem.isDisoriented(entity)
+        || (!ability.castableWhileMoving && (this.playerController.isMoving || !this.playerController.grounded)),
       getPosition: (entity) => ({ x: entity.mesh.position.x, z: entity.mesh.position.z }),
       getManaCostMultiplier: (entity) => this.buffSystem.getManaCostMultiplier(entity),
       getDamageDealtMultiplier: (entity) => this.buffSystem.getDamageDealtMultiplier(entity),
@@ -139,17 +139,23 @@ export class Engine {
       applyHeal: (_healer, target, amount) => this.combatSystem.applyHeal(target, amount),
       applyChannelTickDamage: (attacker, target, damage, multiplier) =>
         this.combatSystem.applyChannelTickDamage(attacker, target, damage, multiplier),
-      useAbility: (_entity, ability, target) =>
-        this.combatSystem.useAbility(ability, this.playerController, this.playerController.mesh.rotation.y, target),
+      useAbility: (_entity, ability, target, groundTarget) => {
+        if (ability.groundTargeted && groundTarget) {
+          // Ground-targeted cast completed — fire AoE at stored position
+          const pos = new THREE.Vector3(groundTarget.x, this.playerController.mesh.position.y, groundTarget.z);
+          return this.useGroundTargetAbility(ability, pos, true);
+        }
+        return this.combatSystem.useAbility(ability, this.playerController, this.playerController.mesh.rotation.y, target);
+      },
       onHostileAction: (_attacker, target) => {
         this.combatSystem.onHostileAction?.(this.playerController, target);
       },
       onChannelMiss: (_attacker, target) => {
         this.combatSystem.onCombatText?.(target, 0, 'miss');
       },
-      onCastCompleted: (_entity, ability, target, result) => {
+      onCastCompleted: (_entity, ability, target, result, groundTarget) => {
         if (result.success) {
-          this.onCastComplete?.(ability, target);
+          this.onCastComplete?.(ability, target, groundTarget);
         } else if (result.errorMessage) {
           this.onCastFailed?.(result.errorMessage);
         }
@@ -157,6 +163,7 @@ export class Engine {
       onCastEnded: () => {
         this.effects.stopBandageLoop();
         this.effects.stopCastSpellLoop();
+        this.effects.stopCastGrenadeLoop();
       },
     });
 
@@ -206,6 +213,9 @@ export class Engine {
       if (this.buffSystem.isSleeping(target)) {
         this.buffSystem.removeSleepEffects(target);
       }
+      if (this.buffSystem.isDisoriented(target)) {
+        this.buffSystem.removeDisorientEffects(target);
+      }
       if (target === this.playerController && this.resting) {
         this.stopResting();
       }
@@ -228,6 +238,12 @@ export class Engine {
     };
 
     this.combatSystem.onSleepApplied = (_attacker, target) => {
+      if (target === this.autoAttackSystem.getTarget(this.playerController)) {
+        this.stopAutoAttack();
+      }
+    };
+
+    this.combatSystem.onDisorientApplied = (_attacker, target) => {
       if (target === this.autoAttackSystem.getTarget(this.playerController)) {
         this.stopAutoAttack();
       }
@@ -706,12 +722,13 @@ export class Engine {
   startCasting(
     ability: Ability,
     attackerRotY: number,
-    target: Targetable | null
+    target: Targetable | null,
+    groundTarget?: { x: number; z: number },
   ): import('./combat/CombatSystem').CombatResult {
     if (this.castingSystem.isCasting(this.playerController)) {
       return { success: false, error: 'casting', errorMessage: 'Already casting' };
     }
-    if (this.playerController.isMoving || !this.playerController.grounded) {
+    if (!ability.castableWhileMoving && (this.playerController.isMoving || !this.playerController.grounded)) {
       return { success: false, error: 'moving', errorMessage: 'Cannot cast while moving' };
     }
     const validation = this.combatSystem.validateAbility(
@@ -719,13 +736,16 @@ export class Engine {
     );
     if (!validation.success) return validation;
 
-    const result = this.castingSystem.start(this.playerController, ability, target);
+    const result = this.castingSystem.start(this.playerController, ability, target, groundTarget);
     if (!result.started) {
       return { success: false, error: 'casting', errorMessage: result.errorMessage };
     }
 
-    // SFX: Dr. Retardo cast-spell loop (any cast/channel except bandage)
-    if (this.playerController.characterId === 'dr-retardo' && ability.id !== 'bandage') {
+    // SFX: Grenade cast loop (shared across all characters)
+    if (ability.id === 'grenade') {
+      this.effects.startCastGrenadeLoop();
+    } else if (this.playerController.characterId === 'dr-retardo' && ability.id !== 'bandage') {
+      // SFX: Dr. Retardo cast-spell loop (any cast/channel except bandage and grenade)
       this.effects.startCastSpellLoop();
     }
 
@@ -744,38 +764,52 @@ export class Engine {
 
   // Delay from ability activation to projectile impact (animation wind-up + flight time)
   private static readonly BOTTLE_CHUCK_IMPACT_DELAY = 0.825; // ~0.275s launch + 0.55s flight
+  // Grenade: throw release at ~0.18s into the throw animation, then ~0.7s arc flight
+  static readonly GRENADE_IMPACT_DELAY = 0.88;
+  static readonly GRENADE_THROW_RELEASE = 0.18;
+  static readonly GRENADE_FLIGHT_DURATION = 0.7;
 
-  /** Execute a ground-targeted AoE ability at a world position. Consumes resources immediately, delays damage until impact. */
+  /** Execute a ground-targeted AoE ability at a world position. Consumes resources immediately, delays damage until impact.
+   *  If `fromCast` is true, resources were already consumed by the casting system. */
   useGroundTargetAbility(
     ability: Ability,
-    groundPos: THREE.Vector3
+    groundPos: THREE.Vector3,
+    fromCast = false,
   ): import('./combat/CombatSystem').CombatResult {
     const attacker = this.playerController;
     if (attacker.dead) return { success: false, error: 'dead', errorMessage: 'You are dead' };
-    if (this.buffSystem.isStunned(attacker) || this.buffSystem.isSleeping(attacker)) return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
-    if (!this.godMode && this.combatSystem.getCooldownRemaining(ability.id) > 0) {
-      return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
-    }
-    if (!this.godMode && this.combatSystem.getGcdRemaining() > 0) {
-      return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
-    }
-    if (!this.godMode) {
-      const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
-      if (attacker.mana < effectiveCost) return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
-      attacker.mana -= effectiveCost;
-      if (effectiveCost > 0) this.regenSystem.notifyManaUsed(attacker);
-    }
-
-    if (!this.godMode) {
+    if (this.buffSystem.isStunned(attacker) || this.buffSystem.isSleeping(attacker) || this.buffSystem.isDisoriented(attacker)) return { success: false, error: 'stunned', errorMessage: 'You are stunned' };
+    if (!fromCast) {
+      if (!this.godMode && this.combatSystem.getCooldownRemaining(ability.id) > 0) {
+        return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
+      }
+      if (!this.godMode && this.combatSystem.getGcdRemaining() > 0) {
+        return { success: false, error: 'on-cooldown', errorMessage: 'Ability is not ready yet' };
+      }
+      if (!this.godMode) {
+        const effectiveCost = Math.round(ability.manaCost * this.buffSystem.getManaCostMultiplier(attacker));
+        if (attacker.mana < effectiveCost) return { success: false, error: 'not-enough-mana', errorMessage: 'Not enough mana' };
+        attacker.mana -= effectiveCost;
+        if (effectiveCost > 0) this.regenSystem.notifyManaUsed(attacker);
+      }
+      if (!this.godMode) {
+        this.combatSystem.setCooldown(ability.id, abilityCooldown(ability));
+        this.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
+      }
+    } else if (!this.godMode) {
+      // Cast-time completion path: CastingSystem already triggered GCD at cast start and
+      // cleared the placeholder cooldown on completion, so set the real cooldown now.
       this.combatSystem.setCooldown(ability.id, abilityCooldown(ability));
-      this.combatSystem.triggerGcd(GLOBAL_COOLDOWN);
     }
 
     // Schedule damage for when the projectile lands
+    const impactDelay = ability.id === 'grenade'
+      ? Engine.GRENADE_IMPACT_DELAY
+      : Engine.BOTTLE_CHUCK_IMPACT_DELAY;
     this.pendingAoeImpacts.push({
       ability,
       groundPos: groundPos.clone(),
-      delay: Engine.BOTTLE_CHUCK_IMPACT_DELAY,
+      delay: impactDelay,
       elapsed: 0,
       owner: attacker,
     });
@@ -847,7 +881,7 @@ export class Engine {
     }
     if (this.playerController.isMoving) return false;
     if (this.castingSystem.isCasting(this.playerController)) return false;
-    if (this.buffSystem.isStunned(this.playerController) || this.buffSystem.isSleeping(this.playerController)) return false;
+    if (this.buffSystem.isStunned(this.playerController) || this.buffSystem.isSleeping(this.playerController) || this.buffSystem.isDisoriented(this.playerController)) return false;
 
     this.resting = true;
     this.stopAutoAttack();

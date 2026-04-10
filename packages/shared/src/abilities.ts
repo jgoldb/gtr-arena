@@ -18,7 +18,7 @@ export function yardsToUnits(yards: number): number {
 // ── Buff/debuff system types ────────────────────────────────────────────
 
 export interface BuffEffect {
-  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'discombobulate' | 'blind' | 'damageDealtPercent' | 'manaCostPercent' | 'untargetable' | 'damageTakenPercent';
+  readonly type: 'autoAttackDamageTakenPercent' | 'autoAttackSpeedPercent' | 'movementSpeedPercent' | 'stun' | 'sleep' | 'disorient' | 'discombobulate' | 'blind' | 'damageDealtPercent' | 'manaCostPercent' | 'untargetable' | 'damageTakenPercent';
   readonly value: number; // e.g. 50 = +50%, -20 = -20%
   readonly minStacks?: number; // effect only applies when buff has >= this many stacks
 }
@@ -91,6 +91,7 @@ export interface Ability {
   readonly suppressAutoTarget?: boolean; // if true, target does NOT auto-target the caster when hit
   readonly requiresFacing?: boolean; // if false, ability can be used without facing the target (default true)
   readonly isMelee?: boolean; // melee attacks can be dodged; spells cannot
+  readonly castableWhileMoving?: boolean; // if true, movement does not interrupt this cast/channel
   readonly usableWhileCCd?: boolean; // if true, ability can be used while stunned/slept/blinded/etc.
   readonly isAutoAttack?: boolean; // if true, this is the Attack toggle — not a real ability, just toggles auto-attack
   readonly requiresFriendlyTarget?: boolean; // if true, ability can only be used on self or friendly targets (rejects hostile targets)
@@ -809,4 +810,35 @@ export const PvPTrinket: Ability = {
     'Removes all crowd control effects.',
   usableWhileCCd: true,
   offGcd: true,
+};
+
+export const GrenadeDebuff: BuffDefinition = {
+  id: 'grenade',
+  name: 'Grenade',
+  icon: '💣',
+  duration: 3,
+  type: 'debuff',
+  description: 'Disoriented.',
+  effects: [{ type: 'disorient', value: 0 }],
+  drCategory: 'disorient',
+};
+
+export const Grenade: Ability = {
+  id: 'grenade',
+  name: 'Grenade',
+  icon: '💣',
+  range: yardsToUnits(20),
+  manaCost: 0,
+  cooldown: 60,
+  castTime: 1.5,
+  damage: 0,
+  damageMin: 250,
+  damageMax: 325,
+  requiresHostileTarget: false,
+  groundTargeted: true,
+  aoeRadius: yardsToUnits(3),
+  castableWhileMoving: true,
+  appliesDebuff: GrenadeDebuff,
+  description:
+    'Chuck a nade, dealing 250-325 damage and disorienting enemies for 3 seconds.',
 };

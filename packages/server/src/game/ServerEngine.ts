@@ -121,7 +121,7 @@ export class ServerEngine {
 
     this.castingSystem = new ServerCastingSystem({
       isGodMode: (entity) => entity.godMode,
-      shouldCancel: (entity) => entity.dead || entity.stunned || entity.isMoving || !entity.grounded,
+      shouldCancel: (entity, ability) => entity.dead || entity.stunned || (!ability.castableWhileMoving && (entity.isMoving || !entity.grounded)),
       getPosition: (entity) => ({ x: entity.x, z: entity.z }),
       getManaCostMultiplier: (entity) => this.buffSystem.getManaCostMultiplier(entity),
       getDamageDealtMultiplier: (entity) => this.buffSystem.getDamageDealtMultiplier(entity),
@@ -153,7 +153,11 @@ export class ServerEngine {
       applyHeal: (healer, target, amount) => this.combatSystem.applyHeal(healer, target, amount),
       applyChannelTickDamage: (attacker, target, damage, multiplier) =>
         this.combatSystem.applyChannelTickDamage(attacker, target, damage, multiplier),
-      useAbility: (entity, ability, target) => {
+      useAbility: (entity, ability, target, groundTarget) => {
+        if (ability.groundTargeted && groundTarget) {
+          this.abilityHandler.fireGroundTargetFromCast(entity, ability, groundTarget.x, groundTarget.z);
+          return { success: true };
+        }
         const result = this.combatSystem.useAbility(ability, entity, target);
         if (result.success) {
           this.abilityHandler.onAbilitySuccessFromCasting(entity, ability, target);
@@ -413,6 +417,9 @@ export class ServerEngine {
       if (this.buffSystem.isSleeping(target)) {
         this.buffSystem.removeSleepEffects(target);
       }
+      if (this.buffSystem.isDisoriented(target)) {
+        this.buffSystem.removeDisorientEffects(target);
+      }
       this.cancelResting(target.id);
       this.castingSystem.applyPushback(target);
     };
@@ -422,6 +429,12 @@ export class ServerEngine {
     };
 
     this.combatSystem.onSleepApplied = (attacker, target) => {
+      if (this.autoAttackSystem.getTarget(attacker) === target) {
+        this.stopAutoAttack(attacker.id);
+      }
+    };
+
+    this.combatSystem.onDisorientApplied = (attacker, target) => {
       if (this.autoAttackSystem.getTarget(attacker) === target) {
         this.stopAutoAttack(attacker.id);
       }
@@ -839,7 +852,7 @@ export class ServerEngine {
     if (resting) {
       if (entity.inCombat) return;
       if (entity.isMoving) return;
-      if (this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity)) return;
+      if (this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity) || this.buffSystem.isDisoriented(entity)) return;
       if (this.castingSystem.isCasting(entity)) return;
       this.stopAutoAttack(entityId);
       this.buffSystem.apply(entity, RestingBuff);
@@ -935,7 +948,7 @@ export class ServerEngine {
     for (const entity of this.entities) {
       entity.movementSpeedModifier = this.buffSystem.getMovementSpeedMultiplier(entity)
         * (entity.godMode ? 4 : 1); // God mode: +300% movement speed
-      entity.stunned = this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity);
+      entity.stunned = this.buffSystem.isStunned(entity) || this.buffSystem.isSleeping(entity) || this.buffSystem.isDisoriented(entity);
       entity.setDiscombobulated(this.buffSystem.isDiscombobulated(entity));
 
       if (entity.stunned) {

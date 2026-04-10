@@ -51,7 +51,7 @@ export class DrRetardoBehavior implements CharacterBehavior {
       // Great against melee enemies chasing us
       if (targetDist < yardsToUnits(8)) score += 25;
       // Don't use on already CC'd targets
-      if (currentTarget.isStunned || currentTarget.isSleeping || currentTarget.isBlinded) score -= 40;
+      if (currentTarget.isStunned || currentTarget.isSleeping || currentTarget.isDisoriented || currentTarget.isBlinded) score -= 40;
       if (currentTarget.inLineOfSight) {
         actions.push({
           type: 'ability', score, abilityId: 'discombobulate', target: currentTarget,

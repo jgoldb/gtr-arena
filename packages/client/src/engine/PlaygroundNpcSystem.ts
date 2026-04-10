@@ -237,7 +237,7 @@ export class PlaygroundNpcSystem {
         npcSetResting: (npc, resting) => {
           if (resting) {
             if (npc.dead || npc.inCombat || npc.isMoving) return;
-            if (host.buffSystem.isStunned(npc) || host.buffSystem.isSleeping(npc)) return;
+            if (host.buffSystem.isStunned(npc) || host.buffSystem.isSleeping(npc) || host.buffSystem.isDisoriented(npc)) return;
             if (host.buffSystem.hasBuff(npc, 'resting')) return;
             host.autoAttackSystem.stop(npc);
             npc.autoAttackTarget = null;

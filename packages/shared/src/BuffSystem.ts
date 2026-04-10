@@ -215,6 +215,12 @@ export class BuffSystem<T extends Positionable> {
     return buffs.some(b => b.definition.effects.some(e => e.type === 'sleep' && this.isEffectActive(b, e)));
   }
 
+  isDisoriented(target: T): boolean {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return false;
+    return buffs.some(b => b.definition.effects.some(e => e.type === 'disorient' && this.isEffectActive(b, e)));
+  }
+
   removeSleepEffects(target: T): void {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return;
@@ -229,11 +235,25 @@ export class BuffSystem<T extends Positionable> {
     if (buffs.length === 0) this.activeBuffs.delete(target);
   }
 
+  removeDisorientEffects(target: T): void {
+    const buffs = this.activeBuffs.get(target);
+    if (!buffs) return;
+    const now = Date.now();
+    for (let i = buffs.length - 1; i >= 0; i--) {
+      if (buffs[i].definition.effects.some(e => e.type === 'disorient')) {
+        if (now - buffs[i].appliedAt < SLEEP_GRACE_PERIOD_MS) continue;
+        const removed = buffs.splice(i, 1)[0];
+        this.onBuffExpired?.(target, removed.definition);
+      }
+    }
+    if (buffs.length === 0) this.activeBuffs.delete(target);
+  }
+
   /** Remove all CC debuffs (stun, sleep, blind, discombobulate) and movement-impairing debuffs. DoTs and other debuffs are unaffected. */
   removeAllCCEffects(target: T, silent = false): void {
     const buffs = this.activeBuffs.get(target);
     if (!buffs) return;
-    const ccTypes: Set<string> = new Set(['stun', 'sleep', 'blind', 'discombobulate']);
+    const ccTypes: Set<string> = new Set(['stun', 'sleep', 'disorient', 'blind', 'discombobulate']);
     for (let i = buffs.length - 1; i >= 0; i--) {
       const def = buffs[i].definition;
       if (def.type !== 'debuff') continue;

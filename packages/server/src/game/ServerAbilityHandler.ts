@@ -123,12 +123,17 @@ export class ServerAbilityHandler {
 
     // Ground-targeted AoE abilities — no rewind (by design: lead your targets)
     if (ability.groundTargeted && groundTarget) {
-      const result = this.useGroundTargetAbility(entity, ability, groundTarget.x, groundTarget.z);
-      if (result.success) {
-        this.onAbilitySuccess(entity, ability, undefined, groundTarget);
-        this.triggerEntityGcd(entity);
-      } else if (result.errorMessage) {
-        this.deps.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
+      if (ability.castTime) {
+        // Ground-targeted cast-time ability (e.g. Grenade): start cast with stored ground target
+        this.serverStartCasting(entity, ability, null, undefined, { x: groundTarget.x, z: groundTarget.z });
+      } else {
+        const result = this.useGroundTargetAbility(entity, ability, groundTarget.x, groundTarget.z);
+        if (result.success) {
+          this.onAbilitySuccess(entity, ability, undefined, groundTarget);
+          this.triggerEntityGcd(entity);
+        } else if (result.errorMessage) {
+          this.deps.onSendToPlayer?.(entityId, { type: 'error', message: result.errorMessage });
+        }
       }
       return;
     }
@@ -193,7 +198,7 @@ export class ServerAbilityHandler {
   /** Execute a ground-targeted AoE ability at a world position. Consumes resources immediately, delays damage until impact. */
   private useGroundTargetAbility(entity: ServerEntity, ability: Ability, groundX: number, groundZ: number): { success: boolean; errorMessage?: string } {
     if (entity.dead) return { success: false, errorMessage: 'You are dead' };
-    if (this.deps.buffSystem.isStunned(entity) || this.deps.buffSystem.isSleeping(entity)) return { success: false, errorMessage: 'You are stunned' };
+    if (this.deps.buffSystem.isStunned(entity) || this.deps.buffSystem.isSleeping(entity) || this.deps.buffSystem.isDisoriented(entity)) return { success: false, errorMessage: 'You are stunned' };
     if (!entity.godMode && this.deps.combatSystem.getCooldownRemaining(entity.id, ability.id) > 0) {
       return { success: false, errorMessage: 'Ability is not ready yet' };
     }
@@ -252,12 +257,13 @@ export class ServerAbilityHandler {
 
   /** Validate and start a cast/channel — server-side entry point with lag compensation. */
   private serverStartCasting(entity: ServerEntity, ability: Ability, target: ServerEntity | null,
-                       targetPosOverride?: { x: number; z: number; rotationY: number }): void {
+                       targetPosOverride?: { x: number; z: number; rotationY: number },
+                       groundTarget?: { x: number; z: number }): void {
     if (this.deps.castingSystem.isCasting(entity)) {
       this.deps.onSendToPlayer?.(entity.id, { type: 'error', message: 'Already casting' });
       return;
     }
-    if (entity.isMoving || !entity.grounded) {
+    if (!ability.castableWhileMoving && (entity.isMoving || !entity.grounded)) {
       this.deps.onSendToPlayer?.(entity.id, { type: 'error', message: 'Cannot cast while moving' });
       return;
     }
@@ -271,7 +277,17 @@ export class ServerAbilityHandler {
       return;
     }
 
-    const result = this.deps.castingSystem.start(entity, ability, target);
+    // Validate range to ground target for ground-targeted cast abilities
+    if (groundTarget && ability.range) {
+      const dx = entity.x - groundTarget.x;
+      const dz = entity.z - groundTarget.z;
+      if (Math.sqrt(dx * dx + dz * dz) > ability.range + this.rangeTolerance + yardsToUnits(1)) {
+        this.deps.onSendToPlayer?.(entity.id, { type: 'error', message: 'Out of range' });
+        return;
+      }
+    }
+
+    const result = this.deps.castingSystem.start(entity, ability, target, groundTarget);
     if (!result.started && result.errorMessage) {
       this.deps.onSendToPlayer?.(entity.id, { type: 'error', message: result.errorMessage });
     }
@@ -280,6 +296,27 @@ export class ServerAbilityHandler {
   /** Called from ServerEngine when casting system completes a cast successfully. */
   onAbilitySuccessFromCasting(entity: ServerEntity, ability: Ability, target?: ServerEntity | null): void {
     this.onAbilitySuccess(entity, ability, target);
+  }
+
+  /** Fire a ground-targeted AoE when a cast-time ability completes. Resources already consumed by CastingSystem. */
+  fireGroundTargetFromCast(entity: ServerEntity, ability: Ability, groundX: number, groundZ: number): void {
+    // CastingSystem cleared the placeholder cooldown on completion; set the real one now.
+    if (!entity.godMode) {
+      this.deps.combatSystem.setCooldown(entity.id, ability.id, abilityCooldown(ability));
+    }
+
+    // Schedule damage for when the projectile lands
+    this.pendingAoeImpacts.push({
+      ability,
+      groundX,
+      groundY: entity.y,
+      groundZ,
+      delay: ServerAbilityHandler.BOTTLE_CHUCK_IMPACT_DELAY,
+      elapsed: 0,
+      owner: entity,
+    });
+
+    this.onAbilitySuccess(entity, ability, undefined, { x: groundX, y: entity.y, z: groundZ });
   }
 
   private onAbilitySuccess(entity: ServerEntity, ability: Ability, target?: ServerEntity | null, groundTarget?: { x: number; y: number; z: number }): void {

@@ -7,8 +7,8 @@
  * extracts that shared logic into a single `createPlaygroundSession()` factory.
  */
 
-import type { Engine } from './Engine';
-import type { Vector3 } from 'three';
+import { Engine } from './Engine';
+import { Vector3 } from 'three';
 import { UnitFrame } from '../ui/UnitFrame';
 import { TargetOfTargetFrame } from '../ui/TargetOfTargetFrame';
 import { ActionBar } from '../ui/ActionBar';
@@ -275,6 +275,13 @@ export function createPlaygroundSession(config: PlaygroundSessionConfig): Playgr
     engine.targetingSystem.cancelGroundTarget();
     pendingGroundAbility = null;
 
+    if (ability.castTime) {
+      // Ground-targeted cast-time ability (e.g. Grenade): start cast with stored ground target
+      const castResult = engine.startCasting(ability, engine.playerController.mesh.rotation.y, null, { x: groundPos.x, z: groundPos.z });
+      if (!castResult.success && castResult.errorMessage) errorText.show(castResult.errorMessage);
+      return;
+    }
+
     const result = engine.useGroundTargetAbility(ability, groundPos);
     if (result.success) {
       onAbilitySuccess(ability, groundPos);
@@ -287,6 +294,15 @@ export function createPlaygroundSession(config: PlaygroundSessionConfig): Playgr
 
   function onAbilitySuccess(ability: Ability, groundPos?: Vector3): void {
     const targetPos = groundPos ?? engine.targetingSystem.currentTarget?.mesh.position.clone();
+    // Wire up grenade release callback BEFORE triggering the animation, so the
+    // throw release frame can spawn the arcing projectile at the right hand position.
+    if (ability.id === 'grenade' && groundPos) {
+      const aoeRadius = ability.aoeRadius ?? 0;
+      const landingPos = groundPos.clone();
+      engine.playerController.model.onGrenadeRelease = (handPos) => {
+        engine.effects.launchGrenadeProjectile(handPos, landingPos, Engine.GRENADE_FLIGHT_DURATION, aoeRadius);
+      };
+    }
     engine.playerController.triggerAbilityAnimation(ability.id, targetPos);
 
     if (ability.id === 'crash-out') {
@@ -405,7 +421,10 @@ export function createPlaygroundSession(config: PlaygroundSessionConfig): Playgr
 
   // ── Engine callbacks ────────────────────────────────────────────────
 
-  engine.onCastComplete = (ability) => onAbilitySuccess(ability);
+  engine.onCastComplete = (ability, _target, groundTarget) => {
+    const groundPos = groundTarget ? new Vector3(groundTarget.x, 0, groundTarget.z) : undefined;
+    onAbilitySuccess(ability, groundPos);
+  };
   engine.onCastFailed = (message) => errorText.show(message);
   engine.onAutoAttackError = (message) => errorText.show(message);
   engine.onRestError = (message) => errorText.show(message);

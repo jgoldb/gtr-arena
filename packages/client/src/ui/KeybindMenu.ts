@@ -7,6 +7,10 @@ import { keybindManager, codeToDisplayLabel, matchesKeybindEvent, buildComboStri
  * into "listening" mode — the next physical key press becomes the new binding.
  * Conflicts are resolved by swapping the two actions.
  */
+function bindLabel(code: string): string {
+  return code ? codeToDisplayLabel(code) : 'Unbound';
+}
+
 export class KeybindMenu {
   readonly element: HTMLElement;
   private box: HTMLElement;
@@ -77,7 +81,7 @@ export class KeybindMenu {
 
     // Hint for cancelling rebind
     this.hintEl = document.createElement('div');
-    this.hintEl.textContent = 'Right-click to cancel rebinding';
+    this.hintEl.textContent = 'Right-click to cancel · Delete to unbind';
     this.hintEl.style.cssText = `
       color: #667; font-size: 11px; text-align: center;
       margin-bottom: 10px; display: none;
@@ -186,7 +190,7 @@ export class KeybindMenu {
     nameEl.style.cssText = 'color: #ccc; font-size: 13px; pointer-events: none;';
 
     const keyLabel = document.createElement('div');
-    keyLabel.textContent = codeToDisplayLabel(entry.code);
+    keyLabel.textContent = bindLabel(entry.code);
     keyLabel.style.cssText = `
       color: #ffd100; font-size: 13px; font-weight: bold;
       background: rgba(255, 255, 255, 0.06);
@@ -240,7 +244,7 @@ export class KeybindMenu {
     if (!this.listeningId) return;
     const rowData = this.rows.get(this.listeningId);
     if (rowData) {
-      rowData.keyLabel.textContent = codeToDisplayLabel(rowData.entry.code);
+      rowData.keyLabel.textContent = bindLabel(rowData.entry.code);
       rowData.keyLabel.style.borderColor = 'rgba(255, 255, 255, 0.1)';
       rowData.keyLabel.style.color = '#ffd100';
       rowData.keyLabel.parentElement!.style.background = 'transparent';
@@ -269,8 +273,13 @@ export class KeybindMenu {
     e.preventDefault();
     e.stopImmediatePropagation();
 
-    const combo = buildComboString(e);
-    keybindManager.rebind(this.listeningId, combo);
+    // Delete / Backspace unbinds the action
+    if (e.code === 'Delete' || e.code === 'Backspace') {
+      keybindManager.rebind(this.listeningId, '');
+    } else {
+      const combo = buildComboString(e);
+      keybindManager.rebind(this.listeningId, combo);
+    }
     this.listeningId = null;
     this.hintEl.style.display = 'none';
     this.refreshAllRows();
@@ -310,7 +319,7 @@ export class KeybindMenu {
       const rowData = this.rows.get(entry.id);
       if (rowData) {
         rowData.entry = entry;
-        rowData.keyLabel.textContent = codeToDisplayLabel(entry.code);
+        rowData.keyLabel.textContent = bindLabel(entry.code);
         rowData.keyLabel.style.borderColor = 'rgba(255, 255, 255, 0.1)';
         rowData.keyLabel.style.color = '#ffd100';
         rowData.keyLabel.parentElement!.style.background = 'transparent';

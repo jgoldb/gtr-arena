@@ -497,6 +497,177 @@ export function updateCrotchRotCloud(
   }
 }
 
+// ── Grenade ───────────────────────────────────────────────────────────────
+
+export interface GrenadeProjectileVisual {
+  group: THREE.Group;
+  body: THREE.Mesh;
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  duration: number;
+  elapsed: number;
+}
+
+/** Create the in-flight grenade projectile mesh and add it to the scene. */
+export function createGrenadeProjectile(scene: THREE.Scene, start: THREE.Vector3, end: THREE.Vector3, duration: number): GrenadeProjectileVisual {
+  const group = new THREE.Group();
+  // Body
+  const bodyGeo = new THREE.SphereGeometry(0.09, 12, 10);
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: 0x2d3a1f, roughness: 0.8, metalness: 0.2,
+  });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.castShadow = true;
+  group.add(body);
+  // Top cap
+  const capGeo = new THREE.CylinderGeometry(0.045, 0.05, 0.05, 8);
+  const capMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.5, metalness: 0.6 });
+  const cap = new THREE.Mesh(capGeo, capMat);
+  cap.position.y = 0.095;
+  group.add(cap);
+
+  group.position.copy(start);
+  scene.add(group);
+
+  return { group, body, start: start.clone(), end: end.clone(), duration, elapsed: 0 };
+}
+
+/** Update the grenade projectile in flight. Returns true when impact is reached. */
+export function updateGrenadeProjectile(visual: GrenadeProjectileVisual, dt: number): boolean {
+  visual.elapsed += dt;
+  const t = Math.min(1, visual.elapsed / visual.duration);
+  // Linear XZ interpolation, parabolic Y arc
+  const x = visual.start.x + (visual.end.x - visual.start.x) * t;
+  const z = visual.start.z + (visual.end.z - visual.start.z) * t;
+  // Arc height — peak at midpoint. Scale with horizontal distance so longer throws arc higher.
+  const dx = visual.end.x - visual.start.x;
+  const dz = visual.end.z - visual.start.z;
+  const horiz = Math.sqrt(dx * dx + dz * dz);
+  const peak = Math.max(1.6, horiz * 0.45);
+  const baseY = visual.start.y + (visual.end.y - visual.start.y) * t;
+  const arc = 4 * peak * t * (1 - t); // parabola: 0 → peak → 0
+  const y = baseY + arc;
+  visual.group.position.set(x, y, z);
+  // Tumble in flight
+  visual.group.rotation.x += dt * 9;
+  visual.group.rotation.z += dt * 4;
+  return t >= 1;
+}
+
+export interface GrenadeExplosionVisual {
+  group: THREE.Group;
+  flash: THREE.Mesh;
+  ring: THREE.Mesh;
+  shards: { mesh: THREE.Mesh; vel: THREE.Vector3 }[];
+  smokes: THREE.Mesh[];
+  elapsed: number;
+  duration: number;
+  radius: number;
+}
+
+/** Spawn an explosion centered at `pos` with the given AoE radius. */
+export function createGrenadeExplosion(scene: THREE.Scene, pos: THREE.Vector3, radius: number): GrenadeExplosionVisual {
+  const group = new THREE.Group();
+  group.position.copy(pos);
+  group.position.y += 0.05;
+
+  // Bright initial flash sphere
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xfff0a0, transparent: true, opacity: 1, depthWrite: false,
+  });
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.5, 16, 12), flashMat);
+  flash.renderOrder = 5;
+  group.add(flash);
+
+  // Expanding shockwave ring on the ground
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffaa44, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(radius * 0.2, radius * 0.3, 32), ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.02;
+  ring.renderOrder = 4;
+  group.add(ring);
+
+  // Shrapnel shards flying outward
+  const shards: { mesh: THREE.Mesh; vel: THREE.Vector3 }[] = [];
+  const shardGeo = new THREE.SphereGeometry(0.05, 5, 4);
+  for (let i = 0; i < 18; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffcc66, transparent: true, opacity: 1.0,
+    });
+    const mesh = new THREE.Mesh(shardGeo, mat);
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 4 + Math.random() * 5;
+    const vy = 2 + Math.random() * 3;
+    const vel = new THREE.Vector3(Math.cos(angle) * speed, vy, Math.sin(angle) * speed);
+    mesh.position.set(0, 0.2, 0);
+    group.add(mesh);
+    shards.push({ mesh, vel });
+  }
+
+  // Dark smoke puffs that linger
+  const smokes: THREE.Mesh[] = [];
+  for (let i = 0; i < 8; i++) {
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x404040, transparent: true, opacity: 0.7,
+      roughness: 1.0, depthWrite: false,
+      emissive: 0x202020, emissiveIntensity: 0.2,
+    });
+    const size = 0.35 + Math.random() * 0.4;
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(size, 8, 6), mat);
+    const angle = Math.random() * Math.PI * 2;
+    const r = Math.random() * radius * 0.6;
+    mesh.position.set(Math.cos(angle) * r, 0.4 + Math.random() * 0.3, Math.sin(angle) * r);
+    mesh.userData.driftY = 0.4 + Math.random() * 0.3;
+    mesh.renderOrder = 3;
+    group.add(mesh);
+    smokes.push(mesh);
+  }
+
+  scene.add(group);
+  return { group, flash, ring, shards, smokes, elapsed: 0, duration: 1.1, radius };
+}
+
+/** Returns true when the explosion has finished and should be removed. */
+export function updateGrenadeExplosion(visual: GrenadeExplosionVisual, dt: number): boolean {
+  visual.elapsed += dt;
+  const t = Math.min(1, visual.elapsed / visual.duration);
+
+  // Flash: rapid expand then fade
+  const flashT = Math.min(1, visual.elapsed / 0.18);
+  const flashScale = 1 + flashT * 1.6;
+  visual.flash.scale.setScalar(flashScale);
+  (visual.flash.material as THREE.MeshBasicMaterial).opacity = (1 - flashT) * (1 - flashT);
+
+  // Ring: expand outward, fade
+  const ringScale = 1 + t * 4;
+  visual.ring.scale.setScalar(ringScale);
+  (visual.ring.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - t * t);
+
+  // Shards: ballistic with gravity, fade in second half
+  for (const s of visual.shards) {
+    s.vel.y -= 14 * dt;
+    s.mesh.position.addScaledVector(s.vel, dt);
+    if (s.mesh.position.y < 0.05) {
+      s.mesh.position.y = 0.05;
+      s.vel.set(0, 0, 0);
+    }
+    const fade = t < 0.5 ? 1 : 1 - (t - 0.5) / 0.5;
+    (s.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, fade);
+  }
+
+  // Smoke: drift up and fade slowly
+  for (const sm of visual.smokes) {
+    sm.position.y += sm.userData.driftY * dt;
+    const fade = 1 - t;
+    (sm.material as THREE.MeshStandardMaterial).opacity = 0.7 * fade;
+    sm.scale.setScalar(1 + t * 0.6);
+  }
+
+  return t >= 1;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function applyFadeToGroup(group: THREE.Group, fade: number): void {

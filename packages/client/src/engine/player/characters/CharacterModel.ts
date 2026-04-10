@@ -60,6 +60,12 @@ export abstract class CharacterModel {
   protected abilityAnimTime = -1; // -1 = not playing
   protected abilityAnimId = '';
 
+  // Grenade prop (lazily created when first needed) — held in right hand during grenade cast/throw wind-up
+  private grenadeProp: THREE.Group | null = null;
+  private grenadeThrowReleased = false;
+  /** Set externally — invoked once during a grenade throw animation, at the release point, with the hand world position. */
+  onGrenadeRelease: ((handPos: THREE.Vector3) => void) | null = null;
+
   // Cast / channel animation state (driven externally by Engine)
   private castAnimId = '';
   private castAnimProgress = 0;
@@ -207,6 +213,9 @@ export abstract class CharacterModel {
     this.abilityAnimTime = 0;
     this.abilityAnimId = abilityId;
     this.abilityTargetPos = targetWorldPos ?? null;
+    if (abilityId === 'grenade') {
+      this.grenadeThrowReleased = false;
+    }
     // PvP Trinket breaks free — immediately clear stun animation so the burst anim can play
     if (abilityId === 'pvp-trinket') {
       this.stunActive = false;
@@ -390,9 +399,25 @@ export abstract class CharacterModel {
     // --- Ability animation layer ---
     if (this.abilityAnimTime >= 0) {
       this.abilityAnimTime += dt;
-      const dur = this.getAbilityAnimDuration(this.abilityAnimId);
+      const isGrenade = this.abilityAnimId === 'grenade';
+      const dur = isGrenade ? CharacterModel.GRENADE_THROW_DURATION : this.getAbilityAnimDuration(this.abilityAnimId);
       const t = Math.min(1, this.abilityAnimTime / dur);
-      this.animateAbilityUse(this.abilityAnimId, t);
+      if (isGrenade) {
+        this.animateGrenadeThrow(t);
+        if (!this.grenadeThrowReleased
+            && this.abilityAnimTime >= CharacterModel.GRENADE_THROW_DURATION * CharacterModel.GRENADE_THROW_RELEASE_FRAC) {
+          this.grenadeThrowReleased = true;
+          if (this.onGrenadeRelease) {
+            const handPos = new THREE.Vector3();
+            this.getGrenadeReleasePosition(handPos);
+            const cb = this.onGrenadeRelease;
+            this.onGrenadeRelease = null;
+            cb(handPos);
+          }
+        }
+      } else {
+        this.animateAbilityUse(this.abilityAnimId, t);
+      }
       if (t >= 1) {
         this.abilityAnimTime = -1;
         this.abilityAnimId = '';
@@ -421,7 +446,23 @@ export abstract class CharacterModel {
 
     // --- Cast animation layer (driven by Engine during cast bar) ---
     if (this.castAnimActive) {
-      this.animateCasting(this.castAnimId, this.castAnimProgress);
+      if (this.castAnimId === 'grenade') {
+        this.animateGrenadeCast(this.castAnimProgress);
+      } else {
+        this.animateCasting(this.castAnimId, this.castAnimProgress);
+      }
+    }
+
+    // --- Grenade prop visibility ---
+    // Visible while casting grenade, and during the throw wind-up before release.
+    const grenadeCasting = this.castAnimActive && this.castAnimId === 'grenade';
+    const grenadeThrowing = this.abilityAnimTime >= 0
+      && this.abilityAnimId === 'grenade'
+      && this.abilityAnimTime < CharacterModel.GRENADE_THROW_DURATION * CharacterModel.GRENADE_THROW_RELEASE_FRAC;
+    if (grenadeCasting || grenadeThrowing) {
+      this.ensureGrenadeProp().visible = true;
+    } else if (this.grenadeProp) {
+      this.grenadeProp.visible = false;
     }
 
     // --- Channel animation layer (driven by Engine during channel) ---
@@ -722,6 +763,109 @@ export abstract class CharacterModel {
       }
     }
   }
+  // ── Grenade (shared cast/throw animation across all characters) ──
+
+  static readonly GRENADE_THROW_DURATION = 0.55;
+  /** Fraction of throw duration at which the grenade leaves the hand. */
+  static readonly GRENADE_THROW_RELEASE_FRAC = 0.35;
+
+  /** Lazily build a small grenade prop attached to the right hand. */
+  private ensureGrenadeProp(): THREE.Group {
+    if (this.grenadeProp) return this.grenadeProp;
+    const group = new THREE.Group();
+    // Body
+    const bodyGeo = new THREE.SphereGeometry(0.07, 10, 8);
+    const body = this.createMesh(bodyGeo, 0x2d3a1f, { roughness: 0.8, metalness: 0.2 });
+    group.add(body);
+    // Top cap (lever housing)
+    const capGeo = new THREE.CylinderGeometry(0.035, 0.04, 0.04, 8);
+    const cap = this.createMesh(capGeo, 0x555555, { roughness: 0.5, metalness: 0.6 });
+    cap.position.y = 0.075;
+    group.add(cap);
+    // Pin ring
+    const ringGeo = new THREE.TorusGeometry(0.022, 0.006, 5, 10);
+    const ring = this.createMesh(ringGeo, 0xc8a040, { roughness: 0.4, metalness: 0.7 });
+    ring.position.set(0.04, 0.095, 0);
+    ring.rotation.y = Math.PI / 2;
+    group.add(ring);
+    // Position at right hand (end of right arm — arm length ~0.5 from shoulder)
+    group.position.set(0, -0.5, 0);
+    group.visible = false;
+    this.rightArmGroup.add(group);
+    this.grenadeProp = group;
+    return group;
+  }
+
+  /** Casting stance: upper body coiled in throwing pose, right arm cocked behind head with grenade. */
+  protected animateGrenadeCast(t: number): void {
+    // Smooth ease-in to the stance over the first ~0.2 of the cast, then idle there
+    const ease = Math.min(1, t * 5);
+    // Right arm: pulled back overhead (cocked throwing position)
+    this.rightArmGroup.rotation.x -= 1.6 * ease;
+    this.rightArmGroup.rotation.z += 0.35 * ease;
+    // Left arm: extended forward for balance / aiming
+    this.leftArmGroup.rotation.x -= 0.7 * ease;
+    this.leftArmGroup.rotation.z -= 0.25 * ease;
+    // Body: slight twist toward throwing side and lean back
+    this.bodyGroup.rotation.y -= 0.18 * ease;
+    this.bodyGroup.rotation.x -= 0.08 * ease;
+    // Head: tracks forward target
+    this.headGroup.rotation.x += 0.05 * ease;
+    // Subtle idle bob to feel alive
+    const bob = Math.sin(t * 6) * 0.02;
+    this.rightArmGroup.rotation.x -= bob * ease;
+  }
+
+  /** Throw motion: rapid forward swing of the right arm, body uncoils. */
+  protected animateGrenadeThrow(t: number): void {
+    // Phase 1 (0 → release): forward swing of cocked arm
+    // Phase 2 (release → end): follow-through and recovery
+    const releaseFrac = CharacterModel.GRENADE_THROW_RELEASE_FRAC;
+
+    if (t < releaseFrac) {
+      // Sharp acceleration as arm swings forward
+      const p = t / releaseFrac;
+      const ease = p * p; // accelerate
+      // Right arm: from cocked (-1.6, +0.35) toward overhead-forward
+      const startX = -1.6;
+      const endX = 0.6;
+      const startZ = 0.35;
+      const endZ = 0.05;
+      this.rightArmGroup.rotation.x += startX + (endX - startX) * ease;
+      this.rightArmGroup.rotation.z += startZ + (endZ - startZ) * ease;
+      // Left arm follows back
+      this.leftArmGroup.rotation.x += -0.7 + 0.4 * ease;
+      this.leftArmGroup.rotation.z += -0.25 + 0.15 * ease;
+      // Body: uncoil twist
+      this.bodyGroup.rotation.y += -0.18 + 0.36 * ease;
+      this.bodyGroup.rotation.x += -0.08 + 0.18 * ease;
+    } else {
+      // Follow-through and ease back to neutral
+      const p = (t - releaseFrac) / (1 - releaseFrac);
+      const ease = 1 - (1 - p) * (1 - p); // decelerate
+      const fade = 1 - ease;
+      // Right arm continues forward and down, then returns
+      this.rightArmGroup.rotation.x += 0.6 * fade + 0.2 * ease;
+      this.rightArmGroup.rotation.z += 0.05 * fade;
+      // Left arm returns
+      this.leftArmGroup.rotation.x += -0.3 * fade;
+      this.leftArmGroup.rotation.z += -0.10 * fade;
+      // Body returns to neutral
+      this.bodyGroup.rotation.y += 0.18 * fade;
+      this.bodyGroup.rotation.x += 0.10 * fade;
+    }
+  }
+
+  /** World-space position of the grenade prop (right hand). Returns null if not built. */
+  getGrenadeReleasePosition(out: THREE.Vector3): boolean {
+    if (!this.grenadeProp) {
+      this.ensureGrenadeProp();
+    }
+    this.grenadeProp!.updateWorldMatrix(true, false);
+    this.grenadeProp!.getWorldPosition(out);
+    return true;
+  }
+
   protected animateCasting(_abilityId: string, _t: number): void {}
   protected animateChanneling(abilityId: string, t: number): void {
     if (abilityId === 'bandage') this.animateBandageChannel(t);

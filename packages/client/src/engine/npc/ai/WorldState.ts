@@ -11,6 +11,7 @@ export interface EntityInfo {
   manaPercent: number;
   isStunned: boolean;
   isSleeping: boolean;
+  isDisoriented: boolean;
   isBlinded: boolean;
   isCasting: boolean;
   isChanneling: boolean;
@@ -28,6 +29,7 @@ export interface SelfInfo {
   manaPercent: number;
   isStunned: boolean;
   isSleeping: boolean;
+  isDisoriented: boolean;
   isBlinded: boolean;
   buffs: readonly ActiveBuff[];
   debuffs: readonly ActiveBuff[];
@@ -67,6 +69,7 @@ export function buildWorldState(
     manaPercent: npc.maxMana > 0 ? npc.mana / npc.maxMana : 0,
     isStunned: buffSystem.isStunned(npc),
     isSleeping: buffSystem.isSleeping(npc),
+    isDisoriented: buffSystem.isDisoriented(npc),
     isBlinded: buffSystem.isBlinded(npc),
     buffs: selfBuffs.filter(b => b.definition.type === 'buff'),
     debuffs: selfBuffs.filter(b => b.definition.type === 'debuff'),
@@ -110,6 +113,7 @@ export function buildWorldState(
       manaPercent: entity.maxMana > 0 ? entity.mana / entity.maxMana : 0,
       isStunned: buffSystem.isStunned(entity),
       isSleeping: buffSystem.isSleeping(entity),
+      isDisoriented: buffSystem.isDisoriented(entity),
       isBlinded: buffSystem.isBlinded(entity),
       isCasting: entity.castingAbilityName !== null && !entity.castingIsChannel,
       isChanneling: entity.castingAbilityName !== null && entity.castingIsChannel,

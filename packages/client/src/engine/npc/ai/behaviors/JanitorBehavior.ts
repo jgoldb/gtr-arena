@@ -128,7 +128,7 @@ export class JanitorBehavior implements CharacterBehavior {
     if (cooldowns.isReady('janitors-helper') && selfMana >= 175 && targetDist <= MELEE_RANGE) {
       let score = 25;
       // Don't use on already CC'd targets
-      if (currentTarget.isStunned || currentTarget.isSleeping || currentTarget.isBlinded) score -= 40;
+      if (currentTarget.isStunned || currentTarget.isSleeping || currentTarget.isDisoriented || currentTarget.isBlinded) score -= 40;
       // Good for CC chaining or peeling
       if (currentTarget.hpPercent > 0.5) score += 10; // better on high HP targets (control)
       if (currentTarget.inLineOfSight) {

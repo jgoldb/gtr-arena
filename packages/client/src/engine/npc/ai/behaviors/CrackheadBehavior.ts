@@ -52,7 +52,7 @@ export class CrackheadBehavior implements CharacterBehavior {
       // Good for peeling
       if (currentTarget.isCasting || currentTarget.isChanneling) score += 20;
       // Don't blind already CC'd targets
-      if (currentTarget.isStunned || currentTarget.isSleeping || currentTarget.isBlinded) score -= 40;
+      if (currentTarget.isStunned || currentTarget.isSleeping || currentTarget.isDisoriented || currentTarget.isBlinded) score -= 40;
       if (currentTarget.inLineOfSight) {
         actions.push({
           type: 'ability', score, abilityId: 'pocket-sand', target: currentTarget,

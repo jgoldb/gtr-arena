@@ -169,9 +169,11 @@ export class ClientAbilitySystem {
 
     // Predict cast bar for cast-time abilities (only if not moving/falling — server rejects casts while moving)
     let castPredicted = false;
-    if (ability.castTime && !this.host.isPlayerMoving() && this.host.isPlayerGrounded()) {
+    const canCastWhileMoving = ability.castableWhileMoving ?? false;
+    if (ability.castTime && (canCastWhileMoving || (!this.host.isPlayerMoving() && this.host.isPlayerGrounded()))) {
       this.host.sound.updateBandageLoop(this.host.localEntityId, this.host.localCastingAbilityId, abilityId);
       this.host.sound.updateCastSpellLoop(this.host.localEntityId, this.host.localCastingAbilityId, abilityId);
+      this.host.sound.updateCastGrenadeLoop(this.host.localEntityId, this.host.localCastingAbilityId, abilityId);
       this.host.localCastingAbilityId = abilityId;
       this.host.localCastingElapsed = 0;
       this.host.localCastingTotalTime = ability.castTime;
@@ -249,6 +251,7 @@ export class ClientAbilitySystem {
     if (pred.castPredicted && this.host.localCastingAbilityId === pred.abilityId) {
       this.host.sound.updateBandageLoop(this.host.localEntityId, this.host.localCastingAbilityId, null);
       this.host.sound.updateCastSpellLoop(this.host.localEntityId, this.host.localCastingAbilityId, null);
+      this.host.sound.updateCastGrenadeLoop(this.host.localEntityId, this.host.localCastingAbilityId, null);
       this.host.localCastingAbilityId = null;
       this.host.localCastingElapsed = 0;
       this.host.localCastingTotalTime = 0;
@@ -298,6 +301,7 @@ export class ClientAbilitySystem {
     // Clear sound loops
     this.host.sound.updateBandageLoop(this.host.localEntityId, abilityId, null);
     this.host.sound.updateCastSpellLoop(this.host.localEntityId, abilityId, null);
+    this.host.sound.updateCastGrenadeLoop(this.host.localEntityId, abilityId, null);
 
     // Clear casting state
     this.host.localCastingAbilityId = null;
@@ -326,6 +330,7 @@ export class ClientAbilitySystem {
     // Clear sound loops
     this.host.sound.updateBandageLoop(this.host.localEntityId, abilityId, null);
     this.host.sound.updateCastSpellLoop(this.host.localEntityId, abilityId, null);
+    this.host.sound.updateCastGrenadeLoop(this.host.localEntityId, abilityId, null);
 
     // Clear casting state
     this.host.localCastingAbilityId = null;
@@ -353,8 +358,11 @@ export class ClientAbilitySystem {
       this.host.localCastingElapsed += dt;
 
       // Auto-cancel if player can't cast (moving, dead, stunned, falling)
+      const castingStats = getCharacterStats(this.host.getPlayerCharacterId());
+      const castingAbility = castingStats.abilities.find(a => a !== null && a.id === this.host.localCastingAbilityId);
+      const castMovable = castingAbility?.castableWhileMoving ?? false;
       if (this.host.isPlayerDead() || this.host.isPlayerStunned() ||
-          this.host.isPlayerMoving() || !this.host.isPlayerGrounded()) {
+          (!castMovable && (this.host.isPlayerMoving() || !this.host.isPlayerGrounded()))) {
         this.cancelCastLocally();
         this.host.sendCancelCast();
       }

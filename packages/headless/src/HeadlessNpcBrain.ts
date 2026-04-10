@@ -111,8 +111,8 @@ export class HeadlessNpcBrain {
     const e = this.entity;
     const opp = this.opponent;
 
-    // Dead / stunned / sleeping — no action
-    if (e.dead || e.stunned || this.buffSystem.isSleeping(e)) {
+    // Dead / stunned / sleeping / disoriented — no action
+    if (e.dead || e.stunned || this.buffSystem.isSleeping(e) || this.buffSystem.isDisoriented(e)) {
       return { abilityIndex: null, moveAngle: null, moveSpeed: 0 };
     }
 
@@ -170,12 +170,14 @@ export class HeadlessNpcBrain {
     // not just the scored action's flag, as a safety net).
     const chosenAbility = abilityIndex !== null ? this.abilities[abilityIndex] : null;
     const hasCastTime = chosenAbility != null && chosenAbility.castTime != null && chosenAbility.castTime > 0;
+    const mustStopForCast = hasCastTime && !chosenAbility?.castableWhileMoving;
 
-    // Compute movement — but STOP moving when starting a cast-time ability.
+    // Compute movement — but STOP moving when starting a cast-time ability
+    // (unless the ability allows casting while moving).
     // In the arena, movement is processed BEFORE ability usage. If isMoving is
     // true when CastingSystem.start() runs, it rejects the cast via shouldCancel.
     let movement: { angle: number | null; speed: number };
-    if (hasCastTime) {
+    if (mustStopForCast) {
       movement = { angle: null, speed: 0 };
     } else {
       movement = this.getMovement(dist, dx, dz, hasLoS);
@@ -219,11 +221,11 @@ export class HeadlessNpcBrain {
   }
 
   private oppIsStunned(): boolean {
-    return this.buffSystem.isStunned(this.opponent) || this.buffSystem.isSleeping(this.opponent);
+    return this.buffSystem.isStunned(this.opponent) || this.buffSystem.isSleeping(this.opponent) || this.buffSystem.isDisoriented(this.opponent);
   }
 
   private oppIsSleeping(): boolean {
-    return this.buffSystem.isSleeping(this.opponent);
+    return this.buffSystem.isSleeping(this.opponent) || this.buffSystem.isDisoriented(this.opponent);
   }
 
   private oppIsBlinded(): boolean {

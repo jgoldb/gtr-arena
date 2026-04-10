@@ -190,7 +190,12 @@ export function setup(deps: MultiplayerUIDeps): void {
     const groundPos = clientEngine.targetingSystem.getGroundTargetPosition();
     clientEngine.targetingSystem.cancelGroundTarget();
     pendingGroundAbility = null;
-    clientEngine.predictGroundAbility(ability.id);
+    if (ability.castTime) {
+      // Ground-targeted cast-time ability: predict cast bar and send to server
+      clientEngine.predictAbility(ability.id, null);
+    } else {
+      clientEngine.predictGroundAbility(ability.id);
+    }
     clientEngine.sendAbility(ability.id, selectedTargetId, { x: groundPos.x, y: groundPos.y, z: groundPos.z });
   };
 

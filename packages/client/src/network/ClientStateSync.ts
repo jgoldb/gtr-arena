@@ -122,6 +122,7 @@ export class ClientStateSync {
             // Different cast or client isn't casting — accept server authority
             host.sound.updateBandageLoop(delta.id, clientAbilityId, serverAbilityId);
             host.sound.updateCastSpellLoop(delta.id, clientAbilityId, serverAbilityId);
+            host.sound.updateCastGrenadeLoop(delta.id, clientAbilityId, serverAbilityId);
             host.localCastingAbilityId = serverAbilityId;
           }
           // Server says null, client says null — no-op
@@ -157,6 +158,7 @@ export class ClientStateSync {
       if ('castingAbilityId' in delta) {
         host.sound.updateBandageLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
         host.sound.updateCastSpellLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
+        host.sound.updateCastGrenadeLoop(delta.id, entity.castingAbilityId, delta.castingAbilityId!);
         entity.castingAbilityId = delta.castingAbilityId!;
       }
       if (delta.castingElapsed !== undefined) entity.castingElapsed = delta.castingElapsed;
@@ -196,6 +198,7 @@ export class ClientStateSync {
     } else {
       host.sound.updateBandageLoop(snap.id, host.localCastingAbilityId, snap.castingAbilityId);
       host.sound.updateCastSpellLoop(snap.id, host.localCastingAbilityId, snap.castingAbilityId);
+      host.sound.updateCastGrenadeLoop(snap.id, host.localCastingAbilityId, snap.castingAbilityId);
       host.localCastingAbilityId = snap.castingAbilityId;
       host.localCastingElapsed = snap.castingElapsed;
       host.localCastingTotalTime = snap.castingTotalTime;
@@ -219,6 +222,7 @@ export class ClientStateSync {
     entity.isAutoAttacking = snap.isAutoAttacking;
     host.sound.updateBandageLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
     host.sound.updateCastSpellLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
+    host.sound.updateCastGrenadeLoop(snap.id, entity.castingAbilityId, snap.castingAbilityId);
     entity.castingAbilityId = snap.castingAbilityId;
     entity.castingElapsed = snap.castingElapsed;
     entity.castingTotalTime = snap.castingTotalTime;

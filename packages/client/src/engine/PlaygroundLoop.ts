@@ -250,7 +250,7 @@ export class PlaygroundLoop {
 
     // ── Stun / CC / blind state ───────────────────────────────────
 
-    const playerStunned = buffSystem.isStunned(playerController) || buffSystem.isSleeping(playerController);
+    const playerStunned = buffSystem.isStunned(playerController) || buffSystem.isSleeping(playerController) || buffSystem.isDisoriented(playerController);
     playerController.setStunned(playerStunned);
     if (playerStunned && autoAttackSystem.isAttacking(playerController)) {
       host.stopAutoAttack();
@@ -283,7 +283,7 @@ export class PlaygroundLoop {
     // ── NPC state sync ────────────────────────────────────────────
 
     for (const npc of host.npcSystem.getNpcs()) {
-      npc.setStunned(buffSystem.isStunned(npc) || buffSystem.isSleeping(npc));
+      npc.setStunned(buffSystem.isStunned(npc) || buffSystem.isSleeping(npc) || buffSystem.isDisoriented(npc));
       npc.blinded = buffSystem.isBlinded(npc);
       npc.model.setAbilityBuffActive('crash-out', buffSystem.hasBuff(npc, 'crash-out'));
       npc.model.setAbilityBuffActive('retard-strength', buffSystem.hasBuff(npc, 'retard-strength'));

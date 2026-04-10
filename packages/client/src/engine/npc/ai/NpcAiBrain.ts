@@ -636,7 +636,7 @@ export class NpcAiBrain {
       if (enemy.isCasting || enemy.isChanneling) score += 15;
 
       // Prefer CC'd targets (easy damage)
-      if (enemy.isStunned || enemy.isSleeping) score += 10;
+      if (enemy.isStunned || enemy.isSleeping || enemy.isDisoriented) score += 10;
 
       // Slight bonus for current target (avoid flip-flopping)
       if (this.currentTarget && enemy.entity === this.currentTarget.entity) {
@@ -655,6 +655,7 @@ export class NpcAiBrain {
   private checkCCBreak(dt: number): void {
     const isCC = this.engine.buffSystem.isStunned(this.npc)
       || this.engine.buffSystem.isSleeping(this.npc)
+      || this.engine.buffSystem.isDisoriented(this.npc)
       || this.engine.buffSystem.isBlinded(this.npc);
 
     if (!isCC) {
